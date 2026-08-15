@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { ImageParser, formatImageBytes } from './image-protocol.js'
@@ -56,6 +56,10 @@ const THEMES = {
 const defaultTheme = Object.hasOwn(THEMES, process.env.DSH_TUI_THEME) ? process.env.DSH_TUI_THEME : 'deepseek'
 let ANSI = { reset: '\x1b[0m', bold: '\x1b[1m', ...THEMES[defaultTheme] }
 function applyTheme(theme) { ANSI = { reset: '\x1b[0m', bold: '\x1b[1m', ...(THEMES[theme] ?? THEMES.deepseek) } }
+// Explicitly reset every common mouse-reporting mode. DSH runs inside a
+// shared terminal process, so a mode left behind by another TUI must not turn
+// VS Code wheel gestures into input bytes for this TUI.
+const TERMINAL_MOUSE_OFF = '\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1007l'
 function tuiSettingsSchema(value) {
   if (value !== undefined && (typeof value !== 'object' || value === null || Array.isArray(value))) throw new TypeError('dsh-tui settings must be an object')
   const source = value ?? {}; const theme = source.theme ?? defaultTheme
@@ -97,6 +101,19 @@ const idleWords = [
   'Holding space',
   'Keeping an ear out',
   'Waiting patiently'
+]
+
+const explorationWords = [
+  'Exploring',
+  'Scanning',
+  'Mapping',
+  'Orbiting',
+  'Tracing',
+  'Surveying',
+  'Charting',
+  'Navigating',
+  'Searching',
+  'Probing'
 ]
 
 const LOCAL_COMMANDS = [
@@ -318,6 +335,47 @@ async function listDir(root, relDir) {
   return { dirs, files }
 }
 
+// File references are expanded before the model sees a message, but the
+// transcript should keep the user's compact `@path` prompt instead of echoing
+// the entire injected file body back into the conversation view.
+function compactExpandedFileReferences(text) {
+  const lines = safe(text).split('\n')
+  const compact = []
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^(\s*)@([^\s@:]+):$/)
+    const opening = lines[index + 1]?.match(/^\s*```[A-Za-z0-9_+.-]*\s*$/)
+    if (!match || !opening) {
+      compact.push(lines[index])
+      continue
+    }
+    let closing = index + 2
+    let closingSuffix = ''
+    while (closing < lines.length) {
+      const end = lines[closing].match(/^\s*```\s*(.*)$/)
+      if (end) {
+        closingSuffix = end[1].trim()
+        break
+      }
+      closing += 1
+    }
+    if (closing >= lines.length) {
+      compact.push(lines[index])
+      continue
+    }
+    compact.push(`${match[1]}@${match[2]}`)
+    // The user's prompt can follow the injected closing fence on the same
+    // line (for example: "``` explain this file"). Keep that prompt visible
+    // without leaking the expanded file body into the transcript.
+    if (closingSuffix) compact.push(`${match[1]}${closingSuffix}`)
+    index = closing
+  }
+  return compact.join('\n')
+}
+
+function compactFileReferenceTitle(text) {
+  return compactExpandedFileReferences(text).replace(/@([^\s@:]+):\s*```.*$/g, '@$1')
+}
+
 function matchName(name, query) {
   const lower = name.toLowerCase()
   const q = query.toLowerCase()
@@ -369,12 +427,6 @@ class TuiApp {
     this.commandPalette = undefined // { query, items, selected }
     this.mru = {} // sessionId -> last-used timestamp
     this.selection = undefined // { start, end } in the input line
-    this.lastClickAt = 0
-    this.clickCount = 0
-    this.mouseAnchor = undefined
-    // Mouse tracking is on by default so wheel events cannot be mistaken for
-    // history-navigation arrows. Set DSH_TUI_MOUSE=0 for pure terminal selection.
-    this.mouseEnabled = process.env.DSH_TUI_MOUSE !== '0'
     this.inputRowCount = 1
     this.inputOffsets = [0]
     this.message = ''
@@ -399,7 +451,17 @@ class TuiApp {
     this.caretRow = undefined
     this.caretCol = undefined
     this.inputTop = undefined
-    this.transcriptClickTargets = []
+    this.cliMode = true
+    this.cliCommittedRows = []
+    // Streaming output is rendered in a small footer while it is changing.
+    // Once the prefix is stable enough, it is flushed into terminal scrollback
+    // so the footer never becomes a fixed-height transcript container.
+    this.cliStreamCommitted = { text: '', reasoning: '' }
+    this.cliStreamReasoningPrinted = false
+    this.cliStreamPrefixes = new Map()
+    this.cliFooterRows = 0
+    this.cliFooterCursorRow = 0
+    this.cliFooterSignature = undefined
     this.bracketing = false
     this.disposers = []
 
@@ -575,7 +637,10 @@ class TuiApp {
 
   openTerminal() {
     this.terminalOpen = true
-    process.stdout.write(`\x1b[?1049h\x1b[?25l\x1b[?2004h${this.mouseEnabled ? '\x1b[?1000h\x1b[?1002h\x1b[?1006h' : ''}`)
+    // Keep the terminal's native selection and wheel behavior. In particular,
+    // turn off alternate scrolling before entering the alternate screen so a
+    // VS Code wheel gesture cannot arrive as an Up/Down history key.
+    process.stdout.write(`${TERMINAL_MOUSE_OFF}\x1b[?25l\x1b[?2004h`)
     process.stdin.setRawMode(true)
     process.stdin.resume()
     process.stdin.on('data', this.onData)
@@ -600,7 +665,7 @@ class TuiApp {
     process.stdout.off('resize', this.onResize)
     if (process.stdin.isTTY) process.stdin.setRawMode(false)
     process.stdin.pause()
-    process.stdout.write(`${ANSI.reset}\x1b[?25h\x1b[?2004l${this.mouseEnabled ? '\x1b[?1006l\x1b[?1002l\x1b[?1000l' : ''}\x1b[?1049l`)
+    process.stdout.write(`${ANSI.reset}\x1b[?25h\x1b[?2004l`)
   }
 
   async quit(code = 0) {
@@ -614,9 +679,10 @@ class TuiApp {
   onStatus(status) {
     const wasActive = this.active
     this.active = status === 'running'
-    if (this.active && !this.animationTimer) {
-      this.animationTimer = setInterval(() => this.scheduleRender(), 1600)
-    } else if (!this.active && this.animationTimer) {
+    if (this.active && !wasActive && !this.animationTimer) {
+      this.animationTimer = setInterval(() => this.scheduleRender(), 360)
+    }
+    if (!this.active && this.animationTimer) {
       clearInterval(this.animationTimer)
       this.animationTimer = undefined
     }
@@ -657,6 +723,9 @@ class TuiApp {
         break
       }
       case 'assistant/message': {
+        if (this.cliMode && this.cliStreamCommitted.text) {
+          this.cliStreamPrefixes.set(event.seq, this.cliStreamCommitted.text)
+        }
         if (this.streaming.reasoning) {
           const lines = this.streaming.reasoning.split('\n').length
           this.reasoningBlocks.unshift({
@@ -669,6 +738,8 @@ class TuiApp {
         }
         this.streaming.text = ''
         this.streaming.reasoning = ''
+        this.cliStreamCommitted = { text: '', reasoning: '' }
+        this.cliStreamReasoningPrinted = false
         this.reasoningAt = undefined
         this.message = ''
         if (event.data.usage) this.usage = foldUsage(this.agent.session.events)
@@ -1134,6 +1205,8 @@ class TuiApp {
       const isSkill = this.skills.some((skill) => skill.name === name)
       if (isSkill && !isCommand) {
         this.message = 'queued'
+        this.cliStreamCommitted = { text: '', reasoning: '' }
+        this.cliStreamReasoningPrinted = false
         this.agent.followup(userMessage([{ type: 'text', text: prompt }]))
         this.scheduleRender()
         return
@@ -1152,6 +1225,8 @@ class TuiApp {
     const { text, missing } = await this.expandFileReferences(prompt)
     for (const path of missing) this.log('error', `@${path} not found`)
     if (text) content.push({ type: 'text', text })
+    this.cliStreamCommitted = { text: '', reasoning: '' }
+    this.cliStreamReasoningPrinted = false
     this.agent.followup(userMessage(content))
     this.scheduleRender()
   }
@@ -1201,8 +1276,12 @@ class TuiApp {
       case 'clear':
         this.viewClearedSeq = this.agent.session.seq + 1
         this.streaming = { text: '', reasoning: '', tool: undefined }
+        this.cliStreamCommitted = { text: '', reasoning: '' }
+        this.cliStreamReasoningPrinted = false
+        this.cliStreamPrefixes.clear()
         this.pendingImages = []
         this.localLog = []
+        if (this.cliMode) this.cliCommittedRows = []
         this.log('ok', 'view cleared (model context unchanged)', '/clear')
         break
       case 'resume':
@@ -1463,11 +1542,11 @@ class TuiApp {
       this.log('error', error instanceof Error ? error.message : String(error), 'Ctrl+E')
       return
     }
-    process.stdout.write(`${ANSI.reset}\x1b[?25h\x1b[?2004l${this.mouseEnabled ? '\x1b[?1006l\x1b[?1002l\x1b[?1000l' : ''}\x1b[?1049l`)
+    process.stdout.write(`${ANSI.reset}\x1b[?25h\x1b[?2004l`)
     if (process.stdin.isTTY) process.stdin.setRawMode(false)
     const editor = process.env.EDITOR || process.env.VISUAL || 'vim'
     spawnSync(editor, [tmp], { stdio: 'inherit' })
-    process.stdout.write(`\x1b[?1049h\x1b[?25l\x1b[?2004h${this.mouseEnabled ? '\x1b[?1000h\x1b[?1002h\x1b[?1006h' : ''}`)
+    process.stdout.write(`${TERMINAL_MOUSE_OFF}\x1b[?25l\x1b[?2004h`)
     if (process.stdin.isTTY) process.stdin.setRawMode(true)
     try {
       const value = await readFile(tmp, 'utf8')
@@ -1895,9 +1974,13 @@ class TuiApp {
         await previous.dispose().catch(() => {})
       }
       this.streaming = { text: '', reasoning: '', tool: undefined }
+      this.cliStreamCommitted = { text: '', reasoning: '' }
+      this.cliStreamReasoningPrinted = false
+      this.cliStreamPrefixes.clear()
       this.usage = foldUsage(agent.session.events)
       this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
       this.viewClearedSeq = 0
+      if (this.cliMode) this.cliCommittedRows = []
       this.log('ok', `resumed session ${record.header.id.slice(-4)}`, '/resume')
       this.touchMru(record.header.id)
     } catch (error) {
@@ -2088,52 +2171,6 @@ class TuiApp {
     this.scheduleRender()
   }
 
-  mousePress(x, y) {
-    const clickTarget = this.transcriptClickTargets.find((entry) => entry.y === y)
-    if (clickTarget) {
-      if (this.expandedKeys.has(clickTarget.key)) this.expandedKeys.delete(clickTarget.key)
-      else this.expandedKeys.add(clickTarget.key)
-      this.scheduleRender()
-      return
-    }
-    const top = this.inputTop ?? 0
-    if (y < top + 1 || y > top + this.inputRowCount) return
-    const now = Date.now()
-    if (now - this.lastClickAt < 300) this.clickCount += 1
-    else this.clickCount = 1
-    this.lastClickAt = now
-    const row = y - top - 1
-    const prefix = row === 0 ? 2 : 2
-    const col = Math.max(0, x - 1 - prefix)
-    const base = this.inputOffsets[row] ?? 0
-    const target = Math.min(this.input.length, base + col)
-    if (this.clickCount === 1) {
-      this.selection = undefined
-      this.cursor = Math.max(0, target)
-      this.mouseAnchor = this.cursor
-    } else if (this.clickCount === 2) {
-      const word = this.wordAt(this.cursor)
-      this.selection = word
-      this.cursor = word.end
-    } else {
-      this.selection = { start: 0, end: this.input.length }
-      this.cursor = this.input.length
-    }
-    this.maybeOpenFilePicker()
-    this.scheduleRender()
-  }
-
-  mouseDrag(x, y) {
-    const top = this.inputTop ?? 0
-    if (this.mouseAnchor === undefined || y < top + 1 || y > top + this.inputRowCount) return
-    const row = y - top - 1
-    const col = Math.max(0, x - 3)
-    const target = Math.min(this.input.length, (this.inputOffsets[row] ?? 0) + col)
-    this.cursor = target
-    this.selection = { start: this.mouseAnchor, end: target }
-    this.scheduleRender()
-  }
-
   wordAt(index) {
     const text = this.input
     let start = index
@@ -2173,6 +2210,11 @@ class TuiApp {
   handleInput(chunk) {
     if (process.stdin.isTTY && !process.stdin.isRaw) process.stdin.setRawMode(true)
     const value = chunk.toString('utf8')
+    // One-shot compatibility aid for terminal-specific wheel bugs. It records
+    // only a complete control sequence, never ordinary typed or pasted text.
+    if (process.env.DSH_TUI_DEBUG_INPUT === '1' && /^\x1b(?:\[[0-?]*[ -/]*[@-~]|O.)$/.test(value)) {
+      void appendFile(join(this.stateDir(), 'input-debug.log'), `${new Date().toISOString()} ${JSON.stringify(value)}\n`).catch(() => {})
+    }
     if (this.imageParser.busy || value.includes('\x1b]1337;') || value.includes('\x1b_G')) {
       const parsed = this.imageParser.feed(chunk)
       if (parsed) {
@@ -2224,17 +2266,9 @@ class TuiApp {
 
   handleToken(value) {
     if (value.startsWith('\x1b[<')) {
-      const mouse = value.match(/^\x1b\[<(\d+);(\d+);(\d+)([Mm])/)
-      if (mouse) {
-        const button = Number(mouse[1])
-        if (button === 64) this.scrollBy(3)
-        else if (button === 65) this.scrollBy(-3)
-        // Shift-modified drags are intentionally ignored so terminals that
-        // support it can keep native text selection while mouse mode is on.
-        else if (button === 0 && mouse[4] === 'M') this.mousePress(Number(mouse[2]), Number(mouse[3]))
-        else if (button === 32 && mouse[4] === 'M') this.mouseDrag(Number(mouse[2]), Number(mouse[3]))
-        return
-      }
+      // Mouse tracking is intentionally disabled. Native terminal selection
+      // and scrolling must remain available to the terminal emulator.
+      return
     }
 
     if (this.pendingApproval) {
@@ -2641,22 +2675,96 @@ class TuiApp {
       }
     }
 
+    const styleInlineMarkdown = (text, base) => {
+      let styled = safe(text)
+      styled = styled.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => `${ANSI.blueSoft}${label}${ANSI.reset}${ANSI.dim} (${url})${ANSI.reset}${base}`)
+      styled = styled.replace(/`([^`]+)`/g, (_match, code) => `${ANSI.blueSoft}${code}${ANSI.reset}${base}`)
+      styled = styled.replace(/\*\*([^*]+)\*\*/g, (_match, value) => `${ANSI.bold}${value}${ANSI.reset}${base}`)
+      styled = styled.replace(/__([^_]+)__/g, (_match, value) => `${ANSI.bold}${value}${ANSI.reset}${base}`)
+      return styled
+    }
+
+    const renderMarkdown = (text, base = ANSI.answer) => {
+      let fenced = false
+      const lines = safe(text).split(/\r?\n/)
+      for (const source of lines) {
+        const opening = source.match(/^\s*```([A-Za-z0-9_+.-]*)\s*$/)
+        if (opening) {
+          if (fenced) {
+            fenced = false
+          } else {
+            fenced = true
+            push(ANSI.dim, `  · ${opening[1] || 'code'}${ANSI.reset}`)
+          }
+          continue
+        }
+        // A malformed/unclosed fence should not turn the rest of the answer
+        // into a code block. Treat it as ordinary text with the marker removed.
+        const normalized = !fenced && /^\s*```/.test(source) ? source.replace(/^\s*```\s*/, '') : source
+        if (fenced) {
+          for (const line of wrap(source, Math.max(20, contentWidth - 4))) {
+            push(ANSI.detail, `  ${line}${ANSI.reset}`)
+          }
+          continue
+        }
+        if (/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(normalized)) continue
+        if (/^\s*[-*_]\s*(?:[-*_]\s*){2,}$/.test(normalized)) {
+          push(ANSI.dim, `${'─'.repeat(Math.min(24, contentWidth))}${ANSI.reset}`)
+          continue
+        }
+        if (!normalized.trim()) {
+          rows.push(null)
+          continue
+        }
+        let prefix = ''
+        let content = normalized.trim()
+        const heading = content.match(/^#{1,6}\s+(.*)$/)
+        if (heading) {
+          push(ANSI.blueSoft, `${ANSI.bold}${styleInlineMarkdown(heading[1], ANSI.blueSoft)}${ANSI.reset}`)
+          continue
+        }
+        const table = content.includes('|') && content.split('|').length >= 3
+        if (table) {
+          content = content.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()).join('  ·  ')
+          prefix = '  '
+        } else {
+          const bullet = content.match(/^([-*+])\s+(.*)$/)
+          const ordered = content.match(/^(\d+)[.)]\s+(.*)$/)
+          const quote = content.match(/^>\s?(.*)$/)
+          if (bullet) {
+            prefix = '  · '
+            content = bullet[2]
+          } else if (ordered) {
+            prefix = `  ${ordered[1]}. `
+            content = ordered[2]
+          } else if (quote) {
+            prefix = '│ '
+            content = quote[1]
+          }
+        }
+        for (const line of wrap(content, Math.max(20, contentWidth - widthOf(prefix)))) {
+          push('', `${prefix}${base}${styleInlineMarkdown(line, base)}${ANSI.reset}`)
+        }
+      }
+      if (fenced) rows.push(null)
+    }
+
     const renderGroup = (group) => {
       if (group.length === 0) return
       const calls = group.filter((event) => event.type === 'tool/call')
       const key = `tools-${group[0].seq}`
-      if (calls.length > 1 && !this.expandedKeys.has(key)) {
+      if (!this.cliMode && calls.length > 1 && !this.expandedKeys.has(key)) {
         const names = [...new Set(calls.map((call) => call.data.name))].map((name) => {
           const count = calls.filter((call) => call.data.name === name).length
           return count > 1 ? `${name} ×${count}` : name
         }).join(' · ')
-        push(ANSI.dim, `⚙ TOOLS · ${calls.length} · ${names}${ANSI.reset} ${ANSI.muted}Ctrl+O/click expand${ANSI.reset}`, { toggleKey: key })
+        push(ANSI.dim, `⚙ TOOLS · ${calls.length} · ${names}${ANSI.reset} ${ANSI.muted}Ctrl+O expand${ANSI.reset}`, { toggleKey: key })
         rows.push(null)
         return
       }
-      if (calls.length > 1) {
+      if (!this.cliMode && calls.length > 1) {
         const label = `${calls.length} TOOLS`
-        if (this.expandedKeys.has(key)) push('', `${ANSI.muted}╭─ ${ANSI.blueSoft}${label}${ANSI.muted} · click to collapse ─${'─'.repeat(Math.max(0, contentWidth - label.length - 25))}╮${ANSI.reset}`, { toggleKey: key })
+        if (this.expandedKeys.has(key)) push('', `${ANSI.muted}╭─ ${ANSI.blueSoft}${label}${ANSI.muted} · Ctrl+O to collapse ─${'─'.repeat(Math.max(0, contentWidth - label.length - 28))}╮${ANSI.reset}`, { toggleKey: key })
       }
       for (const event of group) {
         if (event.type === 'tool/call') {
@@ -2702,7 +2810,7 @@ class TuiApp {
           }
         }
       }
-      if (calls.length > 1 && this.expandedKeys.has(key)) {
+      if (!this.cliMode && calls.length > 1 && this.expandedKeys.has(key)) {
         push('', `${ANSI.muted}╰${'─'.repeat(Math.max(0, contentWidth - 2))}╯${ANSI.reset}`)
       }
     }
@@ -2782,7 +2890,8 @@ class TuiApp {
             } else if (block.type === 'text') {
               const blockWidth = Math.max(24, contentWidth - 2)
               const innerWidth = blockWidth - 2
-              const wrapped = wrap(block.text, innerWidth - 2)
+              const displayText = compactExpandedFileReferences(block.text)
+              const wrapped = wrap(displayText, innerWidth - 2)
               push('', `${ANSI.muted}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
               for (const line of wrapped) {
                 const padding = ' '.repeat(Math.max(0, innerWidth - 2 - widthOf(line)))
@@ -2795,28 +2904,30 @@ class TuiApp {
           break
         }
         case 'assistant/message': {
-          const answerText = textOf(event.data.message.content)
+          const fullAnswerText = textOf(event.data.message.content)
+          const streamedPrefix = this.cliMode ? (this.cliStreamPrefixes.get(event.seq) ?? '') : ''
+          const answerText = streamedPrefix && fullAnswerText.startsWith(streamedPrefix)
+            ? fullAnswerText.slice(streamedPrefix.length)
+            : fullAnswerText
           const block = this.reasoningBlocks.find((entry) => entry.key === `reason-${event.seq}`)
-          const stats = responseStatsAt(eventIndex)
+          const stats = this.cliMode ? undefined : responseStatsAt(eventIndex)
           if (!answerText && !block && !stats) break
           push(ANSI.blueSoft, `DSH  ${ANSI.muted}${this.activeModel?.model ?? this.agent.options.model ?? ''} · ${formatTime(event.time)}${ANSI.reset}`)
           if (block) rows.push(null)
           if (block) {
-            if (this.expandedKeys.has(block.key)) {
+            if (!this.cliMode && this.expandedKeys.has(block.key)) {
               const ms = block.ms !== undefined ? ` · ${(block.ms / 1000).toFixed(1)}s` : ''
-              push(ANSI.dim, `✻ thinking · ${block.lines} lines${ms}${ANSI.reset} ${ANSI.muted}Ctrl+O/click collapse${ANSI.reset}`, { toggleKey: block.key })
+              push(ANSI.dim, `✻ thinking · ${block.lines} lines${ms}${ANSI.reset} ${ANSI.muted}Ctrl+O collapse${ANSI.reset}`, { toggleKey: block.key })
               for (const line of wrap(block.text, contentWidth - 2)) {
                 push(ANSI.detail, `  ${line}${ANSI.reset}`)
               }
             } else {
               const ms = block.ms !== undefined ? ` · ${(block.ms / 1000).toFixed(1)}s` : ''
-              push(ANSI.dim, `⚛ thinking · ${block.lines} lines${ms}${ANSI.reset} ${ANSI.muted}Ctrl+O/click expand${ANSI.reset}`, { toggleKey: block.key })
+              push(ANSI.dim, `⚛ thinking · ${block.lines} lines${ms}${ANSI.reset} ${ANSI.muted}Ctrl+O expand${ANSI.reset}`, { toggleKey: block.key })
             }
             if (answerText) rows.push(null)
           }
-          for (const line of wrap(answerText, contentWidth)) {
-            push(ANSI.answer, `${line}${ANSI.reset}`)
-          }
+          renderMarkdown(answerText)
           if (stats) {
             const tools = stats.tools > 0 ? ` · ${stats.tools} tool${stats.tools === 1 ? '' : 's'}` : ''
             if (answerText) rows.push(null)
@@ -2830,6 +2941,13 @@ class TuiApp {
           else if (event.data.reason?.kind === 'error') {
             const error = event.data.reason.error
             push(ANSI.coral, `✗ ${error?.code ?? 'error'}: ${shorten(error?.message ?? '', contentWidth - 20)}${ANSI.reset}`)
+          } else if (this.cliMode && event.data.reason?.kind === 'completed') {
+            const endAt = Number(event.time)
+            const start = [...events.slice(0, eventIndex + 1)].reverse().find((entry) => entry.type === 'turn/start')
+            const duration = endAt - Number(start?.time)
+            const tools = events.slice(Math.max(0, eventIndex - 200), eventIndex + 1).filter((entry) => entry.type === 'tool/call').length
+            const suffix = tools > 0 ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : ''
+            push(ANSI.dim, `✓ finished in ${formatDurationMs(Math.max(0, duration))}${suffix}${ANSI.reset}`)
           }
           rows.push(null)
           break
@@ -2845,22 +2963,22 @@ class TuiApp {
       logIndex += 1
     }
 
-    if (this.streaming.reasoning) {
+    if (!this.cliMode && this.streaming.reasoning) {
       const frames = ['◐', '◓', '◑', '◒']
       const frame = frames[Math.floor(Date.now() / 180) % frames.length]
       const label = this.active ? `${frame} thinking…` : '⚛ thinking'
       push(ANSI.blueSoft, `${label} · ${shorten(this.streaming.reasoning, contentWidth - 6)}${ANSI.reset}`)
     }
-    if (this.streaming.tool) {
+    if (!this.cliMode && this.streaming.tool) {
       push(ANSI.dim, `◒ ${this.streaming.tool.name || 'tool'} · ${shorten(this.streaming.tool.args, Math.max(40, contentWidth - 30))}${ANSI.reset}`)
     }
-    if (this.streaming.text) {
+    if (!this.cliMode && this.streaming.text) {
       for (const line of wrap(this.streaming.text, contentWidth)) {
         push(ANSI.ink, `${line}${ANSI.reset}`)
       }
       push(ANSI.blue, `▌${ANSI.reset}`)
     }
-    if (this.active) {
+    if (!this.cliMode && this.active) {
       const frames = ['◐', '◓', '◑', '◒']
       const frame = frames[Math.floor(Date.now() / 180) % frames.length]
       const detail = this.streaming.tool
@@ -2920,10 +3038,14 @@ class TuiApp {
   scheduleRender() {
     if (this.renderPending) return
     this.renderPending = true
+    // Coalesce the small token events emitted by the model. Rendering every
+    // token makes ANSI/Markdown output visibly jitter; idle/input updates can
+    // still use the shorter frame while an active stream gets a small batch.
+    const delay = this.active ? 56 : 16
     this.renderTimer = setTimeout(() => {
       this.renderPending = false
       this.render()
-    }, 16)
+    }, delay)
   }
 
   activityPhrase() {
@@ -2973,9 +3095,15 @@ class TuiApp {
     const meter = `${ANSI.blue}${'█'.repeat(filled)}${ANSI.bar}${'░'.repeat(meterWidth - filled)}${ANSI.reset}`
     const cachePercent = usage.input > 0 ? Math.round((usage.cacheRead / usage.input) * 100) : 0
 
-    const title = truncateWidth(sessionTitle(this.agent.session.events), Math.max(16, columns - 72))
+    const title = truncateWidth(compactFileReferenceTitle(sessionTitle(this.agent.session.events)), Math.max(16, columns - 72))
     const row1Left = `${ANSI.blue}${mode}${ANSI.reset}${pending}${ANSI.dim} | ${ANSI.reset}${ANSI.blueSoft}[${liveModel ?? 'model'}]${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${ANSI.blueSoft}${cwdName}${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${ANSI.ink}${safe(title)}${ANSI.reset}`
-    const row1Right = `${ANSI.blueSoft}preset ${this.presetName ?? 'standard'} · effort ${effort}${ANSI.reset}`
+    const runningFrames = ['◉', '◎', '◌', '◍']
+    const runningFrameStep = Math.floor(Date.now() / 520)
+    const runningWordStep = Math.floor(Date.now() / 3000)
+    const runningMark = runningFrames[runningFrameStep % runningFrames.length]
+    const runningWord = explorationWords[runningWordStep % explorationWords.length]
+    const running = this.active ? `${ANSI.blue}${runningMark} ${runningWord}${ANSI.reset} · ` : ''
+    const row1Right = `${running}${ANSI.blueSoft}preset ${this.presetName ?? 'standard'} · effort ${effort}${ANSI.reset}`
     const row1Gap = Math.max(1, columns - widthOf(visibleOf(row1Left)) - widthOf(visibleOf(row1Right)))
     const row1 = `${row1Left}${' '.repeat(row1Gap)}${row1Right}`
     const recent = this.recentUsage()
@@ -3037,7 +3165,7 @@ class TuiApp {
     this.inputOffsets = offsets
     const slashName = this.input.match(/^\/([^\s]*)/)?.[1]
     const slashItem = slashName ? this.commandItems().find((item) => item.name === slashName) : undefined
-    const inputColor = slashItem?.kind === 'skill' ? ANSI.blue : slashName !== undefined ? ANSI.blueSoft : ANSI.blue
+    const inputColor = slashItem?.kind === 'skill' ? ANSI.blue : slashName !== undefined ? ANSI.blueSoft : ANSI.answer
     const renderSelected = (text, offset) => {
       if (!this.selection || text === '') return `${inputColor}${safe(text)}${ANSI.reset}`
       const start = Math.max(0, this.selection.start - offset)
@@ -3092,10 +3220,8 @@ class TuiApp {
       transcriptStart = Math.max(0, visible.length - transcriptHeight - this.scrollLines)
       visible = visible.slice(transcriptStart, transcriptStart + transcriptHeight)
     }
-    this.transcriptClickTargets = []
     for (let index = 0; index < visible.length; index += 1) {
       const row = visible[index]
-      if (row?.[2]?.toggleKey) this.transcriptClickTargets.push({ y: lines.length + 1, key: row[2].toggleKey })
       lines.push(row ? row[0] + row[1] : '')
     }
 
@@ -3354,6 +3480,7 @@ class TuiApp {
   render() {
     if (!this.terminalOpen || !this.agent) return
     const columns = Math.max(60, process.stdout.columns || 100)
+    if (this.cliMode) return this.renderCli(columns)
     const rows = Math.max(16, process.stdout.rows || 30)
     const frame = this.buildFrame(columns, rows)
     const out = frame.map((line) => padWidth(line, columns)).join('\n')
@@ -3364,6 +3491,179 @@ class TuiApp {
       result += `\x1b[${row};${col}H\x1b[?25h`
     }
     process.stdout.write(result)
+  }
+
+  clearCliFooter() {
+    if (this.cliFooterRows === 0) return
+    const down = this.cliFooterRows - 1 - this.cliFooterCursorRow
+    let out = down > 0 ? `\x1b[${down}B` : ''
+    if (this.cliFooterRows > 1) out += `\x1b[${this.cliFooterRows - 1}A`
+    process.stdout.write(`${out}\r\x1b[J`)
+    this.cliFooterRows = 0
+    this.cliFooterCursorRow = 0
+    this.cliFooterSignature = undefined
+  }
+
+  cliFooterClearSequence() {
+    if (this.cliFooterRows === 0) return ''
+    const down = this.cliFooterRows - 1 - this.cliFooterCursorRow
+    let out = down > 0 ? `\x1b[${down}B` : ''
+    if (this.cliFooterRows > 1) out += `\x1b[${this.cliFooterRows - 1}A`
+    this.cliFooterRows = 0
+    this.cliFooterCursorRow = 0
+    this.cliFooterSignature = undefined
+    return `${out}\r\x1b[J`
+  }
+
+  cliFooter(columns) {
+    const rows = Math.max(16, process.stdout.rows || 30)
+    const panel = this.panelRows(columns, rows)
+    const inline = this.inlinePanelRows(columns)
+    const input = this.inputFrame(columns)
+    const status = panel.length > 0 ? [] : this.statusRows(columns)
+    const lines = []
+    const stream = this.cliStreamRows(columns)
+    if (stream.length > 0) lines.push(...stream, '')
+    lines.push(`${ANSI.rule}${'─'.repeat(columns)}${ANSI.reset}`)
+    const inputStart = lines.length
+    lines.push(...input)
+    lines.push(`${ANSI.rule}${'─'.repeat(columns)}${ANSI.reset}`)
+    // The two rules delimit only the editable prompt. Command, preset, jobs
+    // and question panels start after the lower rule, so they are not drawn
+    // inside the input box itself.
+    if (panel.length > 0) lines.push('', ...panel)
+    lines.push(...inline)
+    lines.push(...status)
+    return { lines, caretRow: inputStart + (this.caretRow ?? 0), showCaret: this.caretRow !== undefined && !this.pendingApproval && !this.questionPanel && !this.help && !this.menu && !this.effortPicker && !this.picker && !this.historySearch && !this.modelPicker && !this.commandPalette && !this.presetPicker && !this.jobPanel && !this.settingsPicker }
+  }
+
+  cliStreamTail(kind) {
+    const value = this.streaming[kind] ?? ''
+    const committed = this.cliStreamCommitted[kind] ?? ''
+    if (!committed) return value
+    return value.startsWith(committed) ? value.slice(committed.length) : value
+  }
+
+  flushCliStream(columns) {
+    const flushLimit = 320
+    const chunks = []
+    const append = (kind, color, label) => {
+      const value = this.streaming[kind] ?? ''
+      let committed = this.cliStreamCommitted[kind] ?? ''
+      if (committed && !value.startsWith(committed)) committed = ''
+      const pending = value.slice(committed.length)
+      const lastNewline = pending.lastIndexOf('\n')
+      let cut = lastNewline >= 0 ? lastNewline + 1 : -1
+      // Prose can arrive as one very long paragraph without newline tokens.
+      // Keep Markdown fences intact, but allow an eventual word boundary so
+      // that such a paragraph does not remain trapped in the footer forever.
+      if (cut < 0 && pending.length > flushLimit * 3) {
+        const wordBoundary = pending.lastIndexOf(' ', flushLimit * 2)
+        if (wordBoundary > flushLimit) cut = wordBoundary + 1
+      }
+      if (pending.length <= flushLimit || cut < 0) {
+        this.cliStreamCommitted[kind] = committed
+        return
+      }
+      // Prefer complete lines. Splitting at an arbitrary character is what
+      // causes half-written fences, tables and list items in the CLI.
+      const flushed = pending.slice(0, cut)
+      if (!flushed) return
+      chunks.push({ kind, color, label, text: flushed })
+      this.cliStreamCommitted[kind] = committed + flushed
+    }
+
+    append('reasoning', ANSI.detail, '✻ thinking')
+    append('text', ANSI.answer, '')
+    if (chunks.length === 0) return
+
+    // Replace only the temporary footer, then write the stable stream prefix
+    // as ordinary terminal output. New lines now enter scrollback naturally.
+    const footerRows = this.cliFooterRows
+    this.clearCliFooter()
+    if (footerRows > 0) process.stdout.write(`\x1b[${Math.max(0, footerRows - 1)}B\r\n`)
+    for (const chunk of chunks) {
+      if (chunk.label && !this.cliStreamReasoningPrinted) {
+        process.stdout.write(`${ANSI.dim}${chunk.label}${ANSI.reset}\n`)
+        this.cliStreamReasoningPrinted = true
+      }
+      const body = safe(chunk.text).replace(/\n+$/g, '')
+      if (body) process.stdout.write(`${chunk.color}${body}${ANSI.reset}\n`)
+    }
+  }
+
+  cliStreamRows(columns) {
+    if (!this.streaming.text && !this.streaming.reasoning && !this.streaming.tool) return []
+    const rows = []
+    const reasoningTail = this.cliStreamTail('reasoning')
+    const textTail = this.cliStreamTail('text')
+    if (reasoningTail) {
+      const text = wrap(reasoningTail, Math.max(24, columns - 4)).slice(-4)
+      if (!this.cliStreamReasoningPrinted) rows.push(`${ANSI.dim}✻ thinking${ANSI.reset}`)
+      rows.push(...text.map((line) => `${ANSI.detail}  ${line}${ANSI.reset}`))
+    }
+    if (this.streaming.tool) {
+      const name = this.streaming.tool.name || 'tool'
+      rows.push(`${ANSI.dim}⚙ ${safe(name)}${ANSI.reset} ${ANSI.detail}${shorten(this.streaming.tool.args, Math.max(24, columns - 12))}${ANSI.reset}`)
+    }
+    if (textTail) {
+      const text = wrap(textTail, Math.max(24, columns - 2)).slice(-4)
+      rows.push(...text.map((line) => `${ANSI.answer}${line}${ANSI.reset}`))
+      rows.push(`${ANSI.blue}▌${ANSI.reset}`)
+    }
+    return rows
+  }
+
+  renderCliFooter(columns) {
+    // Build one terminal frame instead of exposing the intermediate cleared
+    // screen. VS Code's terminal can visibly paint the blank interval when
+    // clear-and-write happen in separate writes during a fast stream.
+    const footer = this.cliFooter(columns)
+    const signature = `${footer.showCaret ? '1' : '0'}|${footer.caretRow}|${this.caretCol ?? ''}|${footer.lines.join('\n')}`
+    if (this.cliFooterRows > 0 && signature === this.cliFooterSignature) return
+    const clear = this.cliFooterClearSequence()
+    this.cliFooterSignature = signature
+    this.cliFooterRows = footer.lines.length
+    if (!footer.showCaret) {
+      this.cliFooterCursorRow = Math.max(0, footer.lines.length - 1)
+      process.stdout.write(`${clear}${footer.lines.join('\n')}\x1b[?25l`)
+      return
+    }
+    const up = Math.max(0, footer.lines.length - 1 - footer.caretRow)
+    const col = Math.max(0, this.caretCol ?? 0)
+    process.stdout.write(`${clear}${footer.lines.join('\n')}${up > 0 ? `\x1b[${up}A` : ''}\r${col > 0 ? `\x1b[${col}C` : ''}\x1b[?25h`)
+    this.cliFooterCursorRow = footer.caretRow
+  }
+
+  commitCliRows(rows) {
+    if (rows.length === 0) return
+    const footerRows = this.cliFooterRows
+    this.clearCliFooter()
+    if (footerRows > 0) process.stdout.write(`\x1b[${Math.max(0, footerRows - 1)}B\r\n`)
+    process.stdout.write(`${rows.map((row) => row ? row[0] + row[1] : '').join('\n')}\n`)
+  }
+
+  renderCli(columns) {
+    this.flushCliStream(columns)
+    const snapshot = this.transcriptRows(columns)
+    let common = 0
+    while (common < snapshot.length && common < this.cliCommittedRows.length) {
+      const next = snapshot[common]
+      const previous = this.cliCommittedRows[common]
+      if ((next?.[0] ?? '') !== (previous?.[0] ?? '') || (next?.[1] ?? '') !== (previous?.[1] ?? '')) break
+      common += 1
+    }
+    if (common === this.cliCommittedRows.length) {
+      this.commitCliRows(snapshot.slice(common))
+      this.cliCommittedRows = snapshot.map((row) => row ? [row[0], row[1]] : null)
+    } else if (snapshot.length > this.cliCommittedRows.length) {
+      // A late durable event can enrich the tail of the previous snapshot
+      // (for example a turn end adds timing). Keep the immutable scrollback
+      // model and append the new tail instead of silently dropping output.
+      this.commitCliRows(snapshot.slice(common))
+      this.cliCommittedRows = snapshot.map((row) => row ? [row[0], row[1]] : null)
+    }
+    this.renderCliFooter(columns)
   }
 }
 

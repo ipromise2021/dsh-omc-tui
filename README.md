@@ -32,21 +32,21 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 
 - 单个真实 Harness 会话：用户消息、assistant 流式文本（含 reasoning 与 tool-call 草稿）实时渲染；欢迎页展示 TUI 标识、模型与快捷键摘要。
 - 操作日志：命令/快捷键操作以 `❯ 触发源` + `⎿ 结果` 成对持久输出到对话区，按时间与消息混排（不短暂消失）。
-- `@` 文件引用（参考 Claude Code 的路径补全）：输入 `@` 默认列出 cwd 一级目录（目录在前、`/` 后缀），`↑↓` 选择、`Enter` 进入目录或选中文件、`Esc`/空 query 时 `Backspace` 返回上级（根目录关闭）；输入字符实时过滤当前目录条目；提交时读取文件内容展开为带语言标签的引用块（单文件 >16KB 截断，二进制/不存在保留原样并提示）。手动输入完整路径（如 `@src/index.js`）不经菜单直接生效。
+- `@` 文件引用（参考 Claude Code 的路径补全）：输入 `@` 默认列出 cwd 一级目录（目录在前、`/` 后缀），`↑↓` 选择、`Enter` 进入目录或选中文件、`Esc`/空 query 时 `Backspace` 返回上级（根目录关闭）；输入字符实时过滤当前目录条目；提交时读取文件内容展开为带语言标签的引用块（单文件 >16KB 截断，二进制/不存在保留原样并提示），模型能获得完整引用，但对话回显只保留紧凑的 `@path`，不重复展示注入的文件正文。手动输入完整路径（如 `@src/index.js`）不经菜单直接生效。
 - 图片粘贴：终端 `Cmd/Ctrl+V` 粘贴的图片经 iTerm2 OSC 1337 / kitty graphics protocol 解析，走 Harness 官方 attachment 服务（`ctx.attachments` 校验落盘），进入待发送缓冲，随文本作为一条消息提交（image content block 引用 `ImageAttachmentRef`）。仅支持 PNG，单图上限 5MB；视觉识别由模型端视觉能力或技能完成。
-- 四行 statusline：身份行显示 `BUILD | [model] | cwd | 标题`，第二行显示 Context 块状进度与 in/out/cache 用量，第三行固定展示 prompt、skills、hooks、MCP、最近工具结果和后台 jobs，第四行展示 permission 与 `Shift+Tab` 提示；活动英文提示保持在顶部，仅模型响应时显示；面板打开时整组 statusline 让位给面板。
+- CLI 渲染：已完成的对话、工具与命令结果追加到普通终端 scrollback；输入、面板与 statusline 只占用末尾的短暂区域并按键重绘，因此 VS Code 可原生滚轮回看和选中文本。模型运行时，`preset` 左侧显示带探索图标与词汇的动态状态（如 `◉ Exploring`），临时区域按完整行批量显示 reasoning、tool-call 与回答流；完成后最终结果追加到 scrollback。Markdown 回答会在 CLI 中做轻量标题、列表、表格、代码块与行内强调渲染，避免半截 token 直接造成排版抖动。四行 statusline：身份行显示 `BUILD | [model] | cwd | 标题`，第二行显示 Context 块状进度与 in/out/cache 用量，第三行固定展示 prompt、skills、hooks、MCP、最近工具结果和后台 jobs，第四行展示 permission 与 `Shift+Tab` 提示；面板打开时整组 statusline 让位给面板。
 - Agent preset：`/preset` 读取 Harness 官方 `standard`、`code`、`minimal`、`cordis` 组合；空会话可用上下键选择并即时 recompose，首轮产生内容后锁定，恢复会话时按 durable preset 事件重建相同组合。
 - `approval/request` 审批闭环：`Y` 允许一次、`N`/`Esc` 拒绝；队列串行处理；审批到达前已输入的 `y`/`n` 会被自动消费。审批卡片展示将要执行的修改（file_path 与 `-/+` 行级 diff 预览，来自已记录的 tool-call 参数）。
 - Thinking 折叠：流式过程实时显示动态 `thinking…`，完成后折叠为 `✻ thinking · N lines · 1.2s`（保留最近 5 块）；`Ctrl+O` 第一次展开当前会话全部折叠块，再次按下全部收起。
-- 工具结果结构化：unified diff 结果红绿行级渲染；bash 类工具显示 `$ command` 标题；连续并行工具折叠为 `TOOLS` 区域，`Ctrl+O` 或点击展开/收回；skill、工具、结果、approval、hook 使用不同图标；普通多行工具输出显示首行和剩余行数，避免把完整结果压成一条不可读文本。
-- reasoning 过程实时显示为动态 `thinking…`，完成后变为静态 `✻ thinking`；展开后以低对比度连续文本显示，不使用大边框；可点击或按 `Ctrl+O` 收回。
+- 工具结果结构化：unified diff 结果红绿行级渲染；bash 类工具显示 `$ command` 标题；连续并行工具折叠为 `TOOLS` 区域，使用 `Ctrl+O` 展开/收回；skill、工具、结果、approval、hook 使用不同图标；普通多行工具输出显示首行和剩余行数，避免把完整结果压成一条不可读文本。
+- reasoning 过程实时显示为动态 `thinking…`，完成后变为静态 `✻ thinking`；展开后以低对比度连续文本显示，不使用大边框；使用 `Ctrl+O` 收回。
 - 回答耗时：每个完成的 assistant 回答末尾显示 `✓ finished in ...`；包含工具调用时追加 `· N tools`。
 - 长任务可见性：`/jobs` 打开基于官方 `ctx.jobs` 的后台任务面板，显示任务 id、状态和摘要；任务变化会自动刷新；选中任务后按 `Enter`/`Tab` 读取输出、`k` 请求取消、`r` 刷新，Esc 返回输入区。流式任务输出按官方单一游标语义显式读取，不后台轮询。没有挂载 jobs 服务时会给出明确提示。
 - 问卷交互：模型调用 `ask_user_question` 时在输入区上方打开原生问卷面板；支持数字键单选、空格/数字多选、上下键移动、Tab/Enter 提交、Esc 取消，并识别 `plan-review` 意图。
 - Hook 事件：`⚡ hook · <point> · <dialect>` 调用与结果（`↳ allow · 12ms`）在对话流中展示。
 - `Shift+Tab` 通过 `permissionPresets.set` 持久化切换权限预设（显示值来自 durable `permission/preset` 事件，无 `custom` 闪烁）；命令菜单打开时 `Tab` 只将选中项补全到输入框，`Enter` 才执行命令。
 - 输入编辑：光标移动（←→/Home/End/`Ctrl+A` 行首/`Ctrl+E` 行尾/`Alt+←→` 按词）、退格/Delete、`Ctrl+J` 换行、`↑↓` 历史、粘贴（bracketed paste）、`Ctrl+U` 清空、`Ctrl+F` 历史搜索面板、`Ctrl+G` 用 `$EDITOR` 编辑、`Ctrl+P` 命令面板；输入历史持久化到 `$DSH_HOME/dsh-tui/history.jsonl`。
-- TUI 默认接管鼠标事件：滚轮/PageUp/PageDown 浏览输出，非多行输入时 `↑/↓` 切换历史提示词，多行输入时 `↑/↓` 移动光标；普通点击可展开区域或定位输入框。支持该行为的终端中可按住 `Shift` 拖拽进行原生选中；如需完全交给终端模拟器处理鼠标和文本选择，设置 `DSH_TUI_MOUSE=0`。
+- CLI 使用普通终端缓冲区，不进入备用屏幕。文本拖拽、复制和滚轮由终端模拟器原生处理；启动时会显式关闭常见鼠标报告模式，避免 VS Code 等终端把滚轮伪装为 `↑/↓` 而切换输入历史；非多行输入时 `↑/↓` 切换历史提示词，多行输入时 `↑/↓` 移动光标；`Ctrl+O` 负责展开/收起区域。
 - 所有面板（命令菜单/模型选择/会话选择/历史搜索/命令面板/effort/问卷/帮助/审批）统一显示在输入框下方，输入框始终可见。
 - 命令：`/help`、`/clear`（仅清视图）、`/model`（模型选择器，经 `ctx.llm.listProviders/listModels` 列出；选择后**当前会话立即生效**——经 `agent/request` waterfall 原位覆盖 provider/model，同时 `agentDefaultModel.saveSelection` 持久化为新会话默认）、`/preset`（空会话选择官方 agent preset，首轮后锁定）、`/effort`（档位来自 `resolveModelInfo` 的 `reasoning.efforts`，随模型/提供商动态）、`/jobs`（查看后台长任务）、`/resume`（会话选择器，仅列当前目录、按最近使用排序，恢复时重建记录的 preset）、`/recap`（本地统计当前会话轮次、工具、耗时和最近提问，不调用模型）、`/export`（导出当前转录为 Markdown 到 cwd）、`/steer`（运行中不中断地纠正方向）、`/mcp`（展示 profile 中配置的 MCP 服务器）、`/hooks`（展示 hook 桥接）、`/exit`；`/compact`、`/goal`、`/feedback`、`/plan` 等走 Harness 官方 `ctx.commands.execute`。
 - 命令/技能菜单：名称颜色差异保留，同时追加 `cmd` / `skill` 标签；`Ctrl+P` 命令面板显示当前搜索词，命令按 Enter 执行、技能按 Tab 回填到输入框。
@@ -79,12 +79,16 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `@` | 文件引用：逐级浏览工作目录，`Enter` 选中后提交时展开文件内容 |
 | `↑ ↓` | 输入历史；回看状态下滚动内容（`↓` 回到底部） |
 | `← →` / `Home` / `End` | 移动光标 |
-| 鼠标 | 默认启用 TUI 点击/滚轮交互；`Shift` 拖拽尝试原生选中；`DSH_TUI_MOUSE=0` 完全交给终端 |
+| 鼠标 | 完全由终端模拟器处理文本选择、复制和滚轮 |
 | `PgUp` / `PgDn` | 滚动回看 |
 | `/` | 命令菜单（继续输入过滤） |
 | `?` | 快捷键帮助 |
 | `Ctrl+U` | 清空输入 |
 | `Ctrl+D` | 空输入退出 |
+
+### VS Code 滚轮诊断
+
+若 VS Code 集成终端的滚轮仍改变输入历史，可仅运行一次：`DSH_TUI_DEBUG_INPUT=1 npx --yes @deepseek-ai/dsh@0.1.0-rc.6 --profile tui`。滚动一次后退出，控制序列会记录到 `$DSH_HOME/dsh-tui/input-debug.log`；该开关只记录完整控制序列，不记录普通输入或粘贴内容。
 
 ## MCP 服务器
 

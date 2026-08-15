@@ -70,3 +70,49 @@ DSH Hub 当前是公开 GitHub 仓库的发现与安装目录：提交入口只�
 - 无凭据 mock bundle + PTY 回归链，覆盖审批、附件、问卷、会话与 jobs 基础交互。
 - 审批 diff 预览、工具结果结构化、图片粘贴协议解析、模型原位切换。
 - 所有能力以 Harness 适配为优先级，RC 变更可通过明确的契约检查发现，而非静默漂移。
+
+## 六、DSH Hub 插件市场与 TUI 安装计划（调研结论）
+
+### 现状判断
+
+- TUI 当前已经能作为 Harness `dsh.bundle` 被 profile 安装，也能在启动后消费已安装 bundle 提供的命令、技能、工具和服务。
+- TUI 当前没有插件 catalog、安装 broker 或 `ctx.plugins` 服务，因此**还没有**在 TUI 内浏览并安装市场插件的功能。
+- 官方 `dsh plugin --profile <name> add/remove ...` 是 profile 级 pnpm 委托器；安装后通过 `dsh.bundle.patch` 重新计算 bundle 栈。首版必须要求重启 TUI，不能承诺当前进程热加载。
+- DSH Hub（[catalog](https://dshhub.org/#catalog)）可提供发现数据和可复制安装命令，但当前未确认有稳定、版本化的公开 JSON API；不要把 HTML 抓取耦合进核心渲染器。
+
+### 推荐产品形态
+
+将 TUI 定位为“市场前端 + 官方安装委托”，而不是第二个包管理器：
+
+1. `/plugins`（或 `/market`）只读浏览、搜索、分类/兼容性筛选；`Enter` 查看详情。
+2. 详情展示来源仓库、固定 revision、包名/版本、许可证、更新时间、星标、兼容性、bundle/服务摘要和风险提示。
+3. `i`/`Tab` 进入确认，确认后调用官方 `dsh plugin --profile tui add <source>`；安装输出、退出码和构建脚本提示原样反馈。
+4. `/plugins installed` 读取 profile manifest/lock；移除操作同样委托 `dsh plugin ... remove` 并二次确认。
+5. 成功后提示“profile 已更新，重启 TUI 后生效”；首版不做进程内动态挂载。
+
+### 分期路线
+
+#### P0：市场发现（无副作用）
+
+- [ ] 定义可替换 catalog adapter 与版本化 schema；优先维护者 JSON 索引，带缓存、TTL、超时、离线和损坏数据降级。
+- [ ] 增加 `/plugins` 面板、搜索、筛选、详情、已安装视图和无 catalog 服务时的 capability 提示。
+- [ ] 用 mock catalog 与快照/PTY 测试验证窄终端、长描述、无许可证、待验证条目。
+
+#### P1：官方安装委托
+
+- [ ] 增加 host install broker，仅调用 `dsh plugin --profile tui add/remove`，使用结构化 argv，禁止 shell 拼接。
+- [ ] 安装前显示来源、revision、许可证、包路径、prepare/allowBuilds 风险并要求显式确认。
+- [ ] 捕获 pnpm stdout/stderr/退出码；支持取消、超时、无 pnpm、网络失败和安装失败后的可恢复提示。
+- [ ] 成功后标记 profile dirty，提供重启提示；不直接编辑 `package.json`、`cordis.yml` 或 `dsh.profile.bundles`。
+
+#### P2：发布与安全验证
+
+- [ ] 在隔离 `DSH_HOME` 做 npm、GitHub、GitHub 子目录、固定 commit、卸载/重装验收。
+- [ ] 验证 profile 隔离、bundle 重排、prepare 脚本 allowBuilds、Windows 路径和第三方代码风险提示。
+- [ ] 若 DSH Hub 提供稳定 API，再将其作为默认 adapter；否则维持维护的镜像/索引，不在 TUI 中嵌入脆弱 DOM 抓取。
+
+### 设计约束
+
+- 市场插件是第三方可执行代码，安装是外部副作用；没有来源、许可证或兼容性证据时默认高风险。
+- TUI 只管理本地视图与确认状态；profile、依赖和 bundle 真相源始终由官方 dsh CLI/pnpm/Harness 负责。
+- 任何新增 Agent-facing 能力，先更新 `HARNESS_COMPATIBILITY.md` 的服务/事件映射，再实现 UI。

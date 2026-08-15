@@ -39,6 +39,7 @@
 
 - `/settings` 只保存 TUI 偏好；模型、权限和 preset 均继续由各自的官方服务持久化，不应移入 TUI namespace。
 - `/jobs` 的流式输出读取会消费官方单一游标，因此只在用户显式选中任务后读取。
+- 插件市场/安装目前**未适配**：TUI 没有 `ctx.plugins` 或 catalog 服务，也不会直接修改 profile manifest。计划中的 `/plugins` 应只做市场发现与确认，并把安装/移除委托给官方 `dsh plugin --profile tui add/remove`；profile 重组后需重启 TUI。
 - `/fork`、`/rewind`、会话内全文检索等功能，只有在 Harness 提供稳定 session/checkpoint 合约后才能实现；不能通过截断 durable log 模拟。
 - Windows、真实 provider 下的技能发送与长任务生产者仍须做独立 E2E 验证。
 
