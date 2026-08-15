@@ -1,0 +1,12 @@
+# Test-only overlay: pin the default model to the local mock provider and
+# mount the mock adapter + approval-gated mock tool. Only ever added to an
+# isolated test profile — never to a real profile.
+
+- id: agent-default-model
+  config:
+    provider: mock
+    model: mock-v1
+
+- insert:
+    - id: mock-provider
+      name: '@dsh-demo/mock-provider'
