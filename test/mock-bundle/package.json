@@ -1,0 +1,22 @@
+{
+  "name": "@dsh-demo/mock-provider",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local mock LLM adapter and approval-gated tool for testing the dsh-tui profile without credentials",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

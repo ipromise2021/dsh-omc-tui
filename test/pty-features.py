@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""PTY E2E: approval diff, reasoning fold, parallel-tool group, export, history search, model picker.
+
+Usage: DSH_HOME=<profile-home> python3 pty-features.py <out.log>
+"""
+import glob
+import os, pty, select, time, sys, signal, fcntl, termios, struct, re
+
+OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/dsh-tui-pty-features.log"
+
+DSH = os.environ.get("DSH_BIN", "/Users/yy0812024/.npm/_npx/b86ed90107c62dab/node_modules/.bin/dsh")
+ENV = dict(os.environ)
+ENV["DSH_HOME"] = os.environ.get("DSH_HOME", "/private/tmp/dsh-tui-test2")
+ENV["PATH"] = f"{ENV.get('HOME','')}/bin:{ENV['PATH']}"
+ENV["DSH_TELEMETRY_MODE"] = "DISABLED"
+ENV["TERM"] = "xterm-256color"
+
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    os.dup2(slave, 0)
+    os.dup2(slave, 1)
+    os.dup2(slave, 2)
+    os.close(master)
+    os.close(slave)
+    os.environ.update(ENV)
+    os.execv(DSH, [DSH, "--profile", "tui"])
+os.close(slave)
+
+buf = b""
+log = []
+code = "timeout"
+
+
+def drain(t):
+    global buf
+    out = b""
+    end = time.time() + t
+    while time.time() < end:
+        r, _, _ = select.select([master], [], [], 0.1)
+        if r:
+            try:
+                d = os.read(master, 65536)
+            except OSError:
+                break
+            if not d:
+                break
+            out += d
+            buf += d
+    return out
+
+
+def send(text):
+    try:
+        os.write(master, text.encode() if isinstance(text, str) else text)
+    except OSError:
+        pass
+
+
+def wait_for(needle, timeout=25):
+    global buf
+    end = time.time() + timeout
+    while time.time() < end:
+        if needle.encode() in buf:
+            return True
+        drain(0.3)
+    return False
+
+
+def snapshot(label, wait=0.5):
+    drain(wait)
+    clean = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', buf).decode('utf-8', 'replace')
+    lines = [l for l in clean.split('\n') if l.strip(' \r\x00')]
+    log.append(f"\n===== {label} =====\n" + "\n".join(lines[-22:]))
+
+
+def cleanup(exit_code):
+    global code
+    code = exit_code
+    log.append(f"\n===== EXIT status={code} =====\n")
+    try:
+        os.close(master)
+    except OSError:
+        pass
+    with open(OUT, "w") as f:
+        f.write("".join(log))
+    print("exit code:", code)
+
+
+try:
+    log.append(f"\n===== BOOT =====\n{drain(6.0).decode('utf-8', 'replace')}")
+
+    # 1. full turn: approval diff preview + parallel tool group + reasoning fold
+    send("hello mock\r")
+    assert wait_for("approval needed", 25), "approval prompt missing"
+    assert wait_for("mock-file.js", 5), "approval diff file missing"
+    assert wait_for("- const old = 1", 5), "approval diff old line missing"
+    snapshot("approval-diff")
+    send("y")
+    assert wait_for("clean turn end", 25), "turn did not complete"
+    assert wait_for("◒ 2 tools · mock_tool · mock_read", 10), "parallel tool group not folded"
+    assert wait_for("✻ reasoning ·", 10), "reasoning fold missing"
+    snapshot("folded-group-reasoning")
+
+    # 2. Ctrl+O expands the nearest collapsible block (reasoning)
+    send("\x0f")
+    drain(0.8)
+    assert wait_for("end reasoning", 5), "Ctrl+O did not expand reasoning"
+    snapshot("expanded-reasoning")
+    send("\x0f")  # collapse back
+    drain(0.5)
+
+    # 3. /export writes a markdown transcript
+    send("/export\r")
+    assert wait_for("exported ·", 10), "export notice missing"
+    exports = glob.glob("dsh-session-*.md")
+    assert len(exports) >= 1, "no exported markdown file found"
+    snapshot("export-notice")
+
+    # 4. Ctrl+F history search
+    send("\x06")
+    drain(0.6)
+    assert wait_for("HISTORY SEARCH", 5), "history search panel missing"
+    send("hello")
+    drain(0.6)
+    snapshot("history-search")
+    send("\r")
+    drain(0.5)
+    clean = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', buf).decode('utf-8', 'replace')
+    assert "❯ hello mock" in clean, "history search did not insert the entry"
+    send("\x15")  # clear input
+
+    # 5. /model picker + live switch
+    send("/model\r")
+    assert wait_for("MODELS", 10), "model picker missing"
+    assert wait_for("✓ current", 5), "current model marker missing"
+    snapshot("model-picker")
+    send("\x1b[B")  # move to mock-v2
+    drain(0.4)
+    send("\r")
+    assert wait_for("⎿ mock/mock-v2 (active now · new sessions default)", 10), "model switch log missing"
+    snapshot("model-switched")
+    # 6. the switch applies to the NEXT turn in the SAME session
+    send("hello mock\r")
+    assert wait_for("approval needed", 25), "approval prompt missing"
+    send("y")
+    assert wait_for("[model=mock-v2]", 25), "live model switch did not apply to the current session"
+    drain(2.0)  # let the turn fully close before quitting
+    snapshot("live-switched-turn")
+
+    # 7. quit
+    send("\x03")
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        got, status = os.waitpid(pid, os.WNOHANG)
+        if got == pid:
+            cleanup(os.waitstatus_to_exitcode(status))
+            raise SystemExit
+        time.sleep(0.2)
+except SystemExit:
+    raise
+except Exception as error:
+    log.append(f"\n===== SCRIPT ERROR: {error} =====\n")
+    cleanup("error")
+finally:
+    for path in glob.glob("dsh-session-*.md"):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+if code == "timeout":
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    cleanup("timeout")

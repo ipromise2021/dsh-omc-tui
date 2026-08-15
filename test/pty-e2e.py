@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""PTY E2E: stream → approval → tool result → usage → interrupt → quit.
+
+Usage: DSH_HOME=<profile-home> python3 pty-e2e.py <out.log>
+"""
+import os, pty, select, time, sys, signal, fcntl, termios, struct, re
+
+OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/dsh-tui-pty.log"
+
+DSH = os.environ.get("DSH_BIN", "/Users/yy0812024/.npm/_npx/b86ed90107c62dab/node_modules/.bin/dsh")
+ENV = dict(os.environ)
+ENV["DSH_HOME"] = os.environ.get("DSH_HOME", "/private/tmp/dsh-tui-test2")
+ENV["PATH"] = f"{ENV.get('HOME','')}/bin:{ENV['PATH']}"
+ENV["DSH_TELEMETRY_MODE"] = "DISABLED"
+ENV["TERM"] = "xterm-256color"
+
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    os.dup2(slave, 0)
+    os.dup2(slave, 1)
+    os.dup2(slave, 2)
+    os.close(master)
+    os.close(slave)
+    os.environ.update(ENV)
+    os.execv(DSH, [DSH, "--profile", "tui"])
+os.close(slave)
+
+buf = b""
+log = []
+code = "timeout"
+
+
+def drain(t):
+    global buf
+    out = b""
+    end = time.time() + t
+    while time.time() < end:
+        r, _, _ = select.select([master], [], [], 0.1)
+        if r:
+            try:
+                d = os.read(master, 65536)
+            except OSError:
+                break
+            if not d:
+                break
+            out += d
+            buf += d
+    return out
+
+
+def send(text):
+    try:
+        os.write(master, text.encode() if isinstance(text, str) else text)
+    except OSError:
+        pass
+
+
+def wait_for(needle, timeout=20):
+    global buf
+    end = time.time() + timeout
+    while time.time() < end:
+        if needle.encode() in buf:
+            return True
+        drain(0.3)
+    return False
+
+
+def snapshot(label, wait=0.4):
+    drain(wait)
+    clean = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', buf).decode('utf-8', 'replace')
+    lines = [l for l in clean.split('\n') if l.strip(' \r\x00')]
+    log.append(f"\n===== {label} =====\n" + "\n".join(lines[-14:]))
+
+
+def cleanup(exit_code):
+    global code
+    code = exit_code
+    log.append(f"\n===== EXIT status={code} =====\n")
+    try:
+        os.close(master)
+    except OSError:
+        pass
+    with open(OUT, "w") as f:
+        f.write("".join(log))
+    print("exit code:", code)
+
+
+try:
+    log.append(f"\n===== BOOT =====\n{drain(6.0).decode('utf-8', 'replace')}")
+
+    send("hello mock\r")
+    assert wait_for("approval needed", 20), "approval prompt missing"
+    snapshot("approval-visible")
+
+    send("y")  # allow
+    assert wait_for("clean turn end", 20), "turn did not complete"
+    snapshot("turn-complete")
+
+    send("\x1b[Z")  # Shift+Tab: cycle permission
+    time.sleep(0.6)
+    snapshot("after-perm-cycle")
+
+    send("second message\r")
+    time.sleep(0.8)
+    send("\x03")  # interrupt
+    wait_for("interrupted", 10)
+    snapshot("after-interrupt")
+
+    send("\x03")  # idle → quit
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        got, status = os.waitpid(pid, os.WNOHANG)
+        if got == pid:
+            cleanup(os.waitstatus_to_exitcode(status))
+            raise SystemExit
+        time.sleep(0.2)
+except SystemExit:
+    raise
+except Exception as error:
+    log.append(f"\n===== SCRIPT ERROR: {error} =====\n")
+    cleanup("error")
+
+if code == "timeout":
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    cleanup("timeout")
