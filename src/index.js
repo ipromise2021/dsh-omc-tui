@@ -169,7 +169,9 @@ const LOCAL_COMMANDS = [
   { name: 'resume', description: 'pick a past session to resume' },
   { name: 'model', description: 'pick the default model' },
   { name: 'effort', description: 'set reasoning effort: off, high, or max' },
+  { name: 'status', description: 'show full session and environment status' },
   { name: 'preset', description: 'select the agent preset for this blank session' },
+  { name: 'presets', description: 'select the agent preset (alias for /preset)' },
   { name: 'settings', description: 'configure TUI theme and local preferences' },
   { name: 'jobs', description: 'show background jobs and long-running work' },
   { name: 'paste', description: 'paste image from system clipboard' },
@@ -1381,6 +1383,47 @@ class TuiApp {
     this.log('ok', `local recap · ${turnStarts.length} turns${toolText}${elapsedText}${promptText}`, '/recap')
   }
 
+  showStatus() {
+    const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? {}
+    const modelStr = `${selection.provider ?? 'unknown'}/${selection.model ?? 'unknown'}`
+    const effortStr = this.currentEffort().toUpperCase()
+    const planState = this.planModeService()?.get?.(this.agent) ?? { active: false, pending: undefined }
+    const planActive = planState.pending ?? planState.active
+    const modeStr = planActive ? 'PLAN' : 'BUILD'
+    const presetStr = this.presetName ?? 'default'
+    const cwd = this.agent?.session?.header?.cwd ?? process.cwd()
+    const sessionId = this.agent?.session?.id?.slice?.(-8) ?? 'new'
+    const sessionTitle = this.agent?.session?.title?.title || 'new session'
+    const events = this.agent?.session?.events ?? []
+    const turns = events.filter((e) => e.type === 'turn/start').length
+    const perm = this.permissionName ?? this.ctx.permissionPresets?.current?.(events) ?? 'workspace-write'
+
+    const usage = this.usage ?? {}
+    const cw = usage.contextWindow || 200000
+    const inp = usage.input || 0
+    const out = usage.output || 0
+    const cache = usage.cacheRead || 0
+    const total = inp + out
+    const pct = Math.round((total / cw) * 100)
+
+    const skillCount = this.skills?.length ?? 0
+    const mcpCount = this.mcpCount ?? 0
+    const hookCount = this.hookCount ?? 0
+    const runningJobs = (this.localBackgroundJobs?.filter((j) => j.status === 'running')?.length || 0)
+
+    const lines = [
+      `Model:        ${modelStr} · effort ${effortStr}`,
+      `Mode:         ${modeStr} · Preset: ${presetStr}`,
+      `Directory:    ${cwd}`,
+      `Session:      ${sessionId} · "${sessionTitle}" (${turns} turns, ${events.length} events)`,
+      `Context:      ${formatTokens(total)} / ${formatTokens(cw)} tokens (${pct}%) · in ${formatTokens(inp)}, out ${formatTokens(out)}, cache ${formatTokens(cache)}`,
+      `Permission:   ${perm}`,
+      `Extensions:   ${skillCount} skills · ${mcpCount} MCPs · ${hookCount} hooks · ${runningJobs} active jobs`,
+      `Preferences:  theme: ${this.preferences?.theme ?? 'claude'} · history: ${this.preferences?.persistHistory !== false ? 'on' : 'off'}`
+    ]
+    this.log('ok', lines.join('\n'), '/status')
+  }
+
   cyclePermission() {
     if (!this.agent) return
     const service = this.ctx.permissionPresets
@@ -1655,13 +1698,17 @@ class TuiApp {
       case 'recap':
         this.showRecap()
         break
+      case 'status':
+        this.showStatus()
+        break
       case 'effort': {
         const requested = line.trim().split(/\s+/)[1]?.toLowerCase()
         if (requested) this.chooseEffort(requested)
         else void this.openEffortPicker()
         break
       }
-      case 'preset': {
+      case 'preset':
+      case 'presets': {
         const requested = line.trim().split(/\s+/)[1]?.toLowerCase()
         if (requested) void this.choosePreset(requested)
         else void this.openPresetPicker()
@@ -3015,6 +3062,12 @@ class TuiApp {
       else if (value === '\x1b' || value === '\x03') {
         this.presetPicker = undefined
         this.scheduleRender()
+      } else if (/^[1-9]$/.test(value)) {
+        const idx = Number(value) - 1
+        if (idx < this.presetPicker.entries.length) {
+          this.presetPicker.selected = idx
+          this.scheduleRender()
+        }
       } else if (value.startsWith('\x1b[')) this.onEscapeSequence(value)
       return
     }
@@ -3235,7 +3288,7 @@ class TuiApp {
         this.modelPicker.selected = Math.max(0, this.modelPicker.selected - 1)
         this.scheduleRender()
       } else if (this.presetPicker) {
-        this.presetPicker.selected = Math.max(0, this.presetPicker.selected - 1)
+        this.presetPicker.selected = (this.presetPicker.selected - 1 + this.presetPicker.entries.length) % this.presetPicker.entries.length
         this.scheduleRender()
       } else if (this.jobPanel) {
         this.selectJob(this.jobPanel.selected - 1)
@@ -3276,7 +3329,7 @@ class TuiApp {
         this.modelPicker.selected = Math.min(this.modelPicker.entries.length - 1, this.modelPicker.selected + 1)
         this.scheduleRender()
       } else if (this.presetPicker) {
-        this.presetPicker.selected = Math.min(this.presetPicker.entries.length - 1, this.presetPicker.selected + 1)
+        this.presetPicker.selected = (this.presetPicker.selected + 1) % this.presetPicker.entries.length
         this.scheduleRender()
       } else if (this.jobPanel) {
         this.selectJob(this.jobPanel.selected + 1)
@@ -3300,8 +3353,22 @@ class TuiApp {
       }
       return
     }
-    if (value === '\x1b[D') return this.settingsPicker ? void this.cycleSetting(-1) : this.moveLeft()
-    if (value === '\x1b[C') return this.settingsPicker ? void this.cycleSetting(1) : this.moveRight()
+    if (value === '\x1b[D') {
+      if (this.settingsPicker) return void this.cycleSetting(-1)
+      if (this.presetPicker) {
+        this.presetPicker.selected = (this.presetPicker.selected - 1 + this.presetPicker.entries.length) % this.presetPicker.entries.length
+        return this.scheduleRender()
+      }
+      return this.moveLeft()
+    }
+    if (value === '\x1b[C') {
+      if (this.settingsPicker) return void this.cycleSetting(1)
+      if (this.presetPicker) {
+        this.presetPicker.selected = (this.presetPicker.selected + 1) % this.presetPicker.entries.length
+        return this.scheduleRender()
+      }
+      return this.moveRight()
+    }
     if (value === '\x1b[1;3D') return this.moveWordLeft()
     if (value === '\x1b[1;3C') return this.moveWordRight()
     if (value === '\x1b[H' || value === '\x1b[1~' || value === '\x1bOH') return this.moveToLineStart()
@@ -4094,12 +4161,13 @@ class TuiApp {
         ...shown.map((entry, index) => {
           const selected = index + start === this.presetPicker.selected
           const marker = selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          const state = entry.id === this.presetName ? `${ANSI.bash}✓ current${ANSI.reset}` : entry.broken ? `${ANSI.coral}broken${ANSI.reset}` : ''
+          const num = `${ANSI.dim}${index + start + 1}.${ANSI.reset}`
+          const state = entry.id === this.presetName ? ` ${ANSI.bash}✓ current${ANSI.reset}` : entry.broken ? ` ${ANSI.coral}broken${ANSI.reset}` : ''
           const description = entry.broken ?? entry.description ?? entry.name ?? entry.id
-          return `${marker}  ${ANSI.blueSoft}${entry.id}${ANSI.reset} ${state} ${ANSI.dim}${shorten(safe(description), Math.max(24, columns - 32))}${ANSI.reset}`
+          return `${marker} ${num}  ${selected ? ANSI.blue : ANSI.blueSoft}${entry.id}${ANSI.reset}${state}  ${ANSI.dim}${shorten(safe(description), Math.max(20, columns - 36))}${ANSI.reset}`
         }),
         '',
-        `${ANSI.muted}↑↓ navigate  ·  Enter or Tab select  ·  Esc close${ANSI.reset}`
+        `${ANSI.muted}↑↓ or ← → navigate  ·  1-9 quick pick  ·  Enter select  ·  Esc close${ANSI.reset}`
       ]
     }
     if (this.jobPanel) {
