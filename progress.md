@@ -80,6 +80,16 @@
 6. **交互与终端兼容**：全面捕获与放行 SS3 终端光标方向键（`\x1bOA/B/C/D`）；预设二次确认面板（`presetConfirm`）升级为方向键/Tab 切换单选圆点 `●` 与 `Enter` 提交。
 7. **`/compact` 与 `/steer` 平滑升级**：`/compact` 全面对齐 Claude Code，提供即时反馈、防重入互斥锁与 Token 收益统计；`/steer` 支持将已排队消息一键提升为实时干预。
 
+## 会话：2026-08-17（性能专项：0ms 输入响应、/resume 骨架屏与大历史流式回放）
+
+### 状态：complete (6 PTY Tests Passed 100%)
+
+### 已完成核心能力
+1. **打字与光标移动 0ms 响应**：在空闲模式下跳过定时器防抖直接直刷终端；状态栏引入 `statusRowsCache` 复合缓存，彻底消除打字时的重复宽度重算与字符串切割。
+2. **`/resume` 骨架占位与内存标题缓存**：新增 `sessionTitleCache` 缓存池，未命中项立即展示 `⠋ 加载会话中…` 骨架占位并后台异步并发加载，0ms 秒开面板。
+3. **`-c` 快速直达与并发启动**：`Promise.all` 并发读取历史与索引，`-c` 模式直接单查最近会话元数据，避免磁盘全量遍历。
+4. **超长会话流式分块回放 (`commitToScrollbackChunked`)**：恢复大型历史会话（数百/数千行文本）时以 120 行为单位分块流式写入 Stdout，并配合微任务让出 Event Loop，防止 Node 单线程尖刺与终端卡死。
+
 ### 自动化回归测试结果
 | 测试用例 | 覆盖场景 | 结果 |
 |---|---|---|
@@ -89,4 +99,5 @@
 | `test/pty-file.py` | @ 引用→默认列表→目录浏览→选中→展开→提交 | ✅ PASS (exit code 0) |
 | `test/pty-image.py` | OSC 1337 / kitty 图片粘贴→attachment→提交 | ✅ PASS (exit code 0) |
 | `test/pty-interaction.py` | 菜单、快捷键、多行输入、面板与状态行 | ✅ PASS (exit code 0) |
+
 

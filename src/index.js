@@ -605,8 +605,8 @@ class TuiApp {
     const launcherArgs = this.ctx.get('cmdlineArgs')?.get?.() ?? []
     const continueLast = launcherArgs.includes('-c') || launcherArgs.includes('--continue') || process.argv.includes('-c') || process.argv.includes('--continue')
     let resumeRecord
+    const cwd = process.cwd()
     if (continueLast) {
-      const cwd = process.cwd()
       const mruEntries = Object.entries(this.mru).sort((a, b) => b[1] - a[1])
       for (const [candidateId] of mruEntries) {
         try {
@@ -654,9 +654,8 @@ class TuiApp {
       this.streaming = { text: '', reasoning: '', tool: undefined }
       this.reasoningAt = undefined
       this.message = ''
+      this.touchMru(resumeRecord.header.id)
     }
-    if (resumeRecord) this.touchMru(resumeRecord.header.id)
-
 
     this.disposers.push(this.ctx.on('session/event', (session, event) => this.onSessionEvent(session, event)))
     this.disposers.push(this.ctx.on('agent/status', ({ agent: changed, status }) => {
@@ -681,7 +680,6 @@ class TuiApp {
     }
 
     this.openTerminal()
-    const cwd = this.agent.session.header.cwd ?? process.cwd()
     const columns = Math.max(60, process.stdout.columns || 100)
     const contentWidth = Math.max(24, columns - 2)
     const workspace = truncateWidth(safe(cwd), Math.max(24, contentWidth - 24))
@@ -691,7 +689,7 @@ class TuiApp {
 
     if (resumeRecord) {
       const pastRows = this.formatEvents(this.agent.session.events, columns)
-      if (pastRows.length > 0) this.commitToScrollback(pastRows)
+      if (pastRows.length > 0) await this.commitToScrollbackChunked(pastRows)
       this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
     } else {
       this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
@@ -2764,7 +2762,7 @@ class TuiApp {
 
       const columns = Math.max(60, process.stdout.columns || 100)
       const pastRows = this.formatEvents(agent.session.events, columns)
-      if (pastRows.length > 0) this.commitToScrollback(pastRows)
+      if (pastRows.length > 0) await this.commitToScrollbackChunked(pastRows)
       this.lastCommittedSeq = agent.session.events[agent.session.events.length - 1]?.seq ?? 0
 
       this.log('ok', `resumed session ${record.header.id.slice(0, 8)}`, '/resume')
@@ -4410,6 +4408,26 @@ class TuiApp {
     if (!wasOpen) return
     this.clearFooter()
     process.stdout.write(lines.join('\n') + '\n')
+    this.render()
+  }
+
+  async commitToScrollbackChunked(lines, chunkSize = 120) {
+    if (!lines || lines.length === 0) return
+    const wasOpen = this.terminalOpen
+    if (!wasOpen) return
+    this.clearFooter()
+    if (lines.length <= chunkSize) {
+      process.stdout.write(lines.join('\n') + '\n')
+      this.render()
+      return
+    }
+    for (let i = 0; i < lines.length; i += chunkSize) {
+      const chunk = lines.slice(i, i + chunkSize)
+      process.stdout.write(chunk.join('\n') + '\n')
+      if (i + chunkSize < lines.length) {
+        await new Promise((resolve) => setImmediate(resolve))
+      }
+    }
     this.render()
   }
 
