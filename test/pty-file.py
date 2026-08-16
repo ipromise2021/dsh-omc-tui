@@ -3,11 +3,11 @@
 
 Usage: DSH_HOME=<profile-home> python3 pty-file.py <out.log>
 """
-import os, pty, select, time, sys, signal, fcntl, termios, struct, re
+import os, pty, select, time, sys, signal, fcntl, termios, struct, re, shutil
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/dsh-tui-pty-file.log"
 
-DSH = os.environ.get("DSH_BIN", "/Users/yy0812024/.npm/_npx/b86ed90107c62dab/node_modules/.bin/dsh")
+DSH = os.environ.get("DSH_BIN") or shutil.which("dsh") or "/Users/yy0812024/.nvm/versions/node/v22.22.2/bin/dsh"
 ENV = dict(os.environ)
 ENV["DSH_HOME"] = os.environ.get("DSH_HOME", "/private/tmp/dsh-tui-test2")
 ENV["PATH"] = f"{ENV.get('HOME','')}/bin:{ENV['PATH']}"
@@ -95,7 +95,8 @@ try:
     with open(FIXTURE, "w") as f:
         f.write("// fixture for the @-reference PTY test\nconsole.log('fixture')\n")
 
-    log.append(f"\n===== BOOT =====\n{drain(6.0).decode('utf-8', 'replace')}")
+    boot = wait_for("type a message", 40)
+    log.append(f"\n===== BOOT (ready={boot}) =====\n{buf.decode('utf-8', 'replace')}")
 
     # 1. bare "@" opens the default listing of the cwd first level
     send("@")
@@ -135,7 +136,7 @@ try:
     snapshot("ref-submitted")
 
     # 5. quit
-    send("\x03")
+    send("/exit\r")
     deadline = time.time() + 15
     while time.time() < deadline:
         got, status = os.waitpid(pid, os.WNOHANG)

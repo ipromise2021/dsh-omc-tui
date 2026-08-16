@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """PTY driver #4: resume a session, /compact, narrow terminal, quit."""
-import os, pty, select, time, sys, signal, fcntl, termios, struct, re
+import os, pty, select, time, sys, signal, fcntl, termios, struct, re, shutil
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/dsh-tui-ptyA.log"
-DSH = os.environ.get("DSH_BIN", "/Users/yy0812024/.npm/_npx/b86ed90107c62dab/node_modules/.bin/dsh")
+DSH = os.environ.get("DSH_BIN") or shutil.which("dsh") or "/Users/yy0812024/.nvm/versions/node/v22.22.2/bin/dsh"
 ENV = dict(os.environ)
 ENV["DSH_HOME"] = os.environ.get("DSH_HOME", "/private/tmp/dsh-tui-test2")
 ENV["PATH"] = f"{ENV.get('HOME','')}/bin:{ENV['PATH']}"
@@ -62,7 +62,8 @@ def snapshot(label, wait=0.4):
     return out
 
 log = []
-log.append(f"\n===== BOOT =====\n{drain(6.0).decode('utf-8', 'replace')}")
+boot_ok = wait_for("type a message", 30)
+log.append(f"\n===== BOOT (ready={boot_ok}) =====\n{buf.decode('utf-8', 'replace')}")
 
 # resize to narrow 80x24
 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
@@ -80,12 +81,14 @@ snapshot("after-preset")
 
 # /compact (real harness command, agent idle)
 send("/compact\r")
-time.sleep(2.0)
+wait_for("compact", 10)
+time.sleep(1.0)
 snapshot("after-compact")
 
 # resume a past session
+time.sleep(0.5)
 send("/resume\r")
-assert wait_for("SESSIONS", 12), "resume picker did not open"
+assert wait_for("SESSIONS", 25), "resume picker did not open"
 snapshot("after-resume")
 send("\r")   # resume first (most recent) session
 time.sleep(2.5)
@@ -97,7 +100,7 @@ time.sleep(0.5)
 snapshot("back-to-wide")
 
 # quit
-send("\x03")
+send("/exit\r")
 code = "timeout"
 deadline = time.time() + 15
 while time.time() < deadline:
