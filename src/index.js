@@ -4140,23 +4140,12 @@ class TuiApp {
       const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
 
       if (this.streaming.text) {
-        lines.push(`${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${ANSI.blue}${frame} generating (${elapsedSec}s)${ANSI.reset}`)
-        const mdRows = this.renderMarkdownRows(this.streaming.text, columns - 2, ANSI.answer)
-        const maxLiveLines = Math.max(3, Math.min(10, rows - 12 - (panelRows.length > 0 ? panelRows.length : 4)))
-        const sliceStart = Math.max(0, mdRows.length - maxLiveLines)
-        if (sliceStart > 0) {
-          lines.push(`${ANSI.dim}  ↑ ... ${sliceStart} more lines above${ANSI.reset}`)
-        }
-        const shownRows = mdRows.slice(sliceStart)
-        for (let i = 0; i < shownRows.length; i++) {
-          const r = shownRows[i]
-          if (r === null) {
-            lines.push('')
-          } else {
-            const isLast = i === shownRows.length - 1
-            const cursor = isLast ? `${ANSI.blue}▋${ANSI.reset}` : ''
-            lines.push(r[0] + r[1] + cursor)
-          }
+        lines.push(`${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${ANSI.blue}${frame} Generating${dots} (${elapsedSec}s)${ANSI.reset}`)
+        const textLines = wrap(this.streaming.text.trim(), Math.max(20, columns - 6)).slice(-3)
+        for (let i = 0; i < textLines.length; i++) {
+          const isLast = i === textLines.length - 1
+          const cursor = isLast ? ` ${ANSI.blue}▋${ANSI.reset}` : ''
+          lines.push(`  ${ANSI.answer}${textLines[i]}${ANSI.reset}${cursor}`)
         }
       } else if (this.streaming.reasoning) {
         const snippet = this.streaming.reasoning.trim().replace(/\s+/g, ' ')
