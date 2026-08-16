@@ -88,13 +88,12 @@ send("\r")
 time.sleep(0.6)
 send("1")
 send("2")
-send("\r")
-time.sleep(8.0)
-drain(0.5)
+send("\t")
+drain(3.0)
 snapshot("question-complete")
 
 # 3. /jobs inspect panel
-send("\x15/jobs\r")
+send("/jobs\r")
 assert wait_for("BACKGROUND JOBS", 15), "jobs panel did not open"
 snapshot("jobs-open")
 send("r")
