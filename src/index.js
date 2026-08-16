@@ -3452,11 +3452,13 @@ class TuiApp {
     if (cleanQuery && name.toLowerCase().startsWith(cleanQuery)) {
       const matchPart = name.slice(0, cleanQuery.length)
       const restPart = name.slice(cleanQuery.length)
-      const matchColor = `${ANSI.bold}${ANSI.ink}`
-      const restColor = isSelected ? (isSkill ? ANSI.teal : ANSI.blueSoft) : ANSI.muted
+      // Matched characters: bright bold amber highlight
+      const matchColor = `${ANSI.bold}${ANSI.amber ?? ANSI.blue}`
+      // Remaining characters: dim gray (or crisp ink if selected)
+      const restColor = isSelected ? ANSI.ink : ANSI.dim
       nameFormatted = `${ANSI.dim}/${ANSI.reset}${matchColor}${matchPart}${ANSI.reset}${restColor}${restPart}${ANSI.reset}`
     } else {
-      const nameColor = isSelected ? (isSkill ? ANSI.teal : ANSI.blueSoft) : ANSI.muted
+      const nameColor = isSelected ? (isSkill ? ANSI.teal : (ANSI.peach ?? ANSI.blueSoft)) : ANSI.dim
       nameFormatted = `${ANSI.dim}/${ANSI.reset}${nameColor}${name}${ANSI.reset}`
     }
 
