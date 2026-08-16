@@ -2110,7 +2110,7 @@ class TuiApp {
     if (this.sessionHasProduced()) {
       // Session is active — show a confirmation panel asking user to start new session
       this.presetPicker = undefined
-      this.presetConfirm = { requestedId: id }
+      this.presetConfirm = { requestedId: id, selected: 0 }
       this.scheduleRender()
       return
     }
@@ -2995,9 +2995,20 @@ class TuiApp {
     }
 
     if (this.presetConfirm) {
+      const isUp = value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[D' || value === '\x1bOD'
+      const isDown = value === '\x1b[B' || value === '\x1bOB' || value === '\x1b[C' || value === '\x1bOC' || value === '\t'
+      if (isUp || isDown) {
+        this.presetConfirm.selected = this.presetConfirm.selected === 0 ? 1 : 0
+        this.scheduleRender()
+        return
+      }
+      if (value === '\r' || value === ' ') {
+        void this.applyPresetConfirm(this.presetConfirm.selected === 0)
+        return
+      }
       const answer = value.trim().toLowerCase()
-      if (answer === 'y') { void this.applyPresetConfirm(true); return }
-      if (answer === 'n' || value === '\x1b' || value === '\x03') { void this.applyPresetConfirm(false); return }
+      if (answer === 'y' || answer === '1') { void this.applyPresetConfirm(true); return }
+      if (answer === 'n' || answer === '2' || value === '\x1b' || value === '\x03') { void this.applyPresetConfirm(false); return }
       return
     }
 
@@ -4165,16 +4176,25 @@ class TuiApp {
     }
     if (this.presetConfirm) {
       const id = this.presetConfirm.requestedId
+      const selected = this.presetConfirm.selected ?? 0
+      const yesCursor = selected === 0 ? `${ANSI.blue}>${ANSI.reset}` : ' '
+      const yesDot = selected === 0 ? `${ANSI.blue}●${ANSI.reset}` : `${ANSI.dim}○${ANSI.reset}`
+      const yesLabel = selected === 0 ? `${ANSI.ink}${ANSI.bold}Start new session with preset "${id}"${ANSI.reset}` : `${ANSI.dim}Start new session with preset "${id}"${ANSI.reset}`
+
+      const noCursor = selected === 1 ? `${ANSI.blue}>${ANSI.reset}` : ' '
+      const noDot = selected === 1 ? `${ANSI.coral}●${ANSI.reset}` : `${ANSI.dim}○${ANSI.reset}`
+      const noLabel = selected === 1 ? `${ANSI.ink}${ANSI.bold}Cancel — keep current session and preset${ANSI.reset}` : `${ANSI.dim}Cancel — keep current session and preset${ANSI.reset}`
+
       return [
         `${ANSI.muted}SWITCH PRESET${ANSI.reset} ${ANSI.dim}· ${ANSI.amber}${id}${ANSI.reset}`,
         '',
         `${ANSI.ink}This session already has conversation history.${ANSI.reset}`,
         `${ANSI.dim}Switching presets requires starting a fresh session.${ANSI.reset}`,
         '',
-        `  ${ANSI.blue}Y${ANSI.reset} ${ANSI.ink}Start new session with preset "${id}"${ANSI.reset}`,
-        `  ${ANSI.coral}N${ANSI.reset} ${ANSI.dim}Cancel — keep current session and preset${ANSI.reset}`,
+        `${yesCursor} ${yesDot}  ${ANSI.blueSoft}Y${ANSI.reset} · ${yesLabel}`,
+        `${noCursor} ${noDot}  ${ANSI.coral}N${ANSI.reset} · ${noLabel}`,
         '',
-        `${ANSI.muted}y confirm new session  ·  n or Esc cancel${ANSI.reset}`
+        `${ANSI.muted}↑↓ or ← → select  ·  Enter confirm  ·  y/n quick choice  ·  Esc cancel${ANSI.reset}`
       ]
     }
     if (this.skillsPanel) {
