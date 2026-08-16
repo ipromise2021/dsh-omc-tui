@@ -21,11 +21,11 @@ const THEMES = {
     cyan: '\x1b[38;5;214m',       // Unified warm golden amber #ffaf00
     blue: '\x1b[38;5;209m',       // Primary accent (Claude terracotta)
     blueSoft: '\x1b[38;5;215m',   // Secondary accent (warm peach)
-    ink: '\x1b[38;5;255m',        // Crisp bright white
-    answer: '\x1b[38;5;253m',     // High-readability warm off-white
-    detail: '\x1b[38;5;244m',     // Medium slate gray
-    dim: '\x1b[38;5;240m',        // Dark slate gray
-    muted: '\x1b[38;5;245m',      // Neutral slate
+    ink: '\x1b[38;5;251m',        // Soft bright off-white #c6c6c6 (non-glare)
+    answer: '\x1b[38;5;250m',     // Comfortable soft light gray #bcbcbc
+    detail: '\x1b[38;5;245m',     // Medium slate gray #8a8a8a
+    dim: '\x1b[38;5;241m',        // Dark slate gray #626262
+    muted: '\x1b[38;5;245m',      // Neutral slate #8a8a8a
     rule: '\x1b[38;5;238m',       // Subtle sleek dark divider line
     coral: '\x1b[38;5;203m',      // Warning coral
     bash: '\x1b[38;5;114m',       // Soft pistachio green
@@ -41,11 +41,11 @@ const THEMES = {
     cyan: '\x1b[38;5;80m',
     blue: '\x1b[38;5;74m',        // Lighter DeepSeek blue #5fafd7
     blueSoft: '\x1b[38;5;117m',   // Light sky blue
-    ink: '\x1b[38;5;255m',
-    answer: '\x1b[38;5;253m',     // Slightly lighter off-white
-    detail: '\x1b[38;5;248m',     // Lighter medium gray
-    dim: '\x1b[38;5;243m',        // Lighter dim gray
-    muted: '\x1b[38;5;247m',      // Lighter neutral
+    ink: '\x1b[38;5;251m',        // Soft bright off-white #c6c6c6
+    answer: '\x1b[38;5;250m',     // Comfortable soft light gray #bcbcbc
+    detail: '\x1b[38;5;246m',     // Lighter medium gray
+    dim: '\x1b[38;5;242m',        // Lighter dim gray
+    muted: '\x1b[38;5;245m',      // Lighter neutral
     rule: '\x1b[38;5;240m',       // Lighter divider
     coral: '\x1b[38;5;210m',      // Lighter warning coral
     bash: '\x1b[38;5;120m',       // Lighter pistachio green
@@ -61,16 +61,16 @@ const THEMES = {
     cyan: '\x1b[37m',
     blue: '\x1b[1;37m',
     blueSoft: '\x1b[37m',
-    ink: '\x1b[38;5;255m',
-    answer: '\x1b[38;5;250m',
-    detail: '\x1b[38;5;243m',
+    ink: '\x1b[38;5;251m',
+    answer: '\x1b[38;5;249m',
+    detail: '\x1b[38;5;244m',
     dim: '\x1b[38;5;240m',
     muted: '\x1b[38;5;240m',
     rule: '\x1b[38;5;238m',
     coral: '\x1b[38;5;203m',
     bash: '\x1b[1;37m',
     bar: '\x1b[38;5;238m',
-    barFill: '\x1b[38;5;250m',
+    barFill: '\x1b[38;5;249m',
     userBg: '\x1b[48;5;238m'
   },
   light: {
