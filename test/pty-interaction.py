@@ -139,14 +139,14 @@ send("/")
 time.sleep(0.6)
 snapshot("after-slash")
 menu_frame = current_frame()
-assert "COMMANDS" in menu_frame and "\r\nContext" not in menu_frame and "▶▶ permission" not in menu_frame, "command menu did not replace the statusline"
+assert "COMMANDS" in menu_frame and "Context" not in menu_frame and "▶▶ permission" not in menu_frame, "command menu did not replace the statusline"
 assert "❯ /" in menu_frame, "command menu hid the input area"
 send("\x1b[B")   # move down in menu
 time.sleep(0.3)
 send("\t")       # Tab completes the selected command into the input
 time.sleep(0.8)
 snapshot("after-menu-select")
-assert "\r\nContext" in current_frame() and "▶▶ permission" in current_frame(), "statusline did not return after command selection"
+assert "Context" in current_frame() and "▶▶ permission" in current_frame(), "statusline did not return after command selection"
 
 # 8. skill pick inserts its token instead of treating it as a command
 send("\x15")     # clear the command completion before filtering a skill

@@ -139,10 +139,10 @@ try:
     assert wait_for("MODELS", 10), "model picker missing"
     assert wait_for("✓ current", 5), "current model marker missing"
     snapshot("model-picker")
-    send("\x1b[B")  # move to mock-v2
-    drain(0.4)
     send("\r")
-    assert wait_for("⎿ mock/mock-v2 (active now · new sessions default)", 10), "model switch log missing"
+    assert wait_for("SELECT VARIANT", 5), "variant picker did not open after model selection"
+    send("\r")
+    assert wait_for("⎿ mock/mock-v2", 10), "model switch log missing"
     snapshot("model-switched")
     # 6. the switch applies to the NEXT turn in the SAME session
     send("hello mock\r")

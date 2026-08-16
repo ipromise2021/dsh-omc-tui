@@ -28,9 +28,9 @@ const THEMES = {
     muted: '\x1b[38;5;245m',      // Neutral slate #8a8a8a
     rule: '\x1b[38;5;238m',       // Subtle sleek dark divider line
     coral: '\x1b[38;5;203m',      // Warning coral
-    bash: '\x1b[38;5;114m',       // Soft pistachio green
+    bash: '\x1b[38;5;108m',       // Deeper muted sage green #87af87
     bar: '\x1b[38;5;237m',        // Context meter track
-    barFill: '\x1b[38;5;114m',    // Green meter fill
+    barFill: '\x1b[38;5;108m',    // Deeper sage green meter fill
     userBg: '\x1b[48;5;237m'
   },
   deepseek: {
@@ -48,7 +48,7 @@ const THEMES = {
     muted: '\x1b[38;5;245m',      // Lighter neutral
     rule: '\x1b[38;5;240m',       // Lighter divider
     coral: '\x1b[38;5;210m',      // Lighter warning coral
-    bash: '\x1b[38;5;120m',       // Lighter pistachio green
+    bash: '\x1b[38;5;108m',       // Deeper muted sage green
     bar: '\x1b[38;5;240m',        // Lighter track
     barFill: '\x1b[38;5;80m',     // Lighter blue fill
     userBg: '\x1b[48;5;236m'      // Slightly lighter bg
@@ -485,6 +485,7 @@ class TuiApp {
     this.expandedKeys = new Set()
     this.historySearch = undefined // { query, matches, selected }
     this.modelPicker = undefined // { entries, selected }
+    this.variantPicker = undefined // { provider, model, name, entries, selected }
     this.commandPalette = undefined // { query, items, selected }
     this.mru = {} // sessionId -> last-used timestamp
     this.mcpPanel = undefined // { entries, selected, failed }
@@ -790,6 +791,15 @@ class TuiApp {
     this.clearFooter()
     process.stdin.pause()
     process.stdout.write(`${TERMINAL_MOUSE_OFF}${ANSI.reset}\x1b[?25h\x1b[?2004l\n`)
+    if (this.agent?.session) {
+      try {
+        await this.ctx.sessions?.flush?.(this.agent.session)
+      } catch {}
+      const sessionId = this.agent.session.header?.id
+      if (sessionId) {
+        process.stdout.write(`Resume this session with:\n  dsh --resume ${sessionId}\n\n`)
+      }
+    }
   }
 
   async quit(code = 0) {
@@ -886,13 +896,15 @@ class TuiApp {
               const msStr = ms !== undefined ? ` · ${(ms / 1000).toFixed(1)}s` : ''
               headerLines.push(`  ${ANSI.dim}⚛ thinking · ${rlines} lines${msStr}${ANSI.reset}`)
               headerLines.push('')
+              const blockKey = `reason-${event.seq || Date.now()}`
               this.reasoningBlocks.unshift({
-                key: `reason-stream-${event.seq || Date.now()}`,
+                key: blockKey,
+                seq: event.seq,
                 lines: rlines,
                 ms,
                 text: this.streaming.reasoning
               })
-              if (this.reasoningBlocks.length > 5) this.reasoningBlocks.pop()
+              if (this.reasoningBlocks.length > 10) this.reasoningBlocks.pop()
               this.streaming.reasoning = ''
             }
             this.commitToScrollback(headerLines)
@@ -962,11 +974,15 @@ class TuiApp {
             const lines = this.streaming.reasoning.split('\n').length
             this.reasoningBlocks.unshift({
               key: `reason-${event.seq}`,
+              seq: event.seq,
               lines,
               ms: this.reasoningAt ? Date.now() - this.reasoningAt : undefined,
               text: this.streaming.reasoning
             })
-            if (this.reasoningBlocks.length > 5) this.reasoningBlocks.pop()
+            if (this.reasoningBlocks.length > 10) this.reasoningBlocks.pop()
+          } else if (this.reasoningBlocks.length > 0 && !this.reasoningBlocks[0].seq) {
+            this.reasoningBlocks[0].seq = event.seq
+            this.reasoningBlocks[0].key = `reason-${event.seq}`
           }
           this.commitUnprintedEvents()
           this.streaming.text = ''
@@ -1878,18 +1894,20 @@ class TuiApp {
   }
 
   async openEffortPicker() {
-    const selection = this.ctx.agentDefaultModel.currentSelection()
-    let efforts = ['off', 'high', 'max']
-    try {
-      const info = await this.ctx.llm.resolveModelInfo?.(selection.provider, selection.model)
-      const listed = info?.reasoning?.efforts?.map((entry) => entry.id)
-      if (Array.isArray(listed) && listed.length > 0) efforts = listed
-    } catch {
-      // fall back to the default set
+    const liveModel = this.activeModel ?? this.ctx.agentDefaultModel.currentSelection()
+    const variants = [
+      { id: 'default', label: 'default', desc: '标准模式 (极速响应 · 无多余思考)' },
+      { id: 'high', label: 'high', desc: '深度思考 (Deep Reasoning · 推荐)' },
+      { id: 'max', label: 'max', desc: '最大思考预算 (Ultra Depth · 攻坚复杂问题)' }
+    ]
+    let sel = variants.findIndex((v) => v.id.toLowerCase() === (this.reasoningEffort ?? 'high').toLowerCase())
+    if (sel === -1) sel = 0
+    this.variantPicker = {
+      provider: liveModel.provider,
+      model: liveModel.model,
+      entries: variants,
+      selected: sel
     }
-    const index = efforts.indexOf(this.currentEffort())
-    const selected = index === -1 ? 1 : index
-    this.effortPicker = { efforts, selected }
     this.scheduleRender()
   }
 
@@ -2207,10 +2225,34 @@ class TuiApp {
       await this.ctx.agentDefaultModel.saveSelection({ provider: entry.provider, model: entry.model })
       this.activeModel = { provider: entry.provider, model: entry.model }
       this.log('ok', `${entry.provider}/${entry.model} (active now · new sessions default)`, '/model')
+      const variants = [
+        { id: 'default', label: 'default', desc: '标准模式 (极速响应 · 无多余思考)' },
+        { id: 'high', label: 'high', desc: '深度思考 (Deep Reasoning · 推荐)' },
+        { id: 'max', label: 'max', desc: '最大思考预算 (Ultra Depth · 攻坚复杂问题)' }
+      ]
+      let sel = variants.findIndex((v) => v.id.toLowerCase() === (this.reasoningEffort ?? 'high').toLowerCase())
+      if (sel === -1) sel = 0
+      this.variantPicker = {
+        provider: entry.provider,
+        model: entry.model,
+        name: entry.name,
+        entries: variants,
+        selected: sel
+      }
     } catch (error) {
       this.log('error', error instanceof Error ? error.message : String(error), '/model')
     }
     this.message = ''
+    this.scheduleRender()
+  }
+
+  async chooseVariant() {
+    const picker = this.variantPicker
+    if (!picker) return
+    const chosen = picker.entries[picker.selected]?.id ?? 'default'
+    this.variantPicker = undefined
+    this.reasoningEffort = chosen
+    this.log('ok', `effort: ${chosen.toUpperCase()}`, '/effort')
     this.scheduleRender()
   }
 
@@ -3231,6 +3273,15 @@ class TuiApp {
       return
     }
 
+    if (this.variantPicker) {
+      if (value === '\r' || value === '\t') void this.chooseVariant()
+      else if (value === '\x1b' || value === '\x03') {
+        this.variantPicker = undefined
+        this.scheduleRender()
+      } else if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) this.onEscapeSequence(value)
+      return
+    }
+
     if (this.presetPicker) {
       if (value === '\r' || value === '\t') void this.choosePreset(this.presetPicker.entries[this.presetPicker.selected]?.id)
       else if (value === '\x1b' || value === '\x03') {
@@ -3461,6 +3512,9 @@ class TuiApp {
       } else if (this.modelPicker) {
         this.modelPicker.selected = Math.max(0, this.modelPicker.selected - 1)
         this.scheduleRender()
+      } else if (this.variantPicker) {
+        this.variantPicker.selected = Math.max(0, this.variantPicker.selected - 1)
+        this.scheduleRender()
       } else if (this.presetPicker) {
         this.presetPicker.selected = (this.presetPicker.selected - 1 + this.presetPicker.entries.length) % this.presetPicker.entries.length
         this.scheduleRender()
@@ -3501,6 +3555,9 @@ class TuiApp {
         this.scheduleRender()
       } else if (this.modelPicker) {
         this.modelPicker.selected = Math.min(this.modelPicker.entries.length - 1, this.modelPicker.selected + 1)
+        this.scheduleRender()
+      } else if (this.variantPicker) {
+        this.variantPicker.selected = Math.min(this.variantPicker.entries.length - 1, this.variantPicker.selected + 1)
         this.scheduleRender()
       } else if (this.presetPicker) {
         this.presetPicker.selected = (this.presetPicker.selected + 1) % this.presetPicker.entries.length
@@ -3829,29 +3886,29 @@ class TuiApp {
       switch (event.type) {
         case 'user/message': {
           if (event.data.source?.kind !== 'user') break
-          push(ANSI.blue, `  ${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
+          push(ANSI.blue, `${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
           for (const block of event.data.content ?? []) {
             if (block.type === 'image') {
               const ref = block.attachment
               const size = formatImageBytes(ref?.bytes ?? 0)
               const dimensions = ref?.width && ref?.height ? ` · ${ref.width}×${ref.height}` : ''
-              push(ANSI.dim, `  ◱ image · ${size}${dimensions}`)
+              push(ANSI.dim, `◱ image · ${size}${dimensions}`)
             } else if (block.type === 'text') {
-              const blockWidth = Math.max(24, contentWidth - 4)
+              const blockWidth = Math.max(24, contentWidth)
               const innerWidth = blockWidth - 2
               const displayText = compactExpandedFileReferences(block.text)
               const wrapped = wrap(displayText, innerWidth - 2)
-              push('', `  ${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
+              push('', `${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
               for (const line of wrapped) {
                 const padding = ' '.repeat(Math.max(0, innerWidth - 2 - widthOf(line)))
-                push('', `  ${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
+                push('', `${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
               }
-              push('', `  ${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
+              push('', `${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
             }
           }
           const skillCount = this.skills?.length || 0
           if (skillCount > 0) {
-            push(ANSI.dim, `  ◫ 上下文注入 · skill-catalog (${skillCount} skills loaded)`)
+            push(ANSI.dim, `◫ 上下文注入 · skill-catalog (${skillCount} skills)`)
           }
           rows.push('')
           break
@@ -3859,7 +3916,7 @@ class TuiApp {
         case 'assistant/message': {
           const fullAnswerText = textOf(event.data.message.content)
           const answerText = fullAnswerText
-          const block = this.reasoningBlocks.find((entry) => entry.key === `reason-${event.seq}`)
+          const block = this.reasoningBlocks.find((entry) => entry.key === `reason-${event.seq}` || entry.seq === event.seq) || (this.reasoningBlocks.length === 1 ? this.reasoningBlocks[0] : undefined)
           if (!answerText && !block) break
           push(ANSI.blueSoft, `DSH  ${ANSI.muted}${this.activeModel?.model ?? this.agent?.options?.model ?? ''} · ${formatTime(event.time)}`)
           if (block) {
@@ -3921,6 +3978,9 @@ class TuiApp {
   toggleCollapsible() {
     const events = this.agent?.session?.events ?? []
     const keys = new Set()
+    for (const block of this.reasoningBlocks) {
+      keys.add(block.key)
+    }
     let group = []
     const isToolEvent = (type) => type === 'tool/call' || type === 'tool/result' || type === 'approval/asked' || type === 'approval/decided' || type === 'hook/invoked' || type === 'hook/result'
     const isStrongEvent = (type) => type === 'user/message' || type === 'assistant/message' || type === 'turn/start' || type === 'turn/end'
@@ -3937,10 +3997,6 @@ class TuiApp {
         } else {
           continue
         }
-      }
-      if (event.type === 'assistant/message') {
-        const block = this.reasoningBlocks.find((entry) => entry.key === `reason-${event.seq}`)
-        if (block) keys.add(block.key)
       }
     }
     if (group.length > 0) {
@@ -4024,7 +4080,8 @@ class TuiApp {
     const cacheTotal = usage.input + usage.cacheRead
     const cachePercent = cacheTotal > 0 ? Math.round((usage.cacheRead / cacheTotal) * 100) : 0
 
-    const title = truncateWidth(compactFileReferenceTitle(sessionTitle(this.agent.session.events)), Math.max(16, columns - 72))
+    const effectiveColumns = Math.max(40, columns - 4)
+    const title = truncateWidth(compactFileReferenceTitle(sessionTitle(this.agent.session.events)), Math.max(16, effectiveColumns - 72))
     const modeBadge = `${ANSI.blue}${ANSI.bold}${mode}${ANSI.reset}${pending}`
     const modelBadge = `${ANSI.teal ?? ANSI.blueSoft}[${liveModel ?? 'model'}]${ANSI.reset}`
     const cwdBadge = `${ANSI.amber}${cwdName}${ANSI.reset}`
@@ -4040,25 +4097,25 @@ class TuiApp {
     const effortColor = effort === 'HIGH' ? (ANSI.coral ?? ANSI.terracotta) : (ANSI.amber ?? ANSI.blueSoft)
     const effortBadge = `${ANSI.muted}effort ${effortColor}${effort}${ANSI.reset}`
     const row1Right = `${running}${presetBadge}${ANSI.dim} · ${ANSI.reset}${effortBadge}`
-    const row1Gap = Math.max(1, columns - widthOf(visibleOf(row1Left)) - widthOf(visibleOf(row1Right)))
-    const row1 = `${row1Left}${' '.repeat(row1Gap)}${row1Right}`
+    const row1Gap = Math.max(1, effectiveColumns - widthOf(visibleOf(row1Left)) - widthOf(visibleOf(row1Right)))
+    const row1 = `  ${row1Left}${' '.repeat(row1Gap)}${row1Right}`
 
     if (density === 'minimal') {
       const permBadge = `${ANSI.blue}${this.permissionName ?? 'custom'}${ANSI.reset}`
       const minLeft = `${modeBadge}${ANSI.dim} | ${ANSI.reset}${modelBadge}${ANSI.dim} · ${ANSI.reset}${ANSI.blueSoft}${percent}%${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${permBadge}`
       const minRight = `${running}${presetBadge}${ANSI.dim} · ${ANSI.reset}${effortBadge}`
-      const minGap = Math.max(1, columns - widthOf(visibleOf(minLeft)) - widthOf(visibleOf(minRight)))
-      return [`${minLeft}${' '.repeat(minGap)}${minRight}`]
+      const minGap = Math.max(1, effectiveColumns - widthOf(visibleOf(minLeft)) - widthOf(visibleOf(minRight)))
+      return [`  ${minLeft}${' '.repeat(minGap)}${minRight}`]
     }
 
-    const row2 = `${ANSI.muted}Context${ANSI.reset} ${meter} ${ANSI.blueSoft}${contextText}${ANSI.reset} ${ANSI.blue}· ${percent}%${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${ANSI.muted}in ${ANSI.bold}${ANSI.ink}${formatTokens(usage.input)}${ANSI.reset}${ANSI.muted} · out ${ANSI.bold}${ANSI.ink}${formatTokens(usage.output)}${ANSI.reset}${ANSI.muted} · cache ${ANSI.bold}${ANSI.bash}${cachePercent}%${ANSI.reset}`
-    const permRow = `${ANSI.blue}▶▶${ANSI.reset} ${ANSI.muted}permission${ANSI.reset} ${ANSI.blue}${this.permissionName ?? 'custom'}${ANSI.reset}${ANSI.dim} · Shift+Tab${ANSI.reset}`
+    const row2 = `  ${ANSI.muted}Context${ANSI.reset} ${meter} ${ANSI.blueSoft}${contextText}${ANSI.reset} ${ANSI.blue}· ${percent}%${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${ANSI.muted}in ${ANSI.bold}${ANSI.ink}${formatTokens(usage.input)}${ANSI.reset}${ANSI.muted} · out ${ANSI.bold}${ANSI.ink}${formatTokens(usage.output)}${ANSI.reset}${ANSI.muted} · cache ${ANSI.bold}${ANSI.bash}${cachePercent}%${ANSI.reset}`
+    const permRow = `  ${ANSI.blue}▶▶${ANSI.reset} ${ANSI.muted}permission${ANSI.reset} ${ANSI.blue}${this.permissionName ?? 'custom'}${ANSI.reset}${ANSI.dim} · Shift+Tab${ANSI.reset}`
 
     if (density === 'compact') {
-      const row2CompactRight = permRow
+      const row2CompactRight = permRow.trim()
       const row2CompactLeft = `${ANSI.muted}Context${ANSI.reset} ${meter} ${ANSI.blueSoft}${percent}%${ANSI.reset} ${ANSI.dim}(in ${formatTokens(usage.input)} · out ${formatTokens(usage.output)})${ANSI.reset}`
-      const r2Gap = Math.max(1, columns - widthOf(visibleOf(row2CompactLeft)) - widthOf(visibleOf(row2CompactRight)))
-      return [row1, `${row2CompactLeft}${' '.repeat(r2Gap)}${row2CompactRight}`]
+      const r2Gap = Math.max(1, effectiveColumns - widthOf(visibleOf(row2CompactLeft)) - widthOf(visibleOf(row2CompactRight)))
+      return [row1, `  ${row2CompactLeft}${' '.repeat(r2Gap)}${row2CompactRight}`]
     }
 
     const recent = this.recentUsage()
@@ -4069,7 +4126,7 @@ class TuiApp {
     const hookBadge = this.hookCount > 0 ? `${ANSI.blueSoft}${this.hookCount} hooks${ANSI.reset}` : `${ANSI.dim}0 hooks${ANSI.reset}`
     const mcpBadge = this.mcpCount > 0 ? `${ANSI.teal}${this.mcpCount} MCPs${ANSI.reset}` : `${ANSI.dim}0 MCPs${ANSI.reset}`
     const toolText = recent.toolDetails.length > 0 ? recent.toolDetails.join(', ') : '—'
-    const row3 = `${ANSI.muted}prompt ${ANSI.reset}${ANSI.blueSoft}${promptText}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${skillBadge}${ANSI.dim} · ${ANSI.reset}${mcpBadge}${ANSI.dim} · ${ANSI.reset}${hookBadge}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}tools ${ANSI.bash}${shorten(toolText, Math.max(16, columns - 58))}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}jobs ${jobBadge}`
+    const row3 = `  ${ANSI.muted}prompt ${ANSI.reset}${ANSI.blueSoft}${promptText}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${skillBadge}${ANSI.dim} · ${ANSI.reset}${mcpBadge}${ANSI.dim} · ${ANSI.reset}${hookBadge}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}tools ${ANSI.bash}${shorten(toolText, Math.max(16, effectiveColumns - 58))}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}jobs ${jobBadge}`
     return [row1, row2, row3, permRow]
   }
 
@@ -4521,7 +4578,7 @@ class TuiApp {
       const start = Math.min(Math.max(0, this.modelPicker.selected - slots + 1), Math.max(0, entries.length - slots))
       const shown = entries.slice(start, start + slots)
       return [
-        `${ANSI.muted}MODELS${ANSI.reset}  ${ANSI.dim}· ${entries.length} available${ANSI.reset}`,
+        `  ${ANSI.muted}MODELS${ANSI.reset}  ${ANSI.dim}· ${entries.length} available${ANSI.reset}`,
         '',
         ...shown.map((entry, index) => {
           const marker = index + start === this.modelPicker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
@@ -4530,7 +4587,21 @@ class TuiApp {
           return `${marker}  ${ANSI.blueSoft}${truncateWidth(safe(label), Math.max(30, columns - 24))}${ANSI.reset}  ${isCurrent ? `${ANSI.bash}✓ current${ANSI.reset}` : `${ANSI.dim}${shorten(entry.name, Math.max(16, columns - 36))}${ANSI.reset}`}`
         }),
         '',
-        `${ANSI.muted}↑↓ navigate  ·  Enter/Tab switch  ·  Esc close${ANSI.reset}`
+        `  ${ANSI.muted}↑↓ navigate  ·  Enter select  ·  Esc close${ANSI.reset}`
+      ]
+    }
+    if (this.variantPicker) {
+      const picker = this.variantPicker
+      return [
+        `  ${ANSI.muted}SELECT VARIANT${ANSI.reset}  ${ANSI.dim}·  ${picker.provider}/${picker.model}${ANSI.reset}`,
+        '',
+        ...picker.entries.map((item, index) => {
+          const marker = index === picker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
+          const isCurrent = (this.reasoningEffort ?? 'high').toLowerCase() === item.id.toLowerCase()
+          return `${marker}  ${ANSI.blueSoft}${item.label.padEnd(9)}${ANSI.reset}  ${ANSI.dim}${item.desc}${ANSI.reset}  ${isCurrent ? `${ANSI.bash}✓ current${ANSI.reset}` : ''}`
+        }),
+        '',
+        `  ${ANSI.muted}↑↓ navigate  ·  Enter confirm  ·  Esc close${ANSI.reset}`
       ]
     }
     if (this.picker) {
@@ -4547,6 +4618,9 @@ class TuiApp {
         }),
         `${ANSI.muted}↑↓ navigate  ·  Enter resume  ·  Esc close${ANSI.reset}`
       ]
+    }
+    if (this.filePicker) {
+      return this.filePickerRows(columns, capacity)
     }
     return []
   }
@@ -4566,29 +4640,28 @@ class TuiApp {
         `${ANSI.muted}←→ choose  ·  Enter confirm  ·  y/n also work${ANSI.reset}`
       ].filter((line) => line !== '')
     }
-    if (this.filePicker) return this.filePickerRows(columns)
     return []
   }
 
-  filePickerRows(columns) {
+  filePickerRows(columns, capacity = 4) {
     const picker = this.filePicker
-    if (!picker) return ['', '', '', '', '']
+    if (!picker) return []
     const dirLabel = picker.baseDir ? `${picker.baseDir}/` : '.'
-    const rows = [
-      `${ANSI.muted}FILES${ANSI.reset} ${ANSI.dim}· @${dirLabel} · ${picker.entries.length} matching${ANSI.reset} ${ANSI.muted}↑↓ · Enter open · Esc up${ANSI.reset}`
+    const slots = Math.max(2, capacity)
+    const start = Math.min(Math.max(0, picker.selected - slots + 1), Math.max(0, picker.entries.length - slots))
+    const shown = picker.entries.slice(start, start + slots)
+    return [
+      `  ${ANSI.muted}FILES${ANSI.reset} ${ANSI.dim}· @${dirLabel} · ${picker.entries.length} matching${ANSI.reset}`,
+      '',
+      ...shown.map((entry, index) => {
+        const marker = index + start === picker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
+        const label = entry.isDir ? `${entry.name}/` : entry.name
+        const color = entry.isDir ? ANSI.blueSoft : ANSI.ink
+        return `${marker}  ${color}${truncateWidth(safe(label), Math.max(30, columns - 10))}${ANSI.reset}`
+      }),
+      '',
+      `  ${ANSI.muted}↑↓ navigate  ·  Enter open/select  ·  Esc up/close${ANSI.reset}`
     ]
-    for (let i = 0; i < 4; i++) {
-      const entry = picker.entries[picker.selected + i]
-      if (!entry) {
-        rows.push('')
-        continue
-      }
-      const marker = i === 0 ? `${ANSI.blue}>${ANSI.reset}` : ' '
-      const label = entry.isDir ? `${entry.name}/` : entry.name
-      const color = entry.isDir ? ANSI.blueSoft : ANSI.reset
-      rows.push(`${marker} ${color}${truncateWidth(safe(label), Math.max(30, columns - 10))}${ANSI.reset}`)
-    }
-    return rows
   }
 
   render() {
