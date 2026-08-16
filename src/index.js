@@ -479,6 +479,7 @@ class TuiApp {
     this.streaming = { text: '', reasoning: '', tool: undefined }
     this.streamBuffer = ''
     this.streamHeaderCommitted = false
+    this.turnHeaderCommitted = false
     this.reasoningAt = undefined
     this.reasoningBlocks = [] // { key, lines, ms, text } most recent first
     this.expandedKeys = new Set()
@@ -872,7 +873,8 @@ class TuiApp {
         const chunk = event.data.chunk
         if (chunk.type === 'text-delta') {
           this.streaming.text += chunk.text
-          if (!this.streamHeaderCommitted) {
+          if (!this.turnHeaderCommitted) {
+            this.turnHeaderCommitted = true
             this.streamHeaderCommitted = true
             this.commitUnprintedEvents()
             const columns = Math.max(60, process.stdout.columns || 100)
@@ -883,6 +885,7 @@ class TuiApp {
               const ms = this.reasoningAt ? Date.now() - this.reasoningAt : undefined
               const msStr = ms !== undefined ? ` · ${(ms / 1000).toFixed(1)}s` : ''
               headerLines.push(`  ${ANSI.dim}✻ thinking · ${rlines} lines${msStr}${ANSI.reset}`)
+              headerLines.push('')
               this.reasoningBlocks.unshift({
                 key: `reason-stream-${event.seq || Date.now()}`,
                 lines: rlines,
@@ -926,6 +929,8 @@ class TuiApp {
         break
       }
       case 'user/message': {
+        this.turnHeaderCommitted = false
+        this.streamHeaderCommitted = false
         this.commitUnprintedEvents()
         break
       }
@@ -1611,6 +1616,7 @@ class TuiApp {
     }
     this.streamBuffer = ''
     this.streamHeaderCommitted = false
+    this.turnHeaderCommitted = false
     this.agent.followup(userMessage(content))
     this.scheduleRender()
   }
@@ -3862,6 +3868,7 @@ class TuiApp {
             } else {
               push(ANSI.dim, `  ✻ thinking · ${block.lines} lines${ms}`)
             }
+            if (answerText) rows.push('')
           }
           if (answerText) {
             const mdRows = this.renderMarkdownRows(answerText, contentWidth, ANSI.answer)
