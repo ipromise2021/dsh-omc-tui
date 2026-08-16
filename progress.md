@@ -67,8 +67,26 @@
 - 未修改 `src/index.js`、profile manifest 或运行时配置。
 - 未执行任何插件安装、卸载或远程第三方代码。
 
-### 下一步（用户确认后）
+## 会话：2026-08-16（全套功能迭代与体验打磨）
 
-1. 先实现只读 catalog adapter 和 mock 数据测试。
-2. 再实现 TUI 市场列表/详情/已安装面板。
-3. 最后通过官方 `dsh plugin` 做显式确认后的安装委托，并验证重启生效。
+### 状态：complete (13 Commits / 6 PTY Tests Passed 100%)
+
+### 已完成核心能力
+1. **全局诊断与看板**：新增 `/status` 全局会话与系统看板，新增 `/context` 上下文占比分析与分布。
+2. **侧边轻量问答**：新增 `/ask <问题>`，基于独立临时会话执行模型推理，零上下文污染，保障主任务 Context 纯净。
+3. **架构拷问技能**：内置 Matt Pocock 经典 `/grill-me` 架构压力测试技能，遵循「一轮一问、必带推荐、代码可查绝不废话、深度优先决策树、终局 .grill/<slug>.md 归档」黄金法则。
+4. **设置持久化与密度控制**：接入官方 `ctx.settings`（`~/.dsh/settings.yaml`），支持主题切换与状态行密度（`detailed` 4行、`compact` 2行、`minimal` 1行）实时切换。
+5. **Claude 暖色调与护眼灰阶**：调优正文与标签颜色层级（250/251/245/241），彻底消除纯白刺眼眩光；斜杠菜单与技能面板搜索匹配以加粗亮金琥珀色高亮。
+6. **交互与终端兼容**：全面捕获与放行 SS3 终端光标方向键（`\x1bOA/B/C/D`）；预设二次确认面板（`presetConfirm`）升级为方向键/Tab 切换单选圆点 `●` 与 `Enter` 提交。
+7. **`/compact` 与 `/steer` 平滑升级**：`/compact` 全面对齐 Claude Code，提供即时反馈、防重入互斥锁与 Token 收益统计；`/steer` 支持将已排队消息一键提升为实时干预。
+
+### 自动化回归测试结果
+| 测试用例 | 覆盖场景 | 结果 |
+|---|---|---|
+| `test/pty-e2e.py` | 流式/审批/usage/权限/中断/退出 | ✅ PASS (exit code 0) |
+| `test/pty-resume.py` | /compact/窄终端/会话恢复 | ✅ PASS (exit code 0) |
+| `test/pty-features.py` | 审批 diff/推理折叠/工具组/export/历史搜索/模型实时切换 | ✅ PASS (exit code 0) |
+| `test/pty-file.py` | @ 引用→默认列表→目录浏览→选中→展开→提交 | ✅ PASS (exit code 0) |
+| `test/pty-image.py` | OSC 1337 / kitty 图片粘贴→attachment→提交 | ✅ PASS (exit code 0) |
+| `test/pty-interaction.py` | 菜单、快捷键、多行输入、面板与状态行 | ✅ PASS (exit code 0) |
+
