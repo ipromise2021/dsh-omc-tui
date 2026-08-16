@@ -5,448 +5,94 @@ import { appendFile, mkdir, readdir, readFile, unlink, writeFile } from 'node:fs
 import { dirname, extname, join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { ImageParser, formatImageBytes } from './image-protocol.js'
+import {
+  THEMES,
+  defaultTheme,
+  ANSI,
+  applyTheme,
+  TERMINAL_MOUSE_OFF,
+  STATUSLINE_MODES,
+  tuiSettingsSchema,
+  activityWords,
+  idleWords,
+  explorationWords,
+  widthOf,
+  safe,
+  truncateWidth,
+  visibleOf,
+  padWidth,
+  wrap,
+  shorten,
+  formatTokens,
+  formatTime,
+  formatDurationMs,
+  textOf,
+  sessionTitle,
+  welcomeCardRows,
+  renderDiffLines,
+  approvalDiffLines,
+  renderMarkdownRows,
+  renderStatusRows,
+  formatEvents
+} from './renderer/index.js'
 
 export const name = 'dsh-tui-runner'
 export const inject = ['agentDefaultModel', 'agentPresets', 'agents', 'sessions', 'permissionPresets', 'commands', 'sessionPersistence', 'sessionQuery', 'skills', 'attachments', 'llm', 'userQuestions', 'jobs', 'settings', 'cmdlineArgs']
 
-// ── theme ────────────────────────────────────────────────────────────────
-// DSH_TUI_THEME switches palettes: deepseek (default) | mono | light.
+import {
+  userMessage,
+  foldUsage,
+  permissionFromEvents
+} from './core/index.js'
 
-const THEMES = {
-  claude: {
-    terracotta: '\x1b[38;5;209m', // Claude signature terracotta/coral #ff875f
-    amber: '\x1b[38;5;214m',      // Warm golden amber #ffaf00
-    peach: '\x1b[38;5;215m',      // Soft peach #ffaf5f
-    teal: '\x1b[38;5;215m',        // Unified warm peach for secondary accents #ffaf5f
-    cyan: '\x1b[38;5;214m',       // Unified warm golden amber #ffaf00
-    blue: '\x1b[38;5;209m',       // Primary accent (Claude terracotta)
-    blueSoft: '\x1b[38;5;215m',   // Secondary accent (warm peach)
-    ink: '\x1b[38;5;251m',        // Soft bright off-white #c6c6c6 (non-glare)
-    answer: '\x1b[38;5;250m',     // Comfortable soft light gray #bcbcbc
-    detail: '\x1b[38;5;245m',     // Medium slate gray #8a8a8a
-    dim: '\x1b[38;5;241m',        // Dark slate gray #626262
-    muted: '\x1b[38;5;245m',      // Neutral slate #8a8a8a
-    rule: '\x1b[38;5;238m',       // Subtle sleek dark divider line
-    coral: '\x1b[38;5;203m',      // Warning coral
-    pink: '\x1b[38;5;213m',       // Bright lavender pink for active option #ff87ff
-    bash: '\x1b[38;5;108m',       // Deeper muted sage green #87af87
-    bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds #626262
-    barFill: '\x1b[38;5;108m',    // Deeper sage green meter fill
-    userBg: '\x1b[48;5;237m'
-  },
-  deepseek: {
-    terracotta: '\x1b[38;5;209m',
-    amber: '\x1b[38;5;220m',      // Lighter golden amber
-    peach: '\x1b[38;5;117m',      // Lighter sky blue #87d7ff
-    teal: '\x1b[38;5;80m',        // Lighter teal cyan
-    cyan: '\x1b[38;5;80m',
-    blue: '\x1b[38;5;74m',        // Lighter DeepSeek blue #5fafd7
-    blueSoft: '\x1b[38;5;117m',   // Light sky blue
-    ink: '\x1b[38;5;251m',        // Soft bright off-white #c6c6c6
-    answer: '\x1b[38;5;250m',     // Comfortable soft light gray #bcbcbc
-    detail: '\x1b[38;5;246m',     // Lighter medium gray
-    dim: '\x1b[38;5;242m',        // Lighter dim gray
-    muted: '\x1b[38;5;245m',      // Lighter neutral
-    rule: '\x1b[38;5;240m',       // Lighter divider
-    coral: '\x1b[38;5;210m',      // Lighter warning coral
-    pink: '\x1b[38;5;213m',       // Bright lavender pink
-    bash: '\x1b[38;5;108m',       // Deeper muted sage green
-    bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds
-    barFill: '\x1b[38;5;80m',     // Lighter blue fill
-    userBg: '\x1b[48;5;236m'      // Slightly lighter bg
-  },
-  mono: {
-    terracotta: '\x1b[1;37m',
-    amber: '\x1b[1;37m',
-    peach: '\x1b[37m',
-    teal: '\x1b[37m',
-    cyan: '\x1b[37m',
-    blue: '\x1b[1;37m',
-    blueSoft: '\x1b[37m',
-    ink: '\x1b[38;5;251m',
-    answer: '\x1b[38;5;249m',
-    detail: '\x1b[38;5;244m',
-    dim: '\x1b[38;5;240m',
-    muted: '\x1b[38;5;240m',
-    rule: '\x1b[38;5;238m',
-    coral: '\x1b[38;5;203m',
-    bash: '\x1b[1;37m',
-    bar: '\x1b[38;5;238m',
-    barFill: '\x1b[38;5;249m',
-    userBg: '\x1b[48;5;238m'
-  },
-  light: {
-    terracotta: '\x1b[38;5;166m',
-    amber: '\x1b[38;5;172m',
-    peach: '\x1b[38;5;130m',
-    teal: '\x1b[38;5;24m',
-    cyan: '\x1b[38;5;24m',
-    blue: '\x1b[38;5;166m',
-    blueSoft: '\x1b[38;5;130m',
-    ink: '\x1b[38;5;234m',
-    answer: '\x1b[38;5;236m',
-    detail: '\x1b[38;5;245m',
-    dim: '\x1b[38;5;248m',
-    muted: '\x1b[38;5;245m',
-    rule: '\x1b[38;5;250m',
-    coral: '\x1b[38;5;160m',
-    bash: '\x1b[38;5;28m',
-    bar: '\x1b[38;5;250m',
-    barFill: '\x1b[38;5;28m',
-    userBg: '\x1b[48;5;252m'
-  }
-}
+import {
+  LOCAL_COMMANDS,
+  handleLocalCommand,
+  handleRecap,
+  handleStatus
+} from './commands/index.js'
 
-const defaultTheme = Object.hasOwn(THEMES, process.env.DSH_TUI_THEME) ? process.env.DSH_TUI_THEME : 'claude'
-let ANSI = { reset: '\x1b[0m', bold: '\x1b[1m', ...THEMES[defaultTheme] }
-function applyTheme(theme) { ANSI = { reset: '\x1b[0m', bold: '\x1b[1m', ...(THEMES[theme] ?? THEMES.claude) } }
-// Explicitly reset every common mouse-reporting mode. DSH runs inside a
-// shared terminal process, so a mode left behind by another TUI must not turn
-// VS Code wheel gestures into input bytes for this TUI.
-const TERMINAL_MOUSE_OFF = '\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1007l'
-const STATUSLINE_MODES = ['detailed', 'compact', 'minimal']
-function tuiSettingsSchema(value) {
-  if (value !== undefined && (typeof value !== 'object' || value === null || Array.isArray(value))) throw new TypeError('dsh-tui settings must be an object')
-  const source = value ?? {}; const theme = source.theme ?? defaultTheme
-  if (!Object.hasOwn(THEMES, theme)) throw new TypeError(`dsh-tui.settings.theme must be one of: ${Object.keys(THEMES).join(', ')}`)
-  const statusline = source.statusline ?? 'detailed'
-  if (!STATUSLINE_MODES.includes(statusline)) throw new TypeError(`dsh-tui.settings.statusline must be one of: ${STATUSLINE_MODES.join(', ')}`)
-  if (source.persistHistory !== undefined && typeof source.persistHistory !== 'boolean') throw new TypeError('dsh-tui.settings.persistHistory must be boolean')
-  return { theme, statusline, persistHistory: source.persistHistory ?? true }
-}
-tuiSettingsSchema.toJSON = () => ({ type: 'object', properties: { theme: { type: 'string', enum: Object.keys(THEMES), default: defaultTheme }, statusline: { type: 'string', enum: STATUSLINE_MODES, default: 'detailed' }, persistHistory: { type: 'boolean', default: true } } })
+import {
+  tokenizeInput,
+  loadHistoryFile,
+  appendHistoryFile,
+  loadMruFile,
+  saveMruFile,
+  EXCLUDED_DIRS,
+  MAX_REF_BYTES,
+  EXT_LANG,
+  listDir,
+  compactExpandedFileReferences,
+  compactFileReferenceTitle,
+  matchName,
+  wordAt,
+  colToIndex,
+  alignCodePoint,
+  moveWordLeft,
+  moveWordRight,
+  moveCursorLine
+} from './input/index.js'
 
-const activityWords = [
-  'Building something great',
-  'Finding the signal',
-  'Making the next move',
-  'Reading between lines',
-  'Mapping the codebase',
-  'Connecting the dots',
-  'Following the thread',
-  'Shaping the solution',
-  'Looking a little closer',
-  'Testing the edges',
-  'Tracing dependencies',
-  'Exploring the workspace',
-  'Checking the details',
-  'Weaving the context',
-  'Tuning the next step',
-  'Keeping things moving',
-  'Writing the good part',
-  'Solving the interesting bit'
-]
-
-const idleWords = [
-  'Awaiting your input',
-  'Standing by',
-  'Ready when you are',
-  'Listening closely',
-  'Staying quiet',
-  'All ears',
-  'On standby',
-  'Holding space',
-  'Keeping an ear out',
-  'Waiting patiently'
-]
-
-const explorationWords = [
-  'Exploring',
-  'Scanning',
-  'Mapping',
-  'Orbiting',
-  'Tracing',
-  'Surveying',
-  'Charting',
-  'Navigating',
-  'Searching',
-  'Probing'
-]
-
-const LOCAL_COMMANDS = [
-  { name: 'plan', description: 'toggle between plan mode and build mode' },
-  { name: 'skills', description: 'list all available skills in this workspace' },
-  { name: 'ask', description: 'quick side query without polluting session context' },
-  { name: 'compact', description: 'compact conversation history to save tokens' },
-  { name: 'rename', description: 'rename the current session' },
-  { name: 'context', description: 'show context window usage and token distribution' },
-  { name: 'help', description: 'show keyboard shortcuts' },
-  { name: 'clear', description: 'clear the local transcript view' },
-  { name: 'resume', description: 'pick a past session to resume' },
-  { name: 'model', description: 'pick the default model' },
-  { name: 'effort', description: 'set reasoning effort: off, high, or max' },
-  { name: 'status', description: 'show full session and environment status' },
-  { name: 'preset', description: 'select the agent preset for this blank session' },
-  { name: 'settings', description: 'configure TUI theme and local preferences' },
-  { name: 'jobs', description: 'show background jobs and long-running work' },
-  { name: 'paste', description: 'paste image from system clipboard' },
-  { name: 'export', description: 'export the transcript as markdown' },
-  { name: 'steer', description: 'redirect the running turn without interrupting' },
-  { name: 'mcp', description: 'list MCP servers configured in this profile' },
-  { name: 'hooks', description: 'list hook bridges configured in this profile' },
-  { name: 'recap', description: 'show a local summary of this session' },
-  { name: 'exit', description: 'exit the terminal' }
-]
-
-// ── text helpers ─────────────────────────────────────────────────────────
-
-function widthOf(text) {
-  let width = 0
-  for (const ch of String(text)) {
-    const c = ch.codePointAt(0)
-    const wide =
-      (c >= 0x1100 && c <= 0x115f) ||
-      c === 0x2329 || c === 0x232a ||
-      (c >= 0x2e80 && c <= 0xa4cf && c !== 0x303f) ||
-      (c >= 0xac00 && c <= 0xd7a3) ||
-      (c >= 0xf900 && c <= 0xfaff) ||
-      (c >= 0xfe30 && c <= 0xfe4f) ||
-      (c >= 0xff00 && c <= 0xff60) ||
-      (c >= 0xffe0 && c <= 0xffe6) ||
-      (c >= 0x1f300 && c <= 0x1faff) ||
-      (c >= 0x20000 && c <= 0x3fffd)
-    width += wide ? 2 : 1
-  }
-  return width
-}
-
-function safe(text) {
-  return String(text ?? '')
-    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '')
-}
-
-function truncateWidth(text, max) {
-  let out = ''
-  let width = 0
-  for (const ch of String(text)) {
-    const w = widthOf(ch)
-    if (width + w > max) break
-    out += ch
-    width += w
-  }
-  return out
-}
-
-function visibleOf(text) {
-  return String(text).replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
-}
-
-function sessionTitle(events) {
-  const title = events.findLast((event) => event.type === 'session/title')?.data?.title
-  return typeof title === 'string' && title.trim() ? title.trim() : 'new session'
-}
-
-function padWidth(text, max) {
-  const visible = visibleOf(text)
-  const width = widthOf(visible)
-  if (width >= max) return text
-  return `${text}${' '.repeat(max - width)}`
-}
-
-function welcomeCardRows(columns, workspace, model, effort) {
-  const outerWidth = Math.min(72, Math.max(52, columns - 6))
-  const innerWidth = outerWidth - 4
-  const modelValue = truncateWidth(model, Math.max(20, innerWidth - 18))
-  const workspaceValue = truncateWidth(workspace, Math.max(20, innerWidth - 16))
-  const row = (content = '') => {
-    const text = widthOf(visibleOf(content)) > innerWidth
-      ? `${ANSI.muted}${truncateWidth(visibleOf(content), innerWidth)}${ANSI.reset}`
-      : content
-    return `${ANSI.rule}│ ${ANSI.reset}${text}${' '.repeat(Math.max(0, innerWidth - widthOf(visibleOf(text))))}${ANSI.rule} │${ANSI.reset}`
-  }
-  return [
-    `${ANSI.rule}╭${'─'.repeat(outerWidth - 2)}╮${ANSI.reset}`,
-    row(`${ANSI.blue}✻${ANSI.reset} ${ANSI.bold}DSH TUI${ANSI.reset} ${ANSI.muted}DeepSeek Harness · keyboard-first terminal${ANSI.reset}`),
-    row(),
-    row(`${ANSI.muted}model     ${ANSI.reset}${ANSI.blueSoft}${modelValue}${ANSI.reset} ${ANSI.blue}${effort}${ANSI.reset}`),
-    row(`${ANSI.muted}directory ${ANSI.reset}${ANSI.ink}${workspaceValue}${ANSI.reset}`),
-    row(),
-    row(`${ANSI.muted}/ commands${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}@ files${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}Cmd+V images${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}Shift+Tab permission${ANSI.reset}`),
-    `${ANSI.rule}╰${'─'.repeat(outerWidth - 2)}╯${ANSI.reset}`,
-    '',
-    `${ANSI.blueSoft}Tip:${ANSI.reset} ${ANSI.muted}type a message to start  ·  ? shortcuts  ·  /effort reasoning level${ANSI.reset}`
-  ]
-}
-
-function wrap(text, columns) {
-  const width = Math.max(20, columns)
-  const lines = []
-  for (const source of safe(text).split('\n')) {
-    let line = source
-    while (widthOf(line) > width) {
-      let cut = -1
-      let acc = 0
-      for (let i = 0; i < line.length; i++) {
-        const w = widthOf(line[i])
-        if (acc + w > width) break
-        if (line[i] === ' ') cut = i
-        acc += w
-      }
-      if (cut >= Math.floor(width / 2)) {
-        let head = line.slice(0, cut).trimEnd()
-        while (widthOf(head) > width) head = truncateWidth(head, width)
-        lines.push(head)
-        line = line.slice(cut).trimStart()
-      } else {
-        // No usable break point (long URL / CJK / code): hard-wrap at width.
-        const head = truncateWidth(line, width)
-        lines.push(head)
-        line = line.slice(head.length)
-      }
-    }
-    lines.push(line)
-  }
-  return lines
-}
-
-function shorten(text, size = 110) {
-  const value = safe(text).replace(/\s+/g, ' ').trim()
-  return widthOf(value) > size ? `${truncateWidth(value, size - 1)}…` : value
-}
-
-function formatTokens(value) {
-  if (value >= 1000000) return `${(value / 1000000).toFixed(value % 1000000 === 0 ? 0 : 1)}m`
-  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k`
-  return String(value)
-}
-
-function formatTime(time) {
-  const date = new Date(time ?? Date.now())
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-function formatDurationMs(ms) {
-  if (!Number.isFinite(ms) || ms < 0) return '—'
-  if (ms < 1000) return `${Math.max(1, Math.round(ms))}ms`
-  return `${(ms / 1000).toFixed(1)}s`
-}
-
-function textOf(content) {
-  if (!Array.isArray(content)) return ''
-  return content.filter((block) => block?.type === 'text').map((block) => block.text).join('')
-}
-
-function userMessage(content) {
-  return {
-    id: randomUUID(),
-    role: 'user',
-    content,
-    source: { kind: 'user' }
-  }
-}
-
-function foldUsage(events) {
-  let input = 0
-  let output = 0
-  let cacheRead = 0
-  let cacheWrite = 0
-  let contextWindow
-  let recentInput
-  for (const event of events) {
-    if (event.type === 'request/context') contextWindow = event.data.contextWindow
-    if (event.type !== 'assistant/message' || !event.data.usage) continue
-    recentInput = event.data.usage.inputTokens ?? recentInput
-    input += event.data.usage.inputTokens ?? 0
-    output += event.data.usage.outputTokens ?? 0
-    cacheRead += event.data.usage.cacheReadTokens ?? 0
-    cacheWrite += event.data.usage.cacheWriteTokens ?? 0
-  }
-  return { input, output, cacheRead, cacheWrite, contextWindow, recentInput }
-}
-
-function permissionFromEvents(events, fallback) {
-  for (const event of events) {
-    if (event.type === 'permission/preset') fallback = event.data.preset
-  }
-  return fallback
-}
-
-// ── @ file references ───────────────────────────────────────────────────
-
-const EXCLUDED_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.next', '.dsh'])
-const MAX_REF_BYTES = 16384
-
-const EXT_LANG = {
-  js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx',
-  ts: 'typescript', tsx: 'tsx', py: 'python', md: 'markdown', json: 'json',
-  yml: 'yaml', yaml: 'yaml', html: 'html', css: 'css', sh: 'bash',
-  bash: 'bash', zsh: 'bash', rs: 'rust', go: 'go', java: 'java',
-  c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', rb: 'ruby', php: 'php',
-  sql: 'sql', toml: 'toml', xml: 'xml', vue: 'vue', svelte: 'svelte'
-}
-
-async function listDir(root, relDir) {
-  const base = relDir ? join(root, relDir) : root
-  let entries
-  try {
-    entries = await readdir(base, { withFileTypes: true })
-  } catch {
-    return { dirs: [], files: [] }
-  }
-  const dirs = []
-  const files = []
-  for (const entry of entries) {
-    if (entry.name.startsWith('.') || EXCLUDED_DIRS.has(entry.name)) continue
-    const rel = relDir ? `${relDir}/${entry.name}` : entry.name
-    if (entry.isDirectory()) dirs.push(rel)
-    else if (entry.isFile()) files.push(rel)
-  }
-  dirs.sort()
-  files.sort()
-  return { dirs, files }
-}
-
-// File references are expanded before the model sees a message, but the
-// transcript should keep the user's compact `@path` prompt instead of echoing
-// the entire injected file body back into the conversation view.
-function compactExpandedFileReferences(text) {
-  const lines = safe(text).split('\n')
-  const compact = []
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(/^(\s*)@([^\s@:]+):$/)
-    const opening = lines[index + 1]?.match(/^\s*```[A-Za-z0-9_+.-]*\s*$/)
-    if (!match || !opening) {
-      compact.push(lines[index])
-      continue
-    }
-    let closing = index + 2
-    let closingSuffix = ''
-    while (closing < lines.length) {
-      const end = lines[closing].match(/^\s*```\s*(.*)$/)
-      if (end) {
-        closingSuffix = end[1].trim()
-        break
-      }
-      closing += 1
-    }
-    if (closing >= lines.length) {
-      compact.push(lines[index])
-      continue
-    }
-    compact.push(`${match[1]}@${match[2]}`)
-    // The user's prompt can follow the injected closing fence on the same
-    // line (for example: "``` explain this file"). Keep that prompt visible
-    // without leaking the expanded file body into the transcript.
-    if (closingSuffix) compact.push(`${match[1]}${closingSuffix}`)
-    index = closing
-  }
-  return compact.join('\n')
-}
-
-function compactFileReferenceTitle(text) {
-  return compactExpandedFileReferences(text).replace(/@([^\s@:]+):\s*```.*$/g, '@$1')
-}
-
-function matchName(name, query) {
-  const lower = name.toLowerCase()
-  const q = query.toLowerCase()
-  let qi = 0
-  for (let i = 0; i < lower.length && qi < q.length; i++) {
-    if (lower[i] === q[qi]) qi += 1
-  }
-  return qi === q.length
-}
+import {
+  renderHelpPanel,
+  renderMcpPanel,
+  renderQuestionPanel,
+  renderPresetConfirm,
+  renderPresetPicker,
+  renderSkillsPanel,
+  commandItemRow,
+  renderMenuPanel,
+  renderCommandPalette,
+  renderJobPanel,
+  renderSettingsPicker,
+  renderEffortPicker,
+  renderHistorySearch,
+  renderModelPicker,
+  renderVariantPicker,
+  renderSessionPicker,
+  renderFilePicker,
+  renderInlineApproval
+} from './panels/index.js'
 
 // ── the app ──────────────────────────────────────────────────────────────
 
@@ -726,31 +372,11 @@ class TuiApp {
   }
 
   async loadHistory() {
-    if (!this.preferences.persistHistory) { this.history = []; return }
-    try {
-      const data = await readFile(join(this.stateDir(), 'history.jsonl'), 'utf8')
-      const entries = []
-      for (const line of data.split('\n')) {
-        if (!line) continue
-        try {
-          const parsed = JSON.parse(line)
-          if (typeof parsed === 'string') entries.push(parsed)
-        } catch {
-          // skip corrupted lines
-        }
-      }
-      this.history = entries.slice(-200)
-    } catch {
-      this.history = []
-    }
+    this.history = await loadHistoryFile(this.stateDir(), this.preferences.persistHistory)
   }
 
   appendHistory(entry) {
-    if (!this.preferences.persistHistory) return
-    const file = join(this.stateDir(), 'history.jsonl')
-    mkdir(dirname(file), { recursive: true })
-      .then(() => writeFile(file, `${JSON.stringify(entry)}\n`, { flag: 'a' }))
-      .catch(() => {})
+    appendHistoryFile(this.stateDir(), entry, this.preferences.persistHistory)
   }
 
   installSettings() {
@@ -768,20 +394,12 @@ class TuiApp {
   }
 
   async loadMru() {
-    try {
-      const data = JSON.parse(await readFile(join(this.stateDir(), 'last-used.json'), 'utf8'))
-      this.mru = typeof data === 'object' && data !== null ? data : {}
-    } catch {
-      this.mru = {}
-    }
+    this.mru = await loadMruFile(this.stateDir())
   }
 
   touchMru(sessionId) {
     this.mru[sessionId] = Date.now()
-    const file = join(this.stateDir(), 'last-used.json')
-    mkdir(dirname(file), { recursive: true })
-      .then(() => writeFile(file, JSON.stringify(this.mru)))
-      .catch(() => {})
+    saveMruFile(this.stateDir(), this.mru)
   }
 
   openTerminal() {
@@ -1118,28 +736,7 @@ class TuiApp {
 
   approvalDiffLines(request, columns) {
     const args = this.approvalArgs(request)
-    const command = args.command
-    const lines = []
-    if (command) {
-      lines.push(`${ANSI.coral}│${ANSI.reset} ${ANSI.ink}$${ANSI.reset} ${safe(truncateWidth(command, Math.max(20, columns - 8)))}`)
-      return lines
-    }
-    const file = args.file_path ?? args.path
-    if (file) lines.push(`${ANSI.coral}│${ANSI.reset} ${ANSI.dim}file${ANSI.reset} ${safe(truncateWidth(file, Math.max(20, columns - 12)))}`)
-    const oldLines = String(args.old_str ?? '').split('\n').slice(0, 6)
-    const newLines = String(args.new_str ?? '').split('\n').slice(0, 6)
-    const count = Math.max(oldLines.length, newLines.length)
-    for (let i = 0; i < count; i++) {
-      const oldLine = oldLines[i]
-      const newLine = newLines[i]
-      if (oldLine !== undefined && oldLine === newLine) {
-        lines.push(`${ANSI.coral}│${ANSI.reset}  ${ANSI.muted}${truncateWidth(safe(oldLine), Math.max(20, columns - 8))}${ANSI.reset}`)
-      } else {
-        if (oldLine !== undefined) lines.push(`${ANSI.coral}│${ANSI.reset}${ANSI.coral}- ${truncateWidth(safe(oldLine), Math.max(20, columns - 8))}${ANSI.reset}`)
-        if (newLine !== undefined) lines.push(`${ANSI.coral}│${ANSI.reset}${ANSI.blue}+ ${truncateWidth(safe(newLine), Math.max(20, columns - 8))}${ANSI.reset}`)
-      }
-    }
-    return lines
+    return approvalDiffLines(request, args, columns, ANSI)
   }
 
   pumpApprovals() {
@@ -1517,66 +1114,11 @@ class TuiApp {
   }
 
   showRecap() {
-    const events = this.agent?.session?.events ?? []
-    const visible = events.filter((event) => event.seq >= this.viewClearedSeq)
-    const turnStarts = visible.filter((event) => event.type === 'turn/start')
-    const turnEnds = visible.filter((event) => event.type === 'turn/end')
-    const toolCalls = visible.filter((event) => event.type === 'tool/call')
-    const elapsed = turnEnds.reduce((total, end) => {
-      const start = [...visible].reverse().find((event) => event.type === 'turn/start' && event.seq <= end.seq)
-      const duration = Number(end.time) - Number(start?.time)
-      return Number.isFinite(duration) && duration >= 0 ? total + duration : total
-    }, 0)
-    const lastPrompt = visible.findLast((event) => event.type === 'user/message' && event.data.source?.kind === 'user')
-    const prompt = shorten(textOf(lastPrompt?.data.content), 56)
-    const toolNames = [...new Set(toolCalls.map((event) => event.data.name).filter(Boolean))]
-    const toolText = toolCalls.length > 0
-      ? ` · tools ${toolCalls.length}${toolNames.length > 0 ? ` (${toolNames.slice(0, 3).join(', ')})` : ''}`
-      : ''
-    const elapsedText = elapsed > 0 ? ` · ${formatDurationMs(elapsed)}` : ''
-    const promptText = prompt ? ` · last “${prompt}”` : ''
-    this.log('ok', `local recap · ${turnStarts.length} turns${toolText}${elapsedText}${promptText}`, '/recap')
+    handleRecap(this)
   }
 
   showStatus() {
-    const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? {}
-    const modelStr = `${selection.provider ?? 'unknown'}/${selection.model ?? 'unknown'}`
-    const effortStr = this.currentEffort().toUpperCase()
-    const planState = this.planModeService()?.get?.(this.agent) ?? { active: false, pending: undefined }
-    const planActive = planState.pending ?? planState.active
-    const modeStr = planActive ? 'PLAN' : 'BUILD'
-    const presetStr = this.presetName ?? 'default'
-    const cwd = this.agent?.session?.header?.cwd ?? process.cwd()
-    const sessionId = this.agent?.session?.id?.slice?.(-8) ?? 'new'
-    const sessionTitle = this.agent?.session?.title?.title || 'new session'
-    const events = this.agent?.session?.events ?? []
-    const turns = events.filter((e) => e.type === 'turn/start').length
-    const perm = this.permissionName ?? this.ctx.permissionPresets?.current?.(events) ?? 'workspace-write'
-
-    const usage = this.usage ?? {}
-    const cw = usage.contextWindow || 200000
-    const inp = usage.input || 0
-    const out = usage.output || 0
-    const cache = usage.cacheRead || 0
-    const total = inp + out
-    const pct = Math.round((total / cw) * 100)
-
-    const skillCount = this.skills?.length ?? 0
-    const mcpCount = this.mcpCount ?? 0
-    const hookCount = this.hookCount ?? 0
-    const runningJobs = (this.localBackgroundJobs?.filter((j) => j.status === 'running')?.length || 0)
-
-    const lines = [
-      `Model:        ${modelStr} · effort ${effortStr}`,
-      `Mode:         ${modeStr} · Preset: ${presetStr}`,
-      `Directory:    ${cwd}`,
-      `Session:      ${sessionId} · "${sessionTitle}" (${turns} turns, ${events.length} events)`,
-      `Context:      ${formatTokens(total)} / ${formatTokens(cw)} tokens (${pct}%) · in ${formatTokens(inp)}, out ${formatTokens(out)}, cache ${formatTokens(cache)}`,
-      `Permission:   ${perm}`,
-      `Extensions:   ${skillCount} skills · ${mcpCount} MCPs · ${hookCount} hooks · ${runningJobs} active jobs`,
-      `Preferences:  theme: ${this.preferences?.theme ?? 'claude'} · history: ${this.preferences?.persistHistory !== false ? 'on' : 'off'}`
-    ]
-    this.log('ok', lines.join('\n'), '/status')
+    handleStatus(this)
   }
 
   cyclePermission() {
@@ -1737,221 +1279,7 @@ class TuiApp {
   }
 
   handleLocalCommand(commandName, line = '') {
-    switch (commandName) {
-      case 'plan':
-        void this.togglePlanMode()
-        break
-      case 'skills':
-        this.openSkillsPanel()
-        break
-      case 'rename': {
-        const title = line.replace(/^\/rename\s*/i, '').trim()
-        if (!title) {
-          this.log('error', 'usage: /rename <new title>', '/rename')
-        } else {
-          if (this.agent?.session) {
-            this.agent.session.append('session/renamed', { title })
-            if (this.ctx.sessionQuery?.writeTitle) {
-              void this.ctx.sessionQuery.writeTitle(this.agent.session.id, title).catch(() => {})
-            }
-          }
-          this.log('ok', `session renamed to: ${title}`, '/rename')
-        }
-        break
-      }
-      case 'context': {
-        const usage = this.usage
-        const cw = usage.contextWindow || 200000
-        const inp = usage.input || 0
-        const out = usage.output || 0
-        const cache = usage.cacheRead || 0
-        const total = inp + out
-        const pct = Math.round((total / cw) * 100)
-        this.log('ok', `Context: ${formatTokens(inp)} / ${formatTokens(cw)} tokens (${pct}%) · in ${formatTokens(inp)} · out ${formatTokens(out)} · cache ${formatTokens(cache)}\nSkills: ${this.skills.length} · MCPs: ${this.mcpCount} · Hooks: ${this.hookCount}`, '/context')
-        break
-      }
-      case 'compact': {
-        if (this.compacting) {
-          this.log('ok', 'Compaction is already in progress, please wait…', '/compact')
-          break
-        }
-        const registry = this.ctx.commands
-        const found = registry?.find(this.agent, 'compact')
-        if (found) {
-          this.compacting = true
-          this.message = 'compacting conversation history…'
-          this.log('ok', 'Compacting conversation history to save context tokens…', '/compact')
-          this.scheduleRender()
-          void (async () => {
-            try {
-              const ctrl = new AbortController()
-              const execution = await registry.execute(this.agent, line || '/compact', ctrl.signal)
-              const result = execution?.result
-              if (result?.kind === 'success') {
-                const text = result.text ?? 'Compacted conversation history'
-                this.log('ok', `${text} · Context window updated.`, '/compact')
-              } else if (result?.kind === 'error') {
-                this.log('error', result.text ?? 'failed', '/compact')
-              }
-            } catch (err) {
-              this.log('error', err instanceof Error ? err.message : String(err), '/compact')
-            } finally {
-              this.compacting = false
-              this.message = ''
-              this.scheduleRender()
-            }
-          })()
-        } else {
-          this.log('ok', 'No compactable history yet.', '/compact')
-        }
-        break
-      }
-      case 'ask': {
-        const query = line.replace(/^\/ask\s*/i, '').trim()
-        if (!query) {
-          this.log('error', 'usage: /ask <question...>', '/ask')
-          break
-        }
-        this.message = 'asking side query…'
-        this.log('ok', `${ANSI.bold}${query}${ANSI.reset}`, 'YOU (ask)')
-        this.scheduleRender()
-        void (async () => {
-          try {
-            const selection = this.ctx.agentDefaultModel.currentSelection()
-            const tempSessionId = `side-ask-${randomUUID()}`
-            const { agent: tempAgent, dispose } = await this.ctx.agents.create({
-              sessionId: tempSessionId,
-              meta: { cwd: process.cwd(), ephemeral: true },
-              agentOptions: { provider: selection.provider, model: selection.model }
-            })
-            let fullResponse = ''
-            const cleanupEvent = this.ctx.on('session/event', (session, event) => {
-              if (session.id === tempSessionId && event.type === 'assistant/message') {
-                const text = textOf(event.data.message.content)
-                if (text) fullResponse = text
-              }
-            })
-            tempAgent.followup(userMessage([{ type: 'text', text: query }]))
-            await new Promise((resolve) => {
-              const off = this.ctx.on('agent/status', ({ agent: a, status }) => {
-                if (a === tempAgent && (status === 'idle' || status === 'error')) {
-                  off()
-                  resolve()
-                }
-              })
-            })
-            cleanupEvent()
-            try { dispose() } catch {}
-            if (fullResponse) {
-              this.log('ok', fullResponse, `DSH (ask) · ${selection.model}`)
-            } else {
-              this.log('error', 'No response received for side query', '/ask')
-            }
-          } catch (err) {
-            this.log('error', err instanceof Error ? err.message : String(err), '/ask')
-          } finally {
-            this.message = ''
-            this.scheduleRender()
-          }
-        })()
-        break
-      }
-      case 'help':
-        this.help = true
-        break
-      case 'clear': {
-        this.viewClearedSeq = this.agent.session.seq + 1
-        this.lastCommittedSeq = this.agent.session.seq
-        this.streaming = { text: '', reasoning: '', tool: undefined }
-        this.pendingImages = []
-        this.localLog = []
-        this.clearFooter()
-        process.stdout.write('\x1b[2J\x1b[H')
-        const cwd = this.agent.session.header.cwd ?? process.cwd()
-        const columns = Math.max(60, process.stdout.columns || 100)
-        const contentWidth = Math.max(24, columns - 2)
-        const workspace = truncateWidth(safe(cwd), Math.max(24, contentWidth - 24))
-        const selection = this.ctx.agentDefaultModel.currentSelection()
-        const model = truncateWidth(`${selection.provider}/${selection.model}`, Math.max(20, contentWidth - 28))
-        const welcome = welcomeCardRows(columns, workspace, model, this.currentEffort().toUpperCase())
-        this.commitToScrollback(welcome)
-        this.log('ok', 'view cleared (model context unchanged)', '/clear')
-        break
-      }
-      case 'resume':
-        void this.openPicker()
-        break
-      case 'model': {
-        void this.openModelPicker()
-        break
-      }
-      case 'export':
-        void this.exportSession()
-        break
-      case 'paste':
-      case 'image':
-        void (async () => {
-          const pasted = await this.tryPasteClipboardImage()
-          if (!pasted) {
-            this.log('error', 'no image found in system clipboard', '/paste')
-          }
-        })()
-        break
-      case 'steer': {
-        let message = line.replace(/^\s*\/steer\s*/, '').trim()
-        if (!message && this.lastQueuedText) {
-          message = this.lastQueuedText
-          this.lastQueuedText = undefined
-        }
-        if (!message) {
-          this.log('error', 'usage: /steer <message> (or /steer alone to promote queued message)', '/steer')
-          break
-        }
-        if (this.agent?.status !== 'running') {
-          this.log('error', 'no running turn to steer', '/steer')
-          break
-        }
-        this.agent.steer(userMessage([{ type: 'text', text: message }]))
-        this.log('ok', `steered with: "${shorten(message, 48)}"`, '/steer')
-        break
-      }
-      case 'mcp':
-        void this.showMcpServers()
-        break
-      case 'hooks':
-        void this.showHooks()
-        break
-      case 'recap':
-        this.showRecap()
-        break
-      case 'status':
-        this.showStatus()
-        break
-      case 'effort': {
-        const requested = line.trim().split(/\s+/)[1]?.toLowerCase()
-        if (requested) this.chooseEffort(requested)
-        else void this.openEffortPicker()
-        break
-      }
-      case 'preset':
-      case 'presets': {
-        const requested = line.trim().split(/\s+/)[1]?.toLowerCase()
-        if (requested) void this.choosePreset(requested)
-        else void this.openPresetPicker()
-        break
-      }
-      case 'settings':
-        this.openSettings()
-        break
-      case 'jobs':
-        void this.openJobsPanel()
-        break
-      case 'exit':
-        return void this.quit(0)
-      default:
-        break
-    }
-    this.scheduleRender()
+    handleLocalCommand(this, commandName, line)
   }
 
   async openEffortPicker() {
@@ -2984,15 +2312,7 @@ class TuiApp {
   moveWordLeft() {
     this.pasteFolded = undefined
     this.clearSelection()
-    if (this.cursor === 0) {
-      this.maybeOpenFilePicker()
-      this.scheduleRender(true)
-      return
-    }
-    let index = this.cursor - 1
-    while (index > 0 && /\s/.test(this.input[index])) index -= 1
-    while (index > 0 && !/\s/.test(this.input[index - 1])) index -= 1
-    this.cursor = index
+    this.cursor = moveWordLeft(this.input, this.cursor)
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
   }
@@ -3000,10 +2320,7 @@ class TuiApp {
   moveWordRight() {
     this.pasteFolded = undefined
     this.clearSelection()
-    let index = this.cursor
-    while (index < this.input.length && !/\s/.test(this.input[index])) index += 1
-    while (index < this.input.length && /\s/.test(this.input[index])) index += 1
-    this.cursor = index
+    this.cursor = moveWordRight(this.input, this.cursor)
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
   }
@@ -3024,24 +2341,11 @@ class TuiApp {
   }
 
   wordAt(index) {
-    const text = this.input
-    let start = index
-    while (start > 0 && !/\s/.test(text[start - 1])) start -= 1
-    let end = index
-    while (end < text.length && !/\s/.test(text[end])) end += 1
-    return { start, end }
+    return wordAt(this.input, index)
   }
 
   colToIndex(lineStart, col) {
-    let acc = 0
-    let index = lineStart
-    while (index < this.input.length && this.input[index] !== '\n') {
-      const w = widthOf(this.input[index])
-      if (acc + w > col) break
-      acc += w
-      index += 1
-    }
-    return index
+    return colToIndex(this.input, lineStart, col)
   }
 
   writeOsc52(text) {
@@ -3066,16 +2370,8 @@ class TuiApp {
     this.writeOsc52(text)
   }
 
-
-
   alignCodePoint(index, direction) {
-    let i = index
-    if (direction < 0) {
-      while (i > 0 && (this.input.charCodeAt(i) & 0xfc00) === 0xdc00) i -= 1
-    } else {
-      while (i < this.input.length && (this.input.charCodeAt(i) & 0xfc00) === 0xdc00) i += 1
-    }
-    return i
+    return alignCodePoint(this.input, index, direction)
   }
 
   copySelection(keep = false) {
@@ -3183,16 +2479,9 @@ class TuiApp {
 
   moveCursorLine(delta) {
     this.pasteFolded = undefined
-    const lines = this.input.split('\n')
-    const before = this.input.slice(0, this.cursor).split('\n')
-    const row = before.length - 1
-    const col = before[before.length - 1].length
-    const targetRow = row + delta
-    if (targetRow < 0 || targetRow >= lines.length) return false
-    const targetCol = Math.min(col, lines[targetRow].length)
-    let offset = 0
-    for (let i = 0; i < targetRow; i++) offset += lines[i].length + 1
-    this.cursor = offset + targetCol
+    const next = moveCursorLine(this.input, this.cursor, delta)
+    if (next === null) return false
+    this.cursor = next
     this.clearSelection()
     this.scheduleRender()
     return true
@@ -3233,38 +2522,7 @@ class TuiApp {
         return
       }
     }
-    const tokens = []
-    let index = 0
-    while (index < value.length) {
-      if (value[index] === '\x1b') {
-        if (value[index + 1] === 'b' || value[index + 1] === 'f' || value[index + 1] === '\r') {
-          tokens.push(value.slice(index, index + 2))
-          index += 2
-          continue
-        }
-        if (/^O[A-Za-z0-9]/.test(value.slice(index + 1))) {
-          tokens.push(value.slice(index, index + 3))
-          index += 3
-          continue
-        }
-        const match = value.slice(index + 1).match(/^\[[0-?]*[ -/]*[@-~]/)
-        if (match) {
-          tokens.push(`\x1b${match[0]}`)
-          index += 1 + match[0].length
-        } else {
-          tokens.push('\x1b')
-          index += 1
-        }
-        continue
-      }
-      tokens.push(value[index])
-      index += 1
-    }
-    const filtered = []
-    for (let i = 0; i < tokens.length; i++) {
-      if (tokens[i] === '\n' && tokens[i - 1] === '\r') continue
-      filtered.push(tokens[i])
-    }
+    const filtered = tokenizeInput(value)
     for (const token of filtered) this.handleToken(token)
   }
 
@@ -3771,334 +3029,23 @@ class TuiApp {
   }
 
   commandItemRow(item, marker, columns, query = '') {
-    const isSkill = item.kind === 'skill'
-    const isSelected = marker.includes('>')
-    const kind = isSkill ? 'skill' : 'cmd'
-    const name = safe(item.name)
-    const description = shorten(item.description ?? '', Math.max(18, columns - 32))
-
-    let nameFormatted
-    const cleanQuery = query.replace(/^\/+/, '').toLowerCase()
-    if (cleanQuery && name.toLowerCase().startsWith(cleanQuery)) {
-      const matchPart = name.slice(0, cleanQuery.length)
-      const restPart = name.slice(cleanQuery.length)
-      // Matched characters: bright bold amber/accent highlight
-      const matchColor = `${ANSI.bold}${ANSI.amber ?? ANSI.blue}`
-      // Remaining characters: dim gray (or crisp ink if selected)
-      const restColor = isSelected ? ANSI.ink : ANSI.dim
-      nameFormatted = `${ANSI.dim}/${ANSI.reset}${matchColor}${matchPart}${ANSI.reset}${restColor}${restPart}${ANSI.reset}`
-    } else {
-      const nameColor = isSelected ? (isSkill ? (ANSI.peach ?? ANSI.blueSoft) : ANSI.blue) : ANSI.dim
-      nameFormatted = `${ANSI.dim}/${ANSI.reset}${nameColor}${name}${ANSI.reset}`
-    }
-
-    const kindColor = isSelected ? (isSkill ? (ANSI.peach ?? ANSI.blueSoft) : ANSI.blue) : ANSI.dim
-    const descColor = isSelected ? ANSI.ink : ANSI.dim
-    return `${marker} ${nameFormatted} ${kindColor}${kind}${ANSI.reset} ${descColor}${description}${ANSI.reset}`
+    return commandItemRow(item, marker, columns, query, ANSI)
   }
 
   renderMarkdownRows(text, contentWidth, base) {
-    const rows = []
-    const push = (color, t, meta) => rows.push([color, t, meta])
-    const styleInlineMarkdown = (value) => {
-      let styled = safe(value)
-      styled = styled.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => `${ANSI.blueSoft}${label}${ANSI.reset}${ANSI.dim} (${url})${ANSI.reset}${base}`)
-      styled = styled.replace(/`([^`]+)`/g, (_match, code) => `${ANSI.blueSoft}${code}${ANSI.reset}${base}`)
-      styled = styled.replace(/\*\*([^*]+)\*\*/g, (_match, value) => `${ANSI.bold}${value}${ANSI.reset}${base}`)
-      styled = styled.replace(/__([^_]+)__/g, (_match, value) => `${ANSI.bold}${value}${ANSI.reset}${base}`)
-      return styled
-    }
-    let fenced = false
-    const lines = safe(text).split(/\r?\n/)
-    for (const source of lines) {
-      const opening = source.match(/^\s*```([A-Za-z0-9_+.-]*)\s*$/)
-      if (opening) {
-        if (fenced) {
-          fenced = false
-        } else {
-          fenced = true
-          push(ANSI.dim, `    · ${opening[1] || 'code'}${ANSI.reset}`)
-        }
-        continue
-      }
-      const normalized = !fenced && /^\s*```/.test(source) ? source.replace(/^\s*```\s*/, '') : source
-      if (fenced) {
-        for (const line of wrap(source, Math.max(20, contentWidth - 6))) {
-          push(ANSI.detail, `    ${line}${ANSI.reset}`)
-        }
-        continue
-      }
-      if (/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(normalized)) continue
-      if (/^\s*[-*_]\s*(?:[-*_]\s*){2,}$/.test(normalized)) {
-        push(ANSI.dim, `  ${'─'.repeat(Math.min(32, contentWidth - 4))}${ANSI.reset}`)
-        continue
-      }
-      if (!normalized.trim()) {
-        rows.push(null)
-        continue
-      }
-      let prefix = '  '
-      let content = normalized.trim()
-      const heading = content.match(/^#{1,6}\s+(.*)$/)
-      if (heading) {
-        push(ANSI.blueSoft, `  ${ANSI.bold}${styleInlineMarkdown(heading[1])}${ANSI.reset}`)
-        continue
-      }
-      const table = content.includes('|') && content.split('|').length >= 3
-      if (table) {
-        content = content.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()).join('  ·  ')
-        prefix = '  '
-      } else {
-        const bullet = content.match(/^([-*+])\s+(.*)$/)
-        const ordered = content.match(/^(\d+)[.)]\s+(.*)$/)
-        const quote = content.match(/^>\s?(.*)$/)
-        if (bullet) {
-          prefix = '  · '
-          content = bullet[2]
-        } else if (ordered) {
-          prefix = `  ${ordered[1]}. `
-          content = ordered[2]
-        } else if (quote) {
-          prefix = '  │ '
-          content = quote[1]
-        }
-      }
-      for (const line of wrap(content, Math.max(20, contentWidth - widthOf(prefix)))) {
-        push('', `${prefix}${base}${styleInlineMarkdown(line)}${ANSI.reset}`)
-      }
-    }
-    if (fenced) rows.push(null)
-    return rows
+    return renderMarkdownRows(text, contentWidth, base, ANSI)
   }
 
   formatEvents(events, columns) {
-    const contentWidth = Math.max(24, columns - 2)
-    const rows = []
-    const push = (color, text) => rows.push(color ? `${color}${text}${ANSI.reset}` : text)
-
-    const parseToolArgs = (raw) => {
-      if (!raw) return {}
-      try {
-        const parsed = JSON.parse(raw)
-        return typeof parsed === 'object' && parsed !== null ? parsed : {}
-      } catch {
-        return {}
-      }
-    }
-
-    const renderDiffLines = (text) => {
-      const lines = text.split('\n')
-      let inDiff = false
-      let count = 0
-      for (const line of lines) {
-        if (count >= 24) {
-          push(ANSI.muted, `… ${lines.length - 24} more diff lines`)
-          break
-        }
-        if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@') || line.startsWith('diff ')) {
-          inDiff = true
-          push(ANSI.muted, truncateWidth(safe(line), contentWidth - 2))
-          count += 1
-        } else if (inDiff && (line.startsWith('+') || line.startsWith('-'))) {
-          const color = line.startsWith('+') ? ANSI.blue : ANSI.coral
-          push(color, truncateWidth(safe(line), contentWidth - 2))
-          count += 1
-        } else if (inDiff) {
-          push(ANSI.ink, truncateWidth(safe(line), contentWidth - 2))
-          count += 1
-        }
-      }
-    }
-
-    const renderGroup = (group) => {
-      if (group.length === 0) return
-      const calls = group.filter((event) => event.type === 'tool/call')
-      const key = `tools-${group[0].seq}`
-      if (calls.length > 1 && !this.expandedKeys.has(key)) {
-        const names = [...new Set(calls.map((call) => call.data.name))].map((name) => {
-          const count = calls.filter((call) => call.data.name === name).length
-          return count > 1 ? `${name} ×${count}` : name
-        }).join(' · ')
-        push(ANSI.dim, `  ⚙ TOOLS · ${calls.length} · ${names}`)
-        rows.push('')
-        return
-      }
-      for (const event of group) {
-        if (event.type === 'tool/call') {
-          const args = parseToolArgs(event.data.arguments)
-          const isBash = /bash|shell|terminal|exec/i.test(event.data.name)
-          const isSkill = /^skill$/i.test(event.data.name)
-          const isMysql = /mysql/i.test(event.data.name)
-          if (isBash) {
-            const command = args.command ?? args.cmd ?? args.script
-            push(ANSI.ink, `  • Running command...`)
-            if (command) push(ANSI.dim, `    └ $ ${safe(shorten(String(command), Math.max(20, contentWidth - 10)))}`)
-          } else if (isSkill) {
-            const skillName = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'loading instructions'
-            push(ANSI.ink, `  • Activating skill...`)
-            push(ANSI.blueSoft, `    └ ✦ ${safe(shorten(String(skillName), Math.max(20, contentWidth - 10)))}`)
-          } else if (isMysql) {
-            const query = args.query ?? args.sql ?? args.statement
-            push(ANSI.ink, `  • Querying MySQL database...`)
-            if (query) push(ANSI.dim, `    └ 🔍 ${safe(shorten(String(query), Math.max(20, contentWidth - 10)))}`)
-            else push(ANSI.dim, `    └ ⚙ ${event.data.name}`)
-          } else {
-            const file = args.file_path ?? args.path
-            push(ANSI.ink, `  • Executing ${event.data.name}...`)
-            if (file) push(ANSI.dim, `    └ 📄 ${safe(shorten(String(file), Math.max(20, contentWidth - 10)))}`)
-          }
-        } else if (event.type === 'approval/asked') {
-          push(ANSI.coral, `  ! approval needed · ${event.data.toolName}`)
-        } else if (event.type === 'approval/decided') {
-          push(ANSI.dim, `    ↳ ${event.data.outcome}`)
-        } else if (event.type === 'hook/invoked') {
-          push(ANSI.dim, `  ϟ hook · ${event.data.point} · ${event.data.dialect}${event.data.matcher ? ` · ${event.data.matcher}` : ''}`)
-        } else if (event.type === 'hook/result') {
-          const data = event.data
-          const ok = data.decision === 'allow' || data.decision === 'pass'
-          const decision = ok ? `${ANSI.blue}${data.decision}${ANSI.reset}` : `${ANSI.coral}${data.decision}${ANSI.reset}`
-          const duration = data.durationMs !== undefined ? ` · ${(data.durationMs / 1000).toFixed(1)}s` : ''
-          push(ANSI.dim, `    ↳ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}`)
-        } else {
-          const resultText = textOf(event.data.message.content)
-          if (event.data.error) {
-            const detail = event.data.error.message ?? resultText
-            push(ANSI.coral, `    ✗ ${event.data.error.code ?? 'error'} · ${shorten(detail, Math.max(20, contentWidth - 22))}`)
-          } else if (/^diff |\n(---|\+\+\+)/.test(`\n${resultText}`) && /^[+-]/.test(resultText.split('\n').find((l) => l.startsWith('+') || l.startsWith('-')) ?? '')) {
-            renderDiffLines(resultText)
-          } else if (resultText) {
-            const resultLines = safe(resultText).split(/\r?\n/)
-            push(ANSI.dim, `    └ ✓ ${shorten(resultLines[0], Math.max(20, contentWidth - 10))}`)
-            if (resultLines.length > 1) {
-              push(ANSI.dim, `      ↳ ${resultLines.length - 1} more output line${resultLines.length === 2 ? '' : 's'}`)
-            }
-          }
-        }
-      }
-      rows.push('')
-    }
-
-    let group = []
-    let turnHeaderPrinted = false
-    const isToolEvent = (type) => type === 'tool/call' || type === 'tool/result' || type === 'approval/asked' || type === 'approval/decided' || type === 'hook/invoked' || type === 'hook/result'
-    const isStrongEvent = (type) => type === 'user/message' || type === 'assistant/message' || type === 'turn/start' || type === 'turn/end'
-    const flushGroup = () => {
-      renderGroup(group)
-      group = []
-    }
-
-    for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
-      const event = events[eventIndex]
-      if (isToolEvent(event.type)) {
-        group.push(event)
-        continue
-      }
-      if (group.length > 0) {
-        if (isStrongEvent(event.type)) flushGroup()
-        else continue
-      }
-      renderGroup(group)
-      group = []
-      switch (event.type) {
-        case 'turn/start': {
-          turnHeaderPrinted = false
-          break
-        }
-        case 'user/message': {
-          turnHeaderPrinted = false
-          if (event.data.source?.kind !== 'user') break
-          push(ANSI.blue, `${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
-          for (const block of event.data.content ?? []) {
-            if (block.type === 'image') {
-              const ref = block.attachment
-              const size = formatImageBytes(ref?.bytes ?? 0)
-              const dimensions = ref?.width && ref?.height ? ` · ${ref.width}×${ref.height}` : ''
-              push(ANSI.dim, `  ◱ image · ${size}${dimensions}`)
-            } else if (block.type === 'text') {
-              const blockWidth = Math.max(24, contentWidth)
-              const innerWidth = blockWidth - 2
-              const displayText = compactExpandedFileReferences(block.text)
-              const wrapped = wrap(displayText, innerWidth - 2)
-              push('', `${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
-              for (const line of wrapped) {
-                const padding = ' '.repeat(Math.max(0, innerWidth - 2 - widthOf(line)))
-                push('', `${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
-              }
-              push('', `${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
-            }
-          }
-          const skillCount = this.skills?.length || 0
-          if (skillCount > 0) {
-            push(ANSI.dim, `  ◫ 上下文注入 · skill-catalog (${skillCount} skills)`)
-          }
-          rows.push('')
-          break
-        }
-        case 'assistant/message': {
-          const fullAnswerText = textOf(event.data.message.content)
-          const answerText = fullAnswerText
-          const block = this.reasoningBlocks.find((entry) => entry.key === `reason-${event.seq}` || entry.seq === event.seq) || (this.reasoningBlocks.length === 1 ? this.reasoningBlocks[0] : undefined)
-          if (!answerText && !block) break
-          if (!turnHeaderPrinted) {
-            turnHeaderPrinted = true
-            push(ANSI.blueSoft, `DSH  ${ANSI.muted}${this.activeModel?.model ?? this.agent?.options?.model ?? ''} · ${formatTime(event.time)}`)
-            rows.push('')
-          }
-          if (block) {
-            const ms = block.ms !== undefined ? ` · ${(block.ms / 1000).toFixed(1)}s` : ''
-            if (this.expandedKeys.has(block.key)) {
-              push(ANSI.dim, `  ⚛ thinking · ${block.lines} lines${ms}`)
-              for (const line of wrap(block.text, contentWidth - 4)) {
-                push(ANSI.detail, `    ${line}`)
-              }
-            } else {
-              push(ANSI.dim, `  ⚛ thinking · ${block.lines} lines${ms}`)
-            }
-            rows.push('')
-          }
-          if (answerText) {
-            const mdRows = this.renderMarkdownRows(answerText, contentWidth, ANSI.answer)
-            for (const r of mdRows) {
-              if (r === null) rows.push('')
-              else push('', r[0] + r[1])
-            }
-            rows.push('')
-          }
-          break
-        }
-        case 'turn/end': {
-          turnHeaderPrinted = false
-          if (event.data.reason?.kind === 'aborted') push(ANSI.dim, `  ∅ interrupted`)
-          else if (event.data.reason?.kind === 'error') {
-            const error = event.data.reason.error
-            push(ANSI.coral, `  ✗ ${error?.code ?? 'error'}: ${shorten(error?.message ?? '', contentWidth - 20)}`)
-          } else if (event.data.reason?.kind === 'completed') {
-            const allEvents = this.agent?.session?.events ?? []
-            let startIndex = -1
-            for (let cursor = allEvents.length - 1; cursor >= 0; cursor -= 1) {
-              if (allEvents[cursor].type === 'turn/start') {
-                startIndex = cursor
-                break
-              }
-            }
-            if (startIndex >= 0) {
-              const durationMs = Number(event.time) - Number(allEvents[startIndex].time)
-              if (Number.isFinite(durationMs) && durationMs >= 0) {
-                const tools = allEvents.slice(startIndex).filter((e) => e.type === 'tool/call').length
-                const toolsText = tools > 0 ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : ''
-                push(ANSI.dim, `  ✻ finished in ${formatDurationMs(durationMs)}${toolsText}`)
-              }
-            }
-          }
-          rows.push('')
-          break
-        }
-        default:
-          break
-      }
-    }
-    flushGroup()
-    return rows
+    return formatEvents(events, columns, {
+      expandedKeys: this.expandedKeys,
+      skills: this.skills,
+      reasoningBlocks: this.reasoningBlocks,
+      activeModel: this.activeModel,
+      defaultModel: this.agent?.options?.model ?? '',
+      allSessionEvents: this.agent?.session?.events ?? events,
+      ANSI
+    })
   }
 
   toggleCollapsible() {
@@ -4197,89 +3144,35 @@ class TuiApp {
     const cwdName = process.cwd().split('/').filter(Boolean).pop() || process.cwd()
     const planState = this.planModeService()?.get?.(this.agent) ?? { active: false, pending: undefined }
     const planActive = planState.pending ?? planState.active
-    const mode = planActive ? 'PLAN' : 'BUILD'
-    const pending = planState.pending === undefined ? '' : `${ANSI.dim}*${ANSI.reset}`
+    const planPending = planState.pending !== undefined
     const effort = this.currentEffort().toUpperCase()
-    const usage = this.usage
-
-    // High-performance memoization cache for typing & idle frames
-    const runningAnimStep = this.active ? Math.floor(Date.now() / 520) : 'idle'
-    const runningWordStep = this.active ? Math.floor(Date.now() / 3000) : 'idle'
-    const cacheKey = `${columns}|${density}|${mode}|${pending}|${liveModel}|${cwdName}|${this.presetName}|${effort}|${this.permissionName}|${usage.input}|${usage.output}|${usage.cacheRead}|${usage.recentInput}|${usage.contextWindow}|${this.skills.length}|${this.mcpCount}|${this.hookCount}|${runningAnimStep}|${runningWordStep}`
-    if (this.statusRowsCache && this.statusRowsCache.key === cacheKey) {
-      return this.statusRowsCache.rows
-    }
-
-    const contextText = usage.contextWindow && usage.recentInput !== undefined
-      ? `${formatTokens(usage.recentInput)} / ${formatTokens(usage.contextWindow)}`
-      : 'awaiting first response'
-    const percent = usage.contextWindow && usage.recentInput !== undefined
-      ? Math.round((usage.recentInput / usage.contextWindow) * 100)
-      : 0
-    const meterWidth = 14
-    const filled = percent > 0 ? Math.min(meterWidth, Math.max(1, Math.floor((percent / 100) * meterWidth))) : 0
-    const meter = filled > 0
-      ? `${(ANSI.barFill ?? ANSI.bash)}${'█'.repeat(filled)}${ANSI.bar}${'░'.repeat(meterWidth - filled)}${ANSI.reset}`
-      : `${ANSI.bar}${'░'.repeat(meterWidth)}${ANSI.reset}`
-    // DeepSeek counts cached reads outside `inputTokens`, so cacheRead can
-    // exceed input; report the cache-hit ratio instead of a percent of input.
-    const cacheTotal = usage.input + usage.cacheRead
-    const cachePercent = cacheTotal > 0 ? Math.round((usage.cacheRead / cacheTotal) * 100) : 0
-
-    const effectiveColumns = Math.max(40, columns - 4)
-    const title = truncateWidth(compactFileReferenceTitle(sessionTitle(this.agent.session.events)), Math.max(16, effectiveColumns - 72))
-    const modeBadge = `${ANSI.blue}${ANSI.bold}${mode}${ANSI.reset}${pending}`
-    const modelBadge = `${ANSI.teal ?? ANSI.blueSoft}[${liveModel ?? 'model'}]${ANSI.reset}`
-    const cwdBadge = `${ANSI.amber}${cwdName}${ANSI.reset}`
-    const titleBadge = `${ANSI.ink}${safe(title)}${ANSI.reset}`
-    const row1Left = `${modeBadge}${ANSI.dim} | ${ANSI.reset}${modelBadge}${ANSI.dim} | ${ANSI.reset}${cwdBadge}${ANSI.dim} | ${ANSI.reset}${titleBadge}`
-    const runningFrames = ['◉', '◎', '◌', '◍']
-    const runningFrameStep = typeof runningAnimStep === 'number' ? runningAnimStep : 0
-    const runningWordStepVal = typeof runningWordStep === 'number' ? runningWordStep : 0
-    const runningMark = runningFrames[runningFrameStep % runningFrames.length]
-    const runningWord = explorationWords[runningWordStepVal % explorationWords.length]
-    const running = this.active ? `${ANSI.blue}${runningMark} ${runningWord}${ANSI.reset} · ` : ''
-    const presetBadge = `${ANSI.muted}preset ${ANSI.peach ?? ANSI.blueSoft}${this.presetName ?? 'standard'}${ANSI.reset}`
-    const effortColor = effort === 'HIGH' ? (ANSI.coral ?? ANSI.terracotta) : (ANSI.amber ?? ANSI.blueSoft)
-    const effortBadge = `${ANSI.muted}effort ${effortColor}${effort}${ANSI.reset}`
-    const row1Right = `${running}${presetBadge}${ANSI.dim} · ${ANSI.reset}${effortBadge}`
-    const row1Gap = Math.max(1, effectiveColumns - widthOf(visibleOf(row1Left)) - widthOf(visibleOf(row1Right)))
-    const row1 = `  ${row1Left}${' '.repeat(row1Gap)}${row1Right}`
-
-    if (density === 'minimal') {
-      const permBadge = `${ANSI.blue}${this.permissionName ?? 'custom'}${ANSI.reset}`
-      const minLeft = `${modeBadge}${ANSI.dim} | ${ANSI.reset}${modelBadge}${ANSI.dim} · ${ANSI.reset}${ANSI.blueSoft}${percent}%${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${permBadge}`
-      const minRight = `${running}${presetBadge}${ANSI.dim} · ${ANSI.reset}${effortBadge}`
-      const minGap = Math.max(1, effectiveColumns - widthOf(visibleOf(minLeft)) - widthOf(visibleOf(minRight)))
-      const result = [`  ${minLeft}${' '.repeat(minGap)}${minRight}`]
-      this.statusRowsCache = { key: cacheKey, rows: result }
-      return result
-    }
-
-    const row2 = `  ${ANSI.muted}Context${ANSI.reset} ${meter} ${ANSI.blueSoft}${contextText}${ANSI.reset} ${ANSI.blue}· ${percent}%${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${ANSI.muted}in ${ANSI.bold}${ANSI.ink}${formatTokens(usage.input)}${ANSI.reset}${ANSI.muted} · out ${ANSI.bold}${ANSI.ink}${formatTokens(usage.output)}${ANSI.reset}${ANSI.muted} · cache ${ANSI.bold}${ANSI.bash}${cachePercent}%${ANSI.reset}`
-    const permRow = `  ${ANSI.blue}▶▶${ANSI.reset} ${ANSI.muted}permission${ANSI.reset} ${ANSI.blue}${this.permissionName ?? 'custom'}${ANSI.reset}${ANSI.dim} · Shift+Tab${ANSI.reset}`
-
-    if (density === 'compact') {
-      const row2CompactRight = permRow.trim()
-      const row2CompactLeft = `${ANSI.muted}Context${ANSI.reset} ${meter} ${ANSI.blueSoft}${percent}%${ANSI.reset} ${ANSI.dim}(in ${formatTokens(usage.input)} · out ${formatTokens(usage.output)})${ANSI.reset}`
-      const r2Gap = Math.max(1, effectiveColumns - widthOf(visibleOf(row2CompactLeft)) - widthOf(visibleOf(row2CompactRight)))
-      const result = [row1, `  ${row2CompactLeft}${' '.repeat(r2Gap)}${row2CompactRight}`]
-      this.statusRowsCache = { key: cacheKey, rows: result }
-      return result
-    }
-
     const recent = this.recentUsage()
-    const promptText = this.agent?.ctx?.get?.('systemPrompt') ? 'system' : 'harness'
-    const totalJobs = (recent.jobs.length || 0) + (this.localBackgroundJobs?.filter((j) => j.status === 'running').length || 0)
-    const jobBadge = totalJobs > 0 ? `${ANSI.amber}${totalJobs} active${ANSI.reset}` : `${ANSI.dim}0${ANSI.reset}`
-    const skillBadge = this.skills.length > 0 ? `${ANSI.teal}${this.skills.length} skills${ANSI.reset}` : `${ANSI.dim}0 skills${ANSI.reset}`
-    const hookBadge = this.hookCount > 0 ? `${ANSI.blueSoft}${this.hookCount} hooks${ANSI.reset}` : `${ANSI.dim}0 hooks${ANSI.reset}`
-    const mcpBadge = this.mcpCount > 0 ? `${ANSI.teal}${this.mcpCount} MCPs${ANSI.reset}` : `${ANSI.dim}0 MCPs${ANSI.reset}`
-    const toolText = recent.toolDetails.length > 0 ? recent.toolDetails.join(', ') : '—'
-    const row3 = `  ${ANSI.muted}prompt ${ANSI.reset}${ANSI.blueSoft}${promptText}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${skillBadge}${ANSI.dim} · ${ANSI.reset}${mcpBadge}${ANSI.dim} · ${ANSI.reset}${hookBadge}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}tools ${ANSI.bash}${shorten(toolText, Math.max(16, effectiveColumns - 58))}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}jobs ${jobBadge}`
-    const result = [row1, row2, row3, permRow]
-    this.statusRowsCache = { key: cacheKey, rows: result }
-    return result
+    const hasSystemPrompt = Boolean(this.agent?.ctx?.get?.('systemPrompt'))
+
+    const { rows, cache } = renderStatusRows({
+      columns,
+      density,
+      planActive,
+      planPending,
+      effort,
+      usage: this.usage,
+      active: this.active,
+      presetName: this.presetName,
+      permissionName: this.permissionName,
+      liveModel,
+      cwdName,
+      sessionEvents: this.agent.session.events,
+      skills: this.skills,
+      mcpCount: this.mcpCount,
+      hookCount: this.hookCount,
+      localBackgroundJobs: this.localBackgroundJobs ?? [],
+      recent,
+      hasSystemPrompt,
+      statusRowsCache: this.statusRowsCache,
+      ANSI
+    })
+    this.statusRowsCache = cache
+    return rows
   }
 
   inputFrame(columns) {
@@ -4481,389 +3374,31 @@ class TuiApp {
 
   panelRows(columns, rows) {
     const capacity = Math.max(2, Math.min(8, rows - 10))
-    if (this.help) {
-      return [
-        `${ANSI.muted}? shortcuts${ANSI.reset}  ${ANSI.dim}·  ${ANSI.blue}Esc${ANSI.reset} close${ANSI.reset}`,
-        '',
-        `  ${ANSI.blue}Enter${ANSI.reset} send  ·  ${ANSI.blue}Ctrl+J${ANSI.reset} new line  ·  ${ANSI.blue}Ctrl+C${ANSI.reset} interrupt  ·  ${ANSI.blue}Esc${ANSI.reset} interrupt running turn`,
-        `  ${ANSI.blue}↑↓${ANSI.reset} history  ·  ${ANSI.blue}←→${ANSI.reset} cursor  ·  ${ANSI.blue}Ctrl+A/E${ANSI.reset} line start/end  ·  ${ANSI.blue}Ctrl+K${ANSI.reset} delete line  ·  ${ANSI.blue}Alt+←→${ANSI.reset} word`,
-        `  ${ANSI.blue}Ctrl+O${ANSI.reset} expand/collapse reasoning  ·  ${ANSI.blue}Ctrl+E${ANSI.reset} edit in $EDITOR  ·  ${ANSI.blue}Ctrl+F${ANSI.reset} search history`,
-        `  ${ANSI.blue}Shift+Tab${ANSI.reset} permission  ·  ${ANSI.blue}@${ANSI.reset} files  ·  ${ANSI.blue}Cmd+V${ANSI.reset} image  ·  ${ANSI.blue}/${ANSI.reset} commands  ·  ${ANSI.blue}/exit${ANSI.reset} leave`,
-        ''
-      ]
-    }
-    if (this.mcpPanel) {
-      const entries = this.mcpPanel.entries
-      const start = Math.min(Math.max(0, this.mcpPanel.selected - capacity + 1), Math.max(0, entries.length - capacity))
-      const shown = entries.slice(start, start + capacity)
-      const unknown = entries.filter((entry) => entry.connected === undefined).length
-      const rowsOut = [
-        `${ANSI.muted}MCP SERVERS${ANSI.reset}  ${ANSI.dim}· ${entries.length} configured${ANSI.reset}`,
-        '',
-        ...shown.map((entry, index) => {
-          const marker = index + start === this.mcpPanel.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          const status = entry.connected === undefined
-            ? `${ANSI.dim}? unavailable${ANSI.reset}`
-            : entry.connected
-              ? `${ANSI.bash}✓ connected${ANSI.reset} ${ANSI.dim}· ${entry.toolCount} tool${entry.toolCount === 1 ? '' : 's'}${ANSI.reset}`
-              : `${ANSI.coral}✗ failed${ANSI.reset}`
-          return `${marker}  ${ANSI.blueSoft}${entry.name}${ANSI.reset} ${ANSI.dim}· ${entry.transport}${ANSI.reset}  ${status}`
-        }),
-        '',
-        `${ANSI.muted}↑↓ navigate  ·  Esc close${ANSI.reset}`
-      ]
-      if (this.mcpPanel.failed > 0 || unknown > 0) {
-        rowsOut.splice(rowsOut.length - 2, 0, `${ANSI.dim}※ ${this.mcpPanel.failed} failed · check the server process or credentials${ANSI.reset}`)
-      }
-      return rowsOut
-    }
-    if (this.questionPanel) {
-      const panel = this.questionPanel
-      const question = this.currentQuestion()
-      const options = Array.isArray(question?.options) ? question.options : []
-      const optionCapacity = Math.max(2, Math.min(6, Math.floor((rows - 10) / 2)))
-      const start = Math.min(Math.max(0, panel.selected - optionCapacity + 1), Math.max(0, options.length - optionCapacity))
-      const shown = options.slice(start, start + optionCapacity)
-      const isMulti = !!(question?.multiSelect || question?.multi_select)
-      const tabs = panel.questions.map((q, qIndex) => {
-        const title = safe(q.header || q.title || q.id || ((q.multiSelect || q.multi_select) ? `多选设置 ${qIndex + 1}` : `单项选择 ${qIndex + 1}`))
-        if (qIndex === panel.index) {
-          return `\x1b[48;5;37m\x1b[38;5;232m\x1b[1m ${title} \x1b[0m`
-        }
-        return `${ANSI.dim}${title}${ANSI.reset}`
-      })
-      tabs.push(`${ANSI.dim}Confirm${ANSI.reset}`)
-      const tabRow = `  ${tabs.join('   ')}`
-
-      const lines = [
-        tabRow,
-        '',
-        `  ${ANSI.ink}${ANSI.bold}${shorten(safe(question?.question ?? ''), Math.max(30, columns - 6))}${ANSI.reset}${isMulti ? `  ${ANSI.dim}(select all that apply)${ANSI.reset}` : ''}`,
-        ''
-      ]
-      if (question?.detail) {
-        const detailLines = wrap(safe(question.detail), Math.max(30, columns - 6)).slice(0, 2)
-        lines.push(...detailLines.map((line) => `  ${ANSI.dim}${line}${ANSI.reset}`))
-        lines.push('')
-      }
-      for (let index = 0; index < shown.length; index++) {
-        const option = shown[index]
-        const optionIndex = start + index
-        const current = optionIndex === panel.selected
-        const chosen = panel.selectedOptions.has(optionIndex)
-        const marker = isMulti ? (chosen ? '[x]' : '[ ]') : (chosen ? '(•)' : '( )')
-        const num = `${optionIndex + 1}.`
-        const labelText = safe(option?.label ?? (typeof option === 'string' ? option : ''))
-        if (current) {
-          lines.push(`  ${ANSI.pink ?? '\x1b[38;5;213m'}${num} ${marker} \x1b[48;5;237m ${labelText} \x1b[0m${ANSI.reset}`)
-        } else {
-          lines.push(`  ${ANSI.dim}${num} ${chosen ? (ANSI.blue + marker) : marker}${ANSI.reset} ${ANSI.ink}${labelText}${ANSI.reset}`)
-        }
-        if (option?.description) {
-          const descWrapped = wrap(safe(option.description), Math.max(20, columns - 10)).slice(0, 2)
-          for (const dline of descWrapped) {
-            lines.push(`    ${current ? ANSI.detail : ANSI.dim}${dline}${ANSI.reset}`)
-          }
-        }
-      }
-      if (options.length > shown.length) {
-        lines.push(`  ${ANSI.dim}… ${options.length - shown.length} more options${ANSI.reset}`)
-      }
-      lines.push('')
-      const numberHint = options.length > 0 ? ` · 1-${Math.min(9, options.length)} quick select` : ''
-      const switchHint = panel.questions.length > 1 ? '   ←→ switch' : '   ←→ select'
-      const hint = isMulti
-        ? `  ${ANSI.muted}⇆ tab${switchHint}   ↑↓ select   enter toggle   esc dismiss${numberHint}${ANSI.reset}`
-        : `  ${ANSI.muted}⇆ tab${switchHint}   ↑↓ select   enter select   esc dismiss${numberHint}${ANSI.reset}`
-      lines.push(hint)
-      return lines
-    }
-    if (this.presetConfirm) {
-      const id = this.presetConfirm.requestedId
-      const selected = this.presetConfirm.selected ?? 0
-      const yesCursor = selected === 0 ? `${ANSI.blue}>${ANSI.reset}` : ' '
-      const yesDot = selected === 0 ? `${ANSI.blue}●${ANSI.reset}` : `${ANSI.dim}○${ANSI.reset}`
-      const yesLabel = selected === 0 ? `${ANSI.ink}${ANSI.bold}Start new session with preset "${id}"${ANSI.reset}` : `${ANSI.dim}Start new session with preset "${id}"${ANSI.reset}`
-
-      const noCursor = selected === 1 ? `${ANSI.blue}>${ANSI.reset}` : ' '
-      const noDot = selected === 1 ? `${ANSI.coral}●${ANSI.reset}` : `${ANSI.dim}○${ANSI.reset}`
-      const noLabel = selected === 1 ? `${ANSI.ink}${ANSI.bold}Cancel — keep current session and preset${ANSI.reset}` : `${ANSI.dim}Cancel — keep current session and preset${ANSI.reset}`
-
-      return [
-        `${ANSI.muted}SWITCH PRESET${ANSI.reset} ${ANSI.dim}· ${ANSI.amber}${id}${ANSI.reset}`,
-        '',
-        `${ANSI.ink}This session already has conversation history.${ANSI.reset}`,
-        `${ANSI.dim}Switching presets requires starting a fresh session.${ANSI.reset}`,
-        '',
-        `${yesCursor} ${yesDot}  ${ANSI.blueSoft}Y${ANSI.reset} · ${yesLabel}`,
-        `${noCursor} ${noDot}  ${ANSI.coral}N${ANSI.reset} · ${noLabel}`,
-        '',
-        `${ANSI.muted}↑↓ or ← → select  ·  Enter confirm  ·  y/n quick choice  ·  Esc cancel${ANSI.reset}`
-      ]
-    }
-    if (this.skillsPanel) {
-      const skills = this.skills ?? []
-      const slots = Math.max(1, capacity - 2)
-      const start = Math.min(Math.max(0, this.skillsPanel.selected - slots + 1), Math.max(0, skills.length - slots))
-      const shown = skills.slice(start, start + slots)
-      return [
-        `${ANSI.muted}SKILLS${ANSI.reset} ${ANSI.dim}· ${skills.length} loaded${ANSI.reset}`,
-        '',
-        ...(shown.length === 0
-          ? [`${ANSI.dim}no skills loaded in this workspace${ANSI.reset}`]
-          : shown.map((skill, index) => {
-              const isSelected = index + start === this.skillsPanel.selected
-              const marker = isSelected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-              const nameColor = isSelected ? (ANSI.peach ?? ANSI.blueSoft) : ANSI.dim
-              const descColor = isSelected ? ANSI.ink : ANSI.dim
-              const desc = shorten(safe(skill.description ?? ''), Math.max(20, columns - 32))
-              return `${marker}  ${nameColor}/${safe(skill.name)}${ANSI.reset}  ${descColor}${desc}${ANSI.reset}`
-            })),
-        '',
-        `${ANSI.muted}↑↓ navigate  ·  Esc close${ANSI.reset}`
-      ]
-    }
-    if (this.menu) {
-      const items = this.menu.items
-      const query = this.menu.prefix ?? ''
-      const start = Math.min(Math.max(0, this.menu.selected - capacity + 1), Math.max(0, items.length - capacity))
-      const shown = items.slice(start, start + capacity)
-      const skillCount = items.filter((item) => item.kind === 'skill').length
-      return [
-        `${ANSI.muted}COMMANDS${ANSI.reset}${skillCount ? ` ${ANSI.dim}+ ${skillCount} skills${ANSI.reset}` : ''}  ${ANSI.dim}· ${items.length} matching${ANSI.reset}`,
-        '',
-        ...shown.map((item, index) => {
-          const marker = index + start === this.menu.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          return this.commandItemRow(item, marker, columns, query)
-        }),
-        '',
-        `${ANSI.muted}↑↓ navigate  ·  Enter or Tab select  ·  Esc close${ANSI.reset}`
-      ]
-    }
-    if (this.presetPicker) {
-      const entries = this.presetPicker.entries
-      const slots = Math.max(1, capacity - 2)
-      const start = Math.min(Math.max(0, this.presetPicker.selected - slots + 1), Math.max(0, entries.length - slots))
-      const shown = entries.slice(start, start + slots)
-      return [
-        `${ANSI.muted}AGENT PRESETS${ANSI.reset}  ${ANSI.dim}· ${entries.length} available${ANSI.reset}`,
-        '',
-        ...shown.map((entry, index) => {
-          const selected = index + start === this.presetPicker.selected
-          const marker = selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          const num = `${ANSI.dim}${index + start + 1}.${ANSI.reset}`
-          const state = entry.id === this.presetName ? ` ${ANSI.bash}✓ current${ANSI.reset}` : entry.broken ? ` ${ANSI.coral}broken${ANSI.reset}` : ''
-          const description = entry.broken ?? entry.description ?? entry.name ?? entry.id
-          return `${marker} ${num}  ${selected ? ANSI.blue : ANSI.blueSoft}${entry.id}${ANSI.reset}${state}  ${ANSI.dim}${shorten(safe(description), Math.max(20, columns - 36))}${ANSI.reset}`
-        }),
-        '',
-        `${ANSI.muted}↑↓ or ← → navigate  ·  1-9 quick pick  ·  Enter select  ·  Esc close${ANSI.reset}`
-      ]
-    }
-    if (this.jobPanel) {
-      const entries = this.jobPanel.entries
-      const hasOutput = this.jobPanel.outputJobId !== undefined || this.jobPanel.outputBusy || this.jobPanel.outputError
-      const slots = Math.max(1, capacity - (hasOutput ? 5 : 2))
-      const start = Math.min(Math.max(0, this.jobPanel.selected - slots + 1), Math.max(0, entries.length - slots))
-      const shown = entries.slice(start, start + slots)
-      const statusColor = (status) => status === 'failed' ? ANSI.coral : status === 'completed' ? ANSI.bash : ANSI.blueSoft
-      const lines = [
-        `${ANSI.muted}BACKGROUND JOBS${ANSI.reset} ${ANSI.dim}· ${entries.length ? `${entries.length} visible` : 'none'}${ANSI.reset}`,
-        ''
-      ]
-      if (shown.length === 0) lines.push(`${ANSI.dim}no background jobs for this session${ANSI.reset}`)
-      for (let index = 0; index < shown.length; index += 1) {
-        const entry = shown[index]
-        const selected = index + start === this.jobPanel.selected
-        const marker = selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-        const detail = entry.detail ?? entry.label ?? entry.kind ?? 'job'
-        lines.push(`${marker}  ${statusColor(entry.status)}${entry.status}${ANSI.reset}  ${ANSI.blueSoft}${entry.id}${ANSI.reset} ${ANSI.ink}${shorten(safe(detail), Math.max(24, columns - 28))}${ANSI.reset}`)
-      }
-      if (hasOutput) {
-        const selected = this.selectedJob()
-        const outputLabel = selected ? `${selected.id}${selected.status ? ` · ${selected.status}` : ''}` : 'selected job'
-        lines.push('')
-        lines.push(`${ANSI.muted}OUTPUT · ${ANSI.blueSoft}${outputLabel}${ANSI.reset}`)
-        if (this.jobPanel.outputBusy) {
-          lines.push(`${ANSI.dim}working…${ANSI.reset}`)
-        } else if (this.jobPanel.outputError) {
-          lines.push(`${ANSI.coral}${shorten(this.jobPanel.outputError, Math.max(24, columns - 4))}${ANSI.reset}`)
-        } else {
-          const outputLines = safe(this.jobPanel.output || '(no new output)')
-            .split(/\r?\n/)
-            .flatMap((line) => wrap(line, Math.max(24, columns - 4)))
-            .slice(-2)
-          lines.push(...outputLines.map((line) => `${ANSI.dim}${line || ' '}${ANSI.reset}`))
-        }
-      }
-      lines.push('')
-      lines.push(`${ANSI.muted}↑↓ inspect  ·  Enter read  ·  k cancel  ·  r refresh  ·  Esc close${ANSI.reset}`)
-      return lines
-    }
-    if (this.settingsPicker) {
-      const descriptions = {
-        theme: 'color theme (claude / deepseek / mono / light)',
-        statusline: 'density: detailed (4 rows), compact (2 rows), minimal (1 row)',
-        'history persistence': 'save sessions to disk for /resume'
-      }
-      const entries = [
-        ['theme', this.preferences.theme, descriptions.theme],
-        ['statusline density', this.preferences.statusline ?? 'detailed', descriptions.statusline],
-        ['history persistence', this.preferences.persistHistory ? 'on' : 'off', descriptions['history persistence']]
-      ]
-      return [
-        `${ANSI.muted}TUI SETTINGS${ANSI.reset} ${ANSI.dim}· stored in ~/.dsh/settings.yaml${ANSI.reset}`,
-        '',
-        ...entries.map(([name, value, desc], index) => {
-          const cursor = index === this.settingsPicker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          const label = name.padEnd(22, ' ')
-          const valStr = String(value).padEnd(10, ' ')
-          return `${cursor}  ${ANSI.blueSoft}${label}${ANSI.reset} ${ANSI.dim}·${ANSI.reset}  ${ANSI.ink}${valStr}${ANSI.reset}  ${ANSI.dim}${desc}${ANSI.reset}`
-        }),
-        '',
-        `${ANSI.muted}↑↓ select  ·  ← → or Enter change  ·  Esc close${ANSI.reset}`
-      ]
-    }
-    if (this.effortPicker) {
-      const labels = this.effortPicker.efforts.map((effort, index) => {
-        const selected = index === this.effortPicker.selected
-        return selected
-          ? `${ANSI.blue}[ ${effort.toUpperCase()} ]${ANSI.reset}`
-          : `${ANSI.dim}  ${effort.toUpperCase()}  ${ANSI.reset}`
-      })
-      return [
-        `${ANSI.muted}REASONING EFFORT${ANSI.reset}`,
-        '',
-        `  ${labels.join(`${ANSI.dim}  ·  ${ANSI.reset}`)}`,
-        '',
-        `${ANSI.muted}← → choose  ·  Enter or Tab select  ·  Esc close${ANSI.reset}`
-      ]
-    }
-    if (this.commandPalette) {
-      const items = this.commandPalette.items
-      const query = this.commandPalette.query ?? ''
-      const start = Math.min(Math.max(0, this.commandPalette.selected - capacity + 1), Math.max(0, items.length - capacity))
-      const shown = items.slice(start, start + capacity)
-      return [
-        `${ANSI.muted}COMMAND PALETTE${ANSI.reset} ${ANSI.dim}· ${this.commandPalette.query ? `search: ${shorten(this.commandPalette.query, Math.max(16, columns - 42))} · ` : ''}${items.length} matching${ANSI.reset}`,
-        '',
-        ...shown.map((item, index) => {
-          const marker = index + start === this.commandPalette.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          return this.commandItemRow(item, marker, columns, query)
-        }),
-        '',
-        `${ANSI.muted}↑↓ navigate  ·  Enter run  ·  Tab insert skill  ·  Esc close${ANSI.reset}`
-      ]
-    }
-    if (this.historySearch) {
-      const entries = this.historySearch.matches
-      const start = Math.min(Math.max(0, this.historySearch.selected - capacity + 1), Math.max(0, entries.length - capacity))
-      const shown = entries.slice(start, start + capacity)
-      return [
-        `${ANSI.muted}HISTORY SEARCH${ANSI.reset} ${ANSI.dim}· ${this.historySearch.query || 'recent'} · ${entries.length} matching${ANSI.reset}`,
-        '',
-        ...shown.map((entry, index) => {
-          const marker = index + start === this.historySearch.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          return `${marker}  ${ANSI.ink}${truncateWidth(safe(entry), Math.max(30, columns - 8))}${ANSI.reset}`
-        }),
-        '',
-        `${ANSI.muted}↑↓ navigate  ·  Enter insert  ·  Esc close${ANSI.reset}`
-      ]
-    }
-    if (this.modelPicker) {
-      const entries = this.modelPicker.entries
-      const current = this.ctx.agentDefaultModel.currentSelection()
-      const slots = Math.max(1, capacity - 2)
-      const start = Math.min(Math.max(0, this.modelPicker.selected - slots + 1), Math.max(0, entries.length - slots))
-      const shown = entries.slice(start, start + slots)
-      return [
-        `  ${ANSI.muted}MODELS${ANSI.reset}  ${ANSI.dim}· ${entries.length} available${ANSI.reset}`,
-        '',
-        ...shown.map((entry, index) => {
-          const marker = index + start === this.modelPicker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          const isCurrent = entry.provider === current.provider && entry.model === current.model
-          const label = `${entry.provider}/${entry.model}`
-          return `${marker}  ${ANSI.blueSoft}${truncateWidth(safe(label), Math.max(30, columns - 24))}${ANSI.reset}  ${isCurrent ? `${ANSI.bash}✓ current${ANSI.reset}` : `${ANSI.dim}${shorten(entry.name, Math.max(16, columns - 36))}${ANSI.reset}`}`
-        }),
-        '',
-        `  ${ANSI.muted}↑↓ navigate  ·  Enter select  ·  Esc close${ANSI.reset}`
-      ]
-    }
-    if (this.variantPicker) {
-      const picker = this.variantPicker
-      return [
-        `  ${ANSI.muted}SELECT VARIANT${ANSI.reset}  ${ANSI.dim}·  ${picker.provider}/${picker.model}${ANSI.reset}`,
-        '',
-        ...picker.entries.map((item, index) => {
-          const marker = index === picker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          const isCurrent = (this.reasoningEffort ?? 'high').toLowerCase() === item.id.toLowerCase()
-          return `${marker}  ${ANSI.blueSoft}${item.label.padEnd(9)}${ANSI.reset}  ${ANSI.dim}${item.desc}${ANSI.reset}  ${isCurrent ? `${ANSI.bash}✓ current${ANSI.reset}` : ''}`
-        }),
-        '',
-        `  ${ANSI.muted}↑↓ navigate  ·  Enter confirm  ·  Esc close${ANSI.reset}`
-      ]
-    }
-    if (this.picker) {
-      const entries = this.picker.sessions
-      const start = Math.min(Math.max(0, this.picker.selected - capacity + 1), Math.max(0, entries.length - capacity))
-      const shown = entries.slice(start, start + capacity)
-      return [
-        `  ${ANSI.muted}SESSIONS${ANSI.reset}  ${ANSI.dim}· ${entries.length} persisted${ANSI.reset}`,
-        '',
-        ...shown.map((entry, index) => {
-          const marker = index + start === this.picker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          const title = entry.title?.title || (entry.titleLoading ? '⠋ 加载会话中…' : '新会话')
-          const shortId = entry.header.id.length > 8 ? entry.header.id.slice(0, 8) : entry.header.id
-          const time = formatTime(entry.header.createdAt)
-          return `${marker}  ${ANSI.blueSoft}${truncateWidth(safe(title), Math.max(20, columns - 36))}${ANSI.reset}  ${ANSI.dim}${shortId} · ${time}${ANSI.reset}`
-        }),
-        '',
-        `  ${ANSI.muted}↑↓ navigate  ·  Enter resume  ·  Esc close${ANSI.reset}`
-      ]
-    }
-    if (this.filePicker) {
-      return this.filePickerRows(columns, capacity)
-    }
+    if (this.help) return renderHelpPanel(columns, ANSI)
+    if (this.mcpPanel) return renderMcpPanel(this.mcpPanel, capacity, ANSI)
+    if (this.questionPanel) return renderQuestionPanel(this.questionPanel, this.currentQuestion(), columns, rows, ANSI)
+    if (this.presetConfirm) return renderPresetConfirm(this.presetConfirm, ANSI)
+    if (this.skillsPanel) return renderSkillsPanel(this.skillsPanel, this.skills ?? [], capacity, columns, ANSI)
+    if (this.menu) return renderMenuPanel(this.menu, capacity, columns, ANSI)
+    if (this.presetPicker) return renderPresetPicker(this.presetPicker, this.presetName, capacity, columns, ANSI)
+    if (this.jobPanel) return renderJobPanel(this.jobPanel, this.selectedJob(), capacity, columns, ANSI)
+    if (this.settingsPicker) return renderSettingsPicker(this.settingsPicker, this.preferences, ANSI)
+    if (this.effortPicker) return renderEffortPicker(this.effortPicker, ANSI)
+    if (this.commandPalette) return renderCommandPalette(this.commandPalette, capacity, columns, ANSI)
+    if (this.historySearch) return renderHistorySearch(this.historySearch, capacity, columns, ANSI)
+    if (this.modelPicker) return renderModelPicker(this.modelPicker, this.ctx.agentDefaultModel.currentSelection(), capacity, columns, ANSI)
+    if (this.variantPicker) return renderVariantPicker(this.variantPicker, this.reasoningEffort ?? 'high', ANSI)
+    if (this.picker) return renderSessionPicker(this.picker, capacity, columns, ANSI)
+    if (this.filePicker) return renderFilePicker(this.filePicker, capacity, columns, ANSI)
     return []
   }
 
-
   inlinePanelRows(columns) {
-    if (this.pendingApproval) {
-      const request = this.pendingApproval.request
-      const choice = this.approvalChoice === 'deny' ? 'deny' : 'allow'
-      const allowMark = choice === 'allow' ? `${ANSI.blue}\x1b[7m Y · allow once \x1b[27m${ANSI.reset}` : `${ANSI.blue}  Y · allow once  ${ANSI.reset}`
-      const denyMark = choice === 'deny' ? `${ANSI.coral}\x1b[7m N · deny \x1b[27m${ANSI.reset}` : `${ANSI.coral}  N · deny  ${ANSI.reset}`
-      return [
-        `${ANSI.coral}│ ! approval needed · ${safe(request.toolName)}${ANSI.reset}`,
-        request.reason ? `${ANSI.coral}│ ${shorten(request.reason, columns - 4)}${ANSI.reset}` : '',
-        ...this.approvalDiffLines(request, columns),
-        `${allowMark}${denyMark}${ANSI.dim}  Esc · deny${ANSI.reset}`,
-        `${ANSI.muted}←→ choose  ·  Enter confirm  ·  y/n also work${ANSI.reset}`
-      ].filter((line) => line !== '')
-    }
-    return []
+    return renderInlineApproval(this.pendingApproval, this.approvalChoice, (req, cols) => this.approvalDiffLines(req, cols), columns, ANSI)
   }
 
   filePickerRows(columns, capacity = 4) {
-    const picker = this.filePicker
-    if (!picker) return []
-    const dirLabel = picker.baseDir ? `${picker.baseDir}/` : '.'
-    const slots = Math.max(2, capacity)
-    const start = Math.min(Math.max(0, picker.selected - slots + 1), Math.max(0, picker.entries.length - slots))
-    const shown = picker.entries.slice(start, start + slots)
-    return [
-      `  ${ANSI.muted}FILES${ANSI.reset} ${ANSI.dim}· @${dirLabel} · ${picker.entries.length} matching${ANSI.reset}`,
-      '',
-      ...shown.map((entry, index) => {
-        const marker = index + start === picker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-        const label = entry.isDir ? `${entry.name}/` : entry.name
-        const color = entry.isDir ? ANSI.blueSoft : ANSI.ink
-        return `${marker}  ${color}${truncateWidth(safe(label), Math.max(30, columns - 10))}${ANSI.reset}`
-      }),
-      '',
-      `  ${ANSI.muted}↑↓ navigate  ·  Enter open/select  ·  Esc up/close${ANSI.reset}`
-    ]
+    return renderFilePicker(this.filePicker, capacity, columns, ANSI)
   }
 
   render() {
