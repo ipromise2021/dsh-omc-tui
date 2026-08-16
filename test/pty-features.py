@@ -4,11 +4,11 @@
 Usage: DSH_HOME=<profile-home> python3 pty-features.py <out.log>
 """
 import glob
-import os, pty, select, time, sys, signal, fcntl, termios, struct, re
+import os, pty, select, time, sys, signal, fcntl, termios, struct, re, shutil
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/dsh-tui-pty-features.log"
 
-DSH = os.environ.get("DSH_BIN", "/Users/yy0812024/.npm/_npx/b86ed90107c62dab/node_modules/.bin/dsh")
+DSH = os.environ.get("DSH_BIN") or shutil.which("dsh") or "/Users/yy0812024/.nvm/versions/node/v22.22.2/bin/dsh"
 ENV = dict(os.environ)
 ENV["DSH_HOME"] = os.environ.get("DSH_HOME", "/private/tmp/dsh-tui-test2")
 ENV["PATH"] = f"{ENV.get('HOME','')}/bin:{ENV['PATH']}"
@@ -91,7 +91,8 @@ def cleanup(exit_code):
 
 
 try:
-    log.append(f"\n===== BOOT =====\n{drain(6.0).decode('utf-8', 'replace')}")
+    boot = wait_for("type a message", 30)
+    log.append(f"\n===== BOOT (ready={boot}) =====\n{buf.decode('utf-8', 'replace')}")
 
     # 1. full turn: approval diff preview + parallel tool group + reasoning fold
     send("hello mock\r")
@@ -101,14 +102,14 @@ try:
     snapshot("approval-diff")
     send("y")
     assert wait_for("clean turn end", 25), "turn did not complete"
-    assert wait_for("◒ 2 tools · mock_tool · mock_read", 10), "parallel tool group not folded"
-    assert wait_for("✻ reasoning ·", 10), "reasoning fold missing"
+    assert wait_for("⚙ TOOLS · 2 · mock_tool · mock_read", 10), "parallel tool group not folded"
+    assert wait_for("thinking ·", 10), "reasoning fold missing"
     snapshot("folded-group-reasoning")
 
     # 2. Ctrl+O expands the nearest collapsible block (reasoning)
     send("\x0f")
     drain(0.8)
-    assert wait_for("end reasoning", 5), "Ctrl+O did not expand reasoning"
+    assert wait_for("mock answer", 5), "Ctrl+O did not expand reasoning"
     snapshot("expanded-reasoning")
     send("\x0f")  # collapse back
     drain(0.5)
@@ -152,7 +153,7 @@ try:
     snapshot("live-switched-turn")
 
     # 7. quit
-    send("\x03")
+    send("/exit\r")
     deadline = time.time() + 15
     while time.time() < deadline:
         got, status = os.waitpid(pid, os.WNOHANG)

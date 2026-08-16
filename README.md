@@ -45,7 +45,8 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 - 问卷交互：模型调用 `ask_user_question` 时在输入区上方打开原生问卷面板；支持数字键单选、空格/数字多选、上下键移动、Tab/Enter 提交、Esc 取消，并识别 `plan-review` 意图。
 - Hook 事件：`⚡ hook · <point> · <dialect>` 调用与结果（`↳ allow · 12ms`）在对话流中展示。
 - `Shift+Tab` 通过 `permissionPresets.set` 持久化切换权限预设（显示值来自 durable `permission/preset` 事件，无 `custom` 闪烁）；命令菜单打开时 `Tab` 只将选中项补全到输入框，`Enter` 才执行命令。
-- 输入编辑：光标移动（←→/Home/End/`Ctrl+A` 行首/`Ctrl+E` 行尾/`Alt+←→` 按词）、退格/Delete、`Ctrl+J` 换行、`↑↓` 历史、粘贴（bracketed paste）、`Ctrl+U` 清空、`Ctrl+F` 历史搜索面板、`Ctrl+G` 用 `$EDITOR` 编辑、`Ctrl+P` 命令面板；输入历史持久化到 `$DSH_HOME/dsh-tui/history.jsonl`。
+- 输入编辑：光标移动（←→/Home/End/`Ctrl+A` 行首/`Ctrl+E` 行尾/`Alt+←→` 按词）、退格/Delete、`Ctrl+J` 换行、`↑↓` 历史（仅光标在行首/行尾时切换；中段按 ↑↓ 移动光标行）、粘贴（bracketed paste，超长内容输入框内部滚动跟随光标）、`Ctrl+U` 清空、`Ctrl+F` 历史搜索面板、`Ctrl+G` 用 `$EDITOR` 编辑、`Ctrl+P` 命令面板；输入历史持久化到 `$DSH_HOME/dsh-tui/history.jsonl`。
+- `!` bash 模式（参考 Claude Code）：输入 `!` 时输入框与上下两条规则线变为绿色，`Enter` 在本地 shell 直接执行命令，输出与退出码以操作日志形式回显（多行输出逐行渲染，60s 超时，最多回显 12 行）。
 - CLI 使用普通终端缓冲区，不进入备用屏幕。文本拖拽、复制和滚轮由终端模拟器原生处理；启动时会显式关闭常见鼠标报告模式，避免 VS Code 等终端把滚轮伪装为 `↑/↓` 而切换输入历史；非多行输入时 `↑/↓` 切换历史提示词，多行输入时 `↑/↓` 移动光标；`Ctrl+O` 负责展开/收起区域。
 - 所有面板（命令菜单/模型选择/会话选择/历史搜索/命令面板/effort/问卷/帮助/审批）统一显示在输入框下方，输入框始终可见。
 - 命令：`/help`、`/clear`（仅清视图）、`/model`（模型选择器，经 `ctx.llm.listProviders/listModels` 列出；选择后**当前会话立即生效**——经 `agent/request` waterfall 原位覆盖 provider/model，同时 `agentDefaultModel.saveSelection` 持久化为新会话默认）、`/preset`（空会话选择官方 agent preset，首轮后锁定）、`/effort`（档位来自 `resolveModelInfo` 的 `reasoning.efforts`，随模型/提供商动态）、`/jobs`（查看后台长任务）、`/resume`（会话选择器，仅列当前目录、按最近使用排序，恢复时重建记录的 preset）、`/recap`（本地统计当前会话轮次、工具、耗时和最近提问，不调用模型）、`/export`（导出当前转录为 Markdown 到 cwd）、`/steer`（运行中不中断地纠正方向）、`/mcp`（展示 profile 中配置的 MCP 服务器）、`/hooks`（展示 hook 桥接）、`/exit`；`/compact`、`/goal`、`/feedback`、`/plan` 等走 Harness 官方 `ctx.commands.execute`。
@@ -62,13 +63,14 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `Enter` | 发送（命令菜单打开时执行选中项） |
 | `Ctrl+J` | 输入内换行 |
 | `Ctrl+C` | 运行中中断；空闲时退出 |
-| `Esc` | 运行中中断当前回合；空闲时关闭面板/清空 `/` 开头输入/清除选区 |
+| `Esc` | 运行中中断当前回合；空闲时清空输入/关闭面板/清除选区 |
 | `Ctrl+O` | 全部展开/全部收起推理全文与并行工具组 |
 | `Ctrl+A` / `Ctrl+E` | 光标跳到行首 / 行尾 |
 | `Ctrl+K` | 删除光标到当前行末尾的内容 |
 | `Alt+← →` | 按词跳转光标 |
 | `Ctrl+G` | 用 `$EDITOR` 编辑输入行 |
-| `Ctrl+F` | 输入历史搜索 |
+| `Ctrl+F` / `Ctrl+R` | 输入历史搜索 |
+| `Ctrl+W` / `Alt+Backspace` | 删除光标前一个词 |
 | `Ctrl+P` | 命令面板（过滤并运行任意命令/skill） |
 | `Shift+Tab` | 切换权限模式 |
 | `/jobs` 面板 | `↑↓` 选择；`Enter`/`Tab` 读取输出；`k` 取消；`r` 刷新；任务状态变化自动刷新；`Esc` 关闭 |
@@ -81,6 +83,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `← →` / `Home` / `End` | 移动光标 |
 | 鼠标 | 完全由终端模拟器处理文本选择、复制和滚轮 |
 | `PgUp` / `PgDn` | 滚动回看 |
+| `!` | bash 模式：输入框与规则线变绿，`Enter` 本地执行 shell 命令并回显输出 |
 | `/` | 命令菜单（继续输入过滤） |
 | `?` | 快捷键帮助 |
 | `Ctrl+U` | 清空输入 |

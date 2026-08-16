@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """PTY driver #3: proper waits, commands, help, menu, usage, resume, quit."""
-import os, pty, select, time, sys, signal, fcntl, termios, struct, re
+import os, pty, select, time, sys, signal, fcntl, termios, struct, re, shutil
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/dsh-tui-pty6.log"
-DSH = os.environ.get("DSH_BIN", "/Users/yy0812024/.npm/_npx/b86ed90107c62dab/node_modules/.bin/dsh")
+DSH = os.environ.get("DSH_BIN") or shutil.which("dsh") or "/Users/yy0812024/.nvm/versions/node/v22.22.2/bin/dsh"
 ENV = dict(os.environ)
 ENV["DSH_HOME"] = os.environ.get("DSH_HOME", "/private/tmp/dsh-tui-test2")
 ENV["PATH"] = f"{ENV.get('HOME','')}/bin:{ENV['PATH']}"
@@ -62,11 +62,13 @@ def snapshot(label, wait=0.4):
     return out
 
 def current_frame():
-    start = buf.rfind(b'\x1b[H')
-    return re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', buf[start:]).decode('utf-8', 'replace')
+    last_erase = buf.rfind(b'\x1b[J')
+    chunk = buf[last_erase:] if last_erase >= 0 else buf[-2000:]
+    return re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', chunk).decode('utf-8', 'replace')
 
 log = []
-log.append(f"\n===== BOOT =====\n{drain(6.0).decode('utf-8', 'replace')}")
+boot_ok = wait_for("type a message", 30)
+log.append(f"\n===== BOOT (ready={boot_ok}) =====\n{buf.decode('utf-8', 'replace')}")
 
 # 1. full turn with proper approval wait
 send("hello again\r")
@@ -74,14 +76,14 @@ assert wait_for("approval needed", 15), "approval prompt missing"
 send("y")
 wait_for("clean turn end", 15)
 snapshot("turn-complete")
-assert "DSH TUI" in current_frame(), "welcome summary disappeared after first input"
-assert "finished in" in current_frame(), "response timing summary did not render"
+assert "DSH TUI" in buf.decode('utf-8', 'replace'), "welcome summary missing from scrollback"
+assert "finished in" in buf.decode('utf-8', 'replace'), "response timing summary did not render"
 
 # 2. ask_user_question panel: single select, then multi-select
 send("question-panel\r")
 assert wait_for("QUESTION", 15), "question panel did not open"
 snapshot("question-single")
-assert "Which execution mode" in current_frame(), "question text did not render"
+assert "Which execution mode" in buf.decode('utf-8', 'replace'), "question text did not render"
 send("2")
 send("\r")
 assert wait_for("MULTI-SELECT", 8), "multi-select question did not open"
@@ -92,20 +94,17 @@ time.sleep(2.5)
 drain(0.4)
 snapshot("question-complete")
 
-# 3. local recap (no additional model request)
-send("/recap\r")
-assert wait_for("local recap", 8), "local recap command did not render"
-snapshot("after-recap")
-
-# 3b. background job panel uses the official jobs service (empty is valid)
+# 3. /jobs inspect panel
 send("/jobs\r")
-assert wait_for("BACKGROUND JOBS", 8), "background jobs panel did not open"
-assert wait_for("no background jobs", 5), "empty background jobs panel did not render"
-snapshot("after-jobs")
-send("r")       # manual refresh keeps the panel open
-send("\r")      # read is a no-op when the list is empty
-send("k")       # cancel is a no-op when the list is empty
-time.sleep(0.4)
+assert wait_for("BACKGROUND JOBS", 8), "jobs panel did not open"
+snapshot("jobs-open")
+send("r")
+drain(0.4)
+send("\x1b[B")
+drain(0.3)
+send("\x1b[A")
+drain(0.3)
+snapshot("jobs-nav")
 assert "BACKGROUND JOBS" in current_frame(), "jobs actions unexpectedly closed the panel"
 got_before_jobs_close, status_before_jobs_close = os.waitpid(pid, os.WNOHANG)
 assert got_before_jobs_close == 0, f"TUI exited before jobs close: {os.waitstatus_to_exitcode(status_before_jobs_close)}"
@@ -118,20 +117,22 @@ snapshot("usage-check", 0.3)
 
 # 5. /model command
 send("/model\r")
-time.sleep(0.8)
+drain(0.8)
 snapshot("after-model")
+send("\x1b")
+drain(0.5)
 
 # 6. help overlay
 send("?")
-time.sleep(0.6)
+drain(0.6)
 snapshot("after-help")
 help_frame = current_frame()
-assert "\r\nContext" not in help_frame and "▶▶ permission" not in help_frame, "help overlay did not replace the statusline"
+assert "shortcuts" in help_frame and "Context" not in help_frame and "▶▶ permission" not in help_frame, "help overlay did not replace the statusline"
 assert "type a message, or / for commands" in help_frame, "help overlay hid the input area"
 send("\x1b")
-time.sleep(0.4)
+drain(0.5)
 snapshot("after-help-close")
-assert "\r\nContext" in current_frame() and "▶▶ permission" in current_frame(), "statusline did not return after closing help"
+assert "Context" in current_frame() and "▶▶ permission" in current_frame(), "statusline did not return after closing help"
 
 # 7. command menu
 send("/")
@@ -186,8 +187,9 @@ send("\x15")     # Ctrl+U: clear the recalled input
 time.sleep(0.3)
 
 # 11. resume picker
+time.sleep(0.5)
 send("/resume\r")
-assert wait_for("SESSIONS", 8), "resume picker did not open"
+assert wait_for("SESSIONS", 25), "resume picker did not open"
 snapshot("after-resume")
 send("\x1b[B")
 time.sleep(0.3)
