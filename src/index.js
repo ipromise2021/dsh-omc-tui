@@ -28,8 +28,9 @@ const THEMES = {
     muted: '\x1b[38;5;245m',      // Neutral slate #8a8a8a
     rule: '\x1b[38;5;238m',       // Subtle sleek dark divider line
     coral: '\x1b[38;5;203m',      // Warning coral
+    pink: '\x1b[38;5;213m',       // Bright lavender pink for active option #ff87ff
     bash: '\x1b[38;5;108m',       // Deeper muted sage green #87af87
-    bar: '\x1b[38;5;237m',        // Context meter track
+    bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds #626262
     barFill: '\x1b[38;5;108m',    // Deeper sage green meter fill
     userBg: '\x1b[48;5;237m'
   },
@@ -48,8 +49,9 @@ const THEMES = {
     muted: '\x1b[38;5;245m',      // Lighter neutral
     rule: '\x1b[38;5;240m',       // Lighter divider
     coral: '\x1b[38;5;210m',      // Lighter warning coral
+    pink: '\x1b[38;5;213m',       // Bright lavender pink
     bash: '\x1b[38;5;108m',       // Deeper muted sage green
-    bar: '\x1b[38;5;240m',        // Lighter track
+    bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds
     barFill: '\x1b[38;5;80m',     // Lighter blue fill
     userBg: '\x1b[48;5;236m'      // Slightly lighter bg
   },
@@ -238,7 +240,7 @@ function sessionTitle(events) {
 function padWidth(text, max) {
   const visible = visibleOf(text)
   const width = widthOf(visible)
-  if (width > max) return `${truncateWidth(visible, max)}${ANSI.reset}`
+  if (width >= max) return text
   return `${text}${' '.repeat(max - width)}`
 }
 
@@ -304,6 +306,7 @@ function shorten(text, size = 110) {
 }
 
 function formatTokens(value) {
+  if (value >= 1000000) return `${(value / 1000000).toFixed(value % 1000000 === 0 ? 0 : 1)}m`
   if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k`
   return String(value)
 }
@@ -544,11 +547,16 @@ class TuiApp {
     }
 
     this.onData = (chunk) => this.handleInput(chunk)
+    let resizeTimer
     this.onResize = () => {
-      this.lastFooterHeight = 0
-      this.lastCursorRowInFooter = 0
-      this.scheduleRender()
+      clearTimeout(resizeTimer)
+      resizeTimer = setTimeout(() => {
+        if (!this.terminalOpen) return
+        this.clearFooter()
+        this.render()
+      }, 40)
     }
+    this.disposers.push(() => clearTimeout(resizeTimer))
     this.loadSystemEnv()
   }
 
@@ -814,7 +822,11 @@ class TuiApp {
     const wasActive = this.active
     this.active = status === 'running'
     if (this.active && !wasActive && !this.animationTimer) {
-      this.animationTimer = setInterval(() => this.scheduleRender(), 80)
+      this.animationTimer = setInterval(() => {
+        const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.skillsPanel
+        if (hasOverlay) return
+        this.scheduleRender()
+      }, 100)
     }
     if (!this.active && this.animationTimer) {
       clearInterval(this.animationTimer)
@@ -889,7 +901,10 @@ class TuiApp {
             this.commitUnprintedEvents()
             const columns = Math.max(60, process.stdout.columns || 100)
             const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
-            const headerLines = [`${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`]
+            const headerLines = [
+              `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`,
+              ''
+            ]
             if (this.streaming.reasoning) {
               const rlines = this.streaming.reasoning.split('\n').length
               const ms = this.reasoningAt ? Date.now() - this.reasoningAt : undefined
@@ -1020,15 +1035,20 @@ class TuiApp {
   }
 
   onTurnEnd(reason) {
+    this.active = false
+    this.streaming = { text: '', reasoning: '', tool: undefined }
+    this.streamBuffer = ''
+    this.reasoningAt = undefined
+    this.message = ''
+    if (this.animationTimer) {
+      clearInterval(this.animationTimer)
+      this.animationTimer = undefined
+    }
     if (!reason) return
     if (reason.kind === 'aborted') {
       this.log('denied', 'interrupted')
-      this.message = ''
     } else if (reason.kind === 'error') {
       this.log('error', `${reason.error.code}: ${reason.error.message}`)
-      this.message = ''
-    } else if (reason.kind === 'completed') {
-      this.message = ''
     }
   }
 
@@ -1384,6 +1404,8 @@ class TuiApp {
     const panel = this.questionPanel
     if (!panel) return
     this.questionPanel = undefined
+    this.input = ''
+    this.cursor = 0
     panel.abortCleanup?.()
     if (error) panel.reject(error)
     else panel.resolve(answer)
@@ -1399,7 +1421,8 @@ class TuiApp {
     const question = this.currentQuestion()
     if (!panel || !question || !Array.isArray(question.options) || !question.options[index]) return
     panel.selected = index
-    if (question.multiSelect) {
+    const isMulti = !!(question.multiSelect || question.multi_select)
+    if (isMulti) {
       if (panel.selectedOptions.has(index)) panel.selectedOptions.delete(index)
       else panel.selectedOptions.add(index)
     } else {
@@ -1435,6 +1458,19 @@ class TuiApp {
     if (!panel || !question) return
     if (value === '\x1b' || value === '\x03') {
       this.finishQuestion(new Error('user cancelled the question'))
+      this.active = false
+      this.streaming = { text: '', reasoning: '', tool: undefined }
+      this.streamBuffer = ''
+      this.reasoningAt = undefined
+      this.message = ''
+      if (this.animationTimer) {
+        clearInterval(this.animationTimer)
+        this.animationTimer = undefined
+      }
+      if (this.agent?.status === 'running') {
+        this.agent.cancel({ kind: 'user' })
+      }
+      this.scheduleRender()
       return
     }
     if (value === '\r' || value === '\t') {
@@ -1445,7 +1481,7 @@ class TuiApp {
       this.toggleQuestionOption(panel.selected)
       return
     }
-    if (value.startsWith('\x1b[')) {
+    if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) {
       this.onEscapeSequence(value)
       return
     }
@@ -2505,7 +2541,10 @@ class TuiApp {
         break
       }
     }
-    const calls = events.slice(start + 1).filter((event) => event.type === 'tool/call')
+    let calls = start >= 0 ? events.slice(start + 1).filter((event) => event.type === 'tool/call') : []
+    if (calls.length === 0) {
+      calls = events.filter((event) => event.type === 'tool/call').slice(-10)
+    }
     const tools = [...new Set(calls.map((event) => String(event.data?.name ?? '').trim()).filter(Boolean))]
     const skills = []
     for (const event of calls) {
@@ -2541,9 +2580,9 @@ class TuiApp {
             const resultId = event.data?.callId ?? event.data?.id
             return callId === undefined || resultId === undefined || resultId === callId
           })
-          const state = result ? (result.data?.error ? '!' : '✓') : (this.active ? '…' : '')
+          const state = result ? (result.data?.error ? '!' : '✓') : (this.active ? '…' : '✓')
           return `${String(call.data?.name ?? 'tool')}${state}`
-        })
+        }).reverse()
       })(),
       skills: [...new Set(skills)].slice(-2),
       jobs: this.jobSnapshots().filter((job) => job.status === 'running' || job.status === 'stopping')
@@ -2664,11 +2703,23 @@ class TuiApp {
         await this.ctx.sessions.flush(previous.agent.session).catch(() => {})
         await previous.dispose().catch(() => {})
       }
+      this.reasoningBlocks = []
       this.streaming = { text: '', reasoning: '', tool: undefined }
+      this.reasoningAt = undefined
+      for (const event of agent.session.events) this.onSessionEvent(agent.session, event)
+      this.streaming = { text: '', reasoning: '', tool: undefined }
+      this.reasoningAt = undefined
+      this.message = ''
       this.usage = foldUsage(agent.session.events)
       this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
       this.viewClearedSeq = 0
-      this.log('ok', `resumed session ${record.header.id.slice(-4)}`, '/resume')
+
+      const columns = Math.max(60, process.stdout.columns || 100)
+      const pastRows = this.formatEvents(agent.session.events, columns)
+      if (pastRows.length > 0) this.commitToScrollback(pastRows)
+      this.lastCommittedSeq = agent.session.events[agent.session.events.length - 1]?.seq ?? 0
+
+      this.log('ok', `resumed session ${record.header.id.slice(0, 8)}`, '/resume')
       this.touchMru(record.header.id)
     } catch (error) {
       this.log('error', error instanceof Error ? error.message : String(error), '/resume')
@@ -2683,8 +2734,18 @@ class TuiApp {
       this.pumpApprovals()
       return
     }
+    this.active = false
+    this.streaming = { text: '', reasoning: '', tool: undefined }
+    this.streamBuffer = ''
+    this.reasoningAt = undefined
+    this.message = ''
+    if (this.animationTimer) {
+      clearInterval(this.animationTimer)
+      this.animationTimer = undefined
+    }
     if (this.agent?.status === 'running') {
       this.agent.cancel({ kind: 'user' })
+      this.scheduleRender()
       return
     }
     void this.quit(0)
@@ -3478,16 +3539,27 @@ class TuiApp {
   }
 
   onEscapeSequence(value) {
-    if (this.questionPanel && (value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[B' || value === '\x1bOB')) {
-      const question = this.currentQuestion()
-      const optionCount = Array.isArray(question?.options) ? question.options.length : 0
-      if (optionCount > 0) {
-        const delta = (value === '\x1b[A' || value === '\x1bOA') ? -1 : 1
+    if (this.questionPanel) {
+      const isVertical = value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[B' || value === '\x1bOB'
+      const isHorizontal = value === '\x1b[C' || value === '\x1bOC' || value === '\x1b[D' || value === '\x1bOD'
+      if (isVertical || isHorizontal) {
         const panel = this.questionPanel
-        panel.selected = (panel.selected + delta + optionCount) % optionCount
-        this.scheduleRender()
+        if (isHorizontal && panel.questions.length > 1) {
+          const delta = (value === '\x1b[D' || value === '\x1bOD') ? -1 : 1
+          panel.index = (panel.index + delta + panel.questions.length) % panel.questions.length
+          panel.selected = 0
+          this.scheduleRender()
+          return
+        }
+        const question = this.currentQuestion()
+        const optionCount = Array.isArray(question?.options) ? question.options.length : 0
+        if (optionCount > 0) {
+          const delta = (value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[D' || value === '\x1bOD') ? -1 : 1
+          panel.selected = (panel.selected + delta + optionCount) % optionCount
+          this.scheduleRender()
+        }
+        return
       }
-      return
     }
     if (this.effortPicker && (value === '\x1b[D' || value === '\x1bOD' || value === '\x1b[C' || value === '\x1bOC')) {
       const delta = (value === '\x1b[D' || value === '\x1bOD') ? -1 : 1
@@ -3799,12 +3871,9 @@ class TuiApp {
           const count = calls.filter((call) => call.data.name === name).length
           return count > 1 ? `${name} ×${count}` : name
         }).join(' · ')
-        push(ANSI.dim, `⚙ TOOLS · ${calls.length} · ${names}`)
+        push(ANSI.dim, `  ⚙ TOOLS · ${calls.length} · ${names}`)
+        rows.push('')
         return
-      }
-      if (calls.length > 1) {
-        const label = `${calls.length} TOOLS`
-        if (this.expandedKeys.has(key)) push('', `${ANSI.muted}╭─ ${ANSI.blueSoft}${label}${ANSI.muted} · Ctrl+O to collapse ─${'─'.repeat(Math.max(0, contentWidth - label.length - 28))}╮`)
       }
       for (const event of group) {
         if (event.type === 'tool/call') {
@@ -3858,12 +3927,11 @@ class TuiApp {
           }
         }
       }
-      if (calls.length > 1 && this.expandedKeys.has(key)) {
-        push('', `  ${ANSI.muted}╰${'─'.repeat(Math.max(0, contentWidth - 4))}╯`)
-      }
+      rows.push('')
     }
 
     let group = []
+    let turnHeaderPrinted = false
     const isToolEvent = (type) => type === 'tool/call' || type === 'tool/result' || type === 'approval/asked' || type === 'approval/decided' || type === 'hook/invoked' || type === 'hook/result'
     const isStrongEvent = (type) => type === 'user/message' || type === 'assistant/message' || type === 'turn/start' || type === 'turn/end'
     const flushGroup = () => {
@@ -3884,7 +3952,12 @@ class TuiApp {
       renderGroup(group)
       group = []
       switch (event.type) {
+        case 'turn/start': {
+          turnHeaderPrinted = false
+          break
+        }
         case 'user/message': {
+          turnHeaderPrinted = false
           if (event.data.source?.kind !== 'user') break
           push(ANSI.blue, `${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
           for (const block of event.data.content ?? []) {
@@ -3892,7 +3965,7 @@ class TuiApp {
               const ref = block.attachment
               const size = formatImageBytes(ref?.bytes ?? 0)
               const dimensions = ref?.width && ref?.height ? ` · ${ref.width}×${ref.height}` : ''
-              push(ANSI.dim, `◱ image · ${size}${dimensions}`)
+              push(ANSI.dim, `  ◱ image · ${size}${dimensions}`)
             } else if (block.type === 'text') {
               const blockWidth = Math.max(24, contentWidth)
               const innerWidth = blockWidth - 2
@@ -3908,7 +3981,7 @@ class TuiApp {
           }
           const skillCount = this.skills?.length || 0
           if (skillCount > 0) {
-            push(ANSI.dim, `◫ 上下文注入 · skill-catalog (${skillCount} skills)`)
+            push(ANSI.dim, `  ◫ 上下文注入 · skill-catalog (${skillCount} skills)`)
           }
           rows.push('')
           break
@@ -3918,7 +3991,11 @@ class TuiApp {
           const answerText = fullAnswerText
           const block = this.reasoningBlocks.find((entry) => entry.key === `reason-${event.seq}` || entry.seq === event.seq) || (this.reasoningBlocks.length === 1 ? this.reasoningBlocks[0] : undefined)
           if (!answerText && !block) break
-          push(ANSI.blueSoft, `DSH  ${ANSI.muted}${this.activeModel?.model ?? this.agent?.options?.model ?? ''} · ${formatTime(event.time)}`)
+          if (!turnHeaderPrinted) {
+            turnHeaderPrinted = true
+            push(ANSI.blueSoft, `DSH  ${ANSI.muted}${this.activeModel?.model ?? this.agent?.options?.model ?? ''} · ${formatTime(event.time)}`)
+            rows.push('')
+          }
           if (block) {
             const ms = block.ms !== undefined ? ` · ${(block.ms / 1000).toFixed(1)}s` : ''
             if (this.expandedKeys.has(block.key)) {
@@ -3929,7 +4006,7 @@ class TuiApp {
             } else {
               push(ANSI.dim, `  ⚛ thinking · ${block.lines} lines${ms}`)
             }
-            if (answerText) rows.push('')
+            rows.push('')
           }
           if (answerText) {
             const mdRows = this.renderMarkdownRows(answerText, contentWidth, ANSI.answer)
@@ -3937,11 +4014,12 @@ class TuiApp {
               if (r === null) rows.push('')
               else push('', r[0] + r[1])
             }
+            rows.push('')
           }
-          rows.push('')
           break
         }
         case 'turn/end': {
+          turnHeaderPrinted = false
           if (event.data.reason?.kind === 'aborted') push(ANSI.dim, `  ∅ interrupted`)
           else if (event.data.reason?.kind === 'error') {
             const error = event.data.reason.error
@@ -4073,8 +4151,10 @@ class TuiApp {
       ? Math.round((usage.recentInput / usage.contextWindow) * 100)
       : 0
     const meterWidth = 14
-    const filled = Math.min(meterWidth, Math.floor((percent / 100) * meterWidth))
-    const meter = `${(ANSI.barFill ?? ANSI.bash)}${'█'.repeat(filled)}${ANSI.bar}${'░'.repeat(meterWidth - filled)}${ANSI.reset}`
+    const filled = percent > 0 ? Math.min(meterWidth, Math.max(1, Math.floor((percent / 100) * meterWidth))) : 0
+    const meter = filled > 0
+      ? `${(ANSI.barFill ?? ANSI.bash)}${'█'.repeat(filled)}${ANSI.bar}${'░'.repeat(meterWidth - filled)}${ANSI.reset}`
+      : `${ANSI.bar}${'░'.repeat(meterWidth)}${ANSI.reset}`
     // DeepSeek counts cached reads outside `inputTokens`, so cacheRead can
     // exceed input; report the cache-hit ratio instead of a percent of input.
     const cacheTotal = usage.input + usage.cacheRead
@@ -4267,8 +4347,9 @@ class TuiApp {
     
     this.inputMaxRows = Math.max(3, Math.min(10, rows - 10))
     const inputLines = this.inputFrame(columns)
+    const isStreaming = Boolean(this.streaming.reasoning || this.streaming.tool || this.streamBuffer || this.streaming.text)
 
-    if (this.active || this.agent?.status === 'running' || this.streaming.reasoning || this.streaming.tool || this.streamBuffer || this.streaming.text) {
+    if (this.active && (isStreaming || this.reasoningAt) && !this.questionPanel && !this.pendingApproval) {
       lines.push('')
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]
@@ -4348,35 +4429,61 @@ class TuiApp {
       const panel = this.questionPanel
       const question = this.currentQuestion()
       const options = Array.isArray(question?.options) ? question.options : []
-      const optionCapacity = Math.max(1, Math.min(9, rows - 15))
+      const optionCapacity = Math.max(2, Math.min(6, Math.floor((rows - 10) / 2)))
       const start = Math.min(Math.max(0, panel.selected - optionCapacity + 1), Math.max(0, options.length - optionCapacity))
       const shown = options.slice(start, start + optionCapacity)
-      const kind = question?.intent?.kind === 'plan-review'
-        ? 'PLAN REVIEW'
-        : question?.multiSelect ? 'MULTI-SELECT' : 'QUESTION'
-      const header = question?.header ? ` · ${safe(question.header)}` : ''
+      const isMulti = !!(question?.multiSelect || question?.multi_select)
+      const tabs = panel.questions.map((q, qIndex) => {
+        const title = safe(q.header || q.title || q.id || ((q.multiSelect || q.multi_select) ? `多选设置 ${qIndex + 1}` : `单项选择 ${qIndex + 1}`))
+        if (qIndex === panel.index) {
+          return `\x1b[48;5;37m\x1b[38;5;232m\x1b[1m ${title} \x1b[0m`
+        }
+        return `${ANSI.dim}${title}${ANSI.reset}`
+      })
+      tabs.push(`${ANSI.dim}Confirm${ANSI.reset}`)
+      const tabRow = `  ${tabs.join('   ')}`
+
       const lines = [
-        `${ANSI.muted}${kind}${ANSI.reset} ${ANSI.dim}· ${panel.index + 1}/${panel.questions.length}${header}${ANSI.reset}`,
-        `${ANSI.ink}${shorten(safe(question?.question ?? ''), Math.max(30, columns - 4))}${ANSI.reset}`
+        tabRow,
+        '',
+        `  ${ANSI.ink}${ANSI.bold}${shorten(safe(question?.question ?? ''), Math.max(30, columns - 6))}${ANSI.reset}${isMulti ? `  ${ANSI.dim}(select all that apply)${ANSI.reset}` : ''}`,
+        ''
       ]
       if (question?.detail) {
-        const detailLines = wrap(safe(question.detail), Math.max(30, columns - 4)).slice(0, 3)
-        lines.push(...detailLines.map((line) => `${ANSI.dim}${line}${ANSI.reset}`))
+        const detailLines = wrap(safe(question.detail), Math.max(30, columns - 6)).slice(0, 2)
+        lines.push(...detailLines.map((line) => `  ${ANSI.dim}${line}${ANSI.reset}`))
+        lines.push('')
       }
       for (let index = 0; index < shown.length; index++) {
         const option = shown[index]
         const optionIndex = start + index
         const current = optionIndex === panel.selected
         const chosen = panel.selectedOptions.has(optionIndex)
-        const marker = question?.multiSelect ? (chosen ? '▣' : '□') : (chosen ? '●' : '○')
-        const cursor = current ? `${ANSI.blue}>${ANSI.reset}` : ' '
-        const label = shorten(safe(option?.label ?? ''), Math.max(18, columns - 14))
-        const detail = option?.description ? ` ${ANSI.dim}· ${shorten(safe(option.description), Math.max(18, columns - 18))}${ANSI.reset}` : ''
-        lines.push(`${cursor} ${ANSI.blueSoft}${optionIndex + 1}.${ANSI.reset} ${chosen ? ANSI.blue : ANSI.ink}${marker} ${label}${ANSI.reset}${detail}`)
+        const marker = isMulti ? (chosen ? '[x]' : '[ ]') : (chosen ? '(•)' : '( )')
+        const num = `${optionIndex + 1}.`
+        const labelText = safe(option?.label ?? (typeof option === 'string' ? option : ''))
+        if (current) {
+          lines.push(`  ${ANSI.pink ?? '\x1b[38;5;213m'}${num} ${marker} \x1b[48;5;237m ${labelText} \x1b[0m${ANSI.reset}`)
+        } else {
+          lines.push(`  ${ANSI.dim}${num} ${chosen ? (ANSI.blue + marker) : marker}${ANSI.reset} ${ANSI.ink}${labelText}${ANSI.reset}`)
+        }
+        if (option?.description) {
+          const descWrapped = wrap(safe(option.description), Math.max(20, columns - 10)).slice(0, 2)
+          for (const dline of descWrapped) {
+            lines.push(`    ${current ? ANSI.detail : ANSI.dim}${dline}${ANSI.reset}`)
+          }
+        }
       }
-      if (options.length > shown.length) lines.push(`${ANSI.dim}… ${options.length - shown.length} more options${ANSI.reset}`)
-      const numberHint = options.length > 0 ? `1-${Math.min(9, options.length)} ${question?.multiSelect ? 'toggle' : 'select'}` : 'Enter continue'
-      lines.push(`${ANSI.muted}↑↓ move  ·  ${numberHint}  ·  Enter or Tab submit  ·  Esc cancel${ANSI.reset}`)
+      if (options.length > shown.length) {
+        lines.push(`  ${ANSI.dim}… ${options.length - shown.length} more options${ANSI.reset}`)
+      }
+      lines.push('')
+      const numberHint = options.length > 0 ? ` · 1-${Math.min(9, options.length)} quick select` : ''
+      const switchHint = panel.questions.length > 1 ? '   ←→ switch' : '   ←→ select'
+      const hint = isMulti
+        ? `  ${ANSI.muted}⇆ tab${switchHint}   ↑↓ select   enter toggle   esc dismiss${numberHint}${ANSI.reset}`
+        : `  ${ANSI.muted}⇆ tab${switchHint}   ↑↓ select   enter select   esc dismiss${numberHint}${ANSI.reset}`
+      lines.push(hint)
       return lines
     }
     if (this.presetConfirm) {
@@ -4609,14 +4716,17 @@ class TuiApp {
       const start = Math.min(Math.max(0, this.picker.selected - capacity + 1), Math.max(0, entries.length - capacity))
       const shown = entries.slice(start, start + capacity)
       return [
-        `${ANSI.muted}SESSIONS${ANSI.reset}  ${ANSI.dim}· ${entries.length} persisted${ANSI.reset}`,
+        `  ${ANSI.muted}SESSIONS${ANSI.reset}  ${ANSI.dim}· ${entries.length} persisted${ANSI.reset}`,
+        '',
         ...shown.map((entry, index) => {
           const marker = index + start === this.picker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          const title = entry.title?.title || `${entry.header.cwd?.split('/').pop() || 'session'} · ${entry.header.id.slice(-4)}`
+          const title = entry.title?.title || '新会话'
+          const shortId = entry.header.id.length > 8 ? entry.header.id.slice(0, 8) : entry.header.id
           const time = formatTime(entry.header.createdAt)
-          return `${marker} ${ANSI.blueSoft}${truncateWidth(safe(title), Math.max(30, columns - 30))}${ANSI.reset} ${ANSI.dim}${time}${ANSI.reset}`
+          return `${marker}  ${ANSI.blueSoft}${truncateWidth(safe(title), Math.max(20, columns - 36))}${ANSI.reset}  ${ANSI.dim}${shortId} · ${time}${ANSI.reset}`
         }),
-        `${ANSI.muted}↑↓ navigate  ·  Enter resume  ·  Esc close${ANSI.reset}`
+        '',
+        `  ${ANSI.muted}↑↓ navigate  ·  Enter resume  ·  Esc close${ANSI.reset}`
       ]
     }
     if (this.filePicker) {
