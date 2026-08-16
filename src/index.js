@@ -37,7 +37,7 @@ import {
 } from './renderer/index.js'
 
 export const name = 'dsh-tui-runner'
-export const inject = ['agentDefaultModel', 'agentPresets', 'agents', 'sessions', 'permissionPresets', 'commands', 'sessionPersistence', 'sessionQuery', 'skills', 'attachments', 'llm', 'userQuestions', 'jobs', 'settings', 'cmdlineArgs']
+export const inject = ['agentDefaultModel', 'agentPresets', 'agents', 'permissionPresets', 'commands', 'sessionQuery', 'settings']
 
 import {
   userMessage,
@@ -204,17 +204,23 @@ class TuiApp {
       }, 40)
     }
     this.disposers.push(() => clearTimeout(resizeTimer))
-    this.loadSystemEnv()
   }
 
-  loadSystemEnv() {
+  get userQuestions() { return this.ctx.get('userQuestions') }
+  get skillsService() { return this.ctx.get('skills') }
+  get jobsService() { return this.ctx.get('jobs') }
+  get attachmentsService() { return this.ctx.get('attachments') }
+  get llmService() { return this.ctx.get('llm') }
+  get sessionsService() { return this.ctx.get('sessions') }
+
+  async loadSystemEnv() {
     const home = process.env.HOME || homedir() || ''
     if (!home) return
     const files = [
-      join(home, '.zprofile'),
-      join(home, '.zshrc'),
       join(home, '.dsh', '.env'),
-      join(home, '.dsh', 'profiles', 'tui', '.env')
+      join(home, '.dsh', 'profiles', 'tui', '.env'),
+      join(home, '.zprofile'),
+      join(home, '.zshrc')
     ]
     for (const file of files) {
       try {
@@ -259,6 +265,7 @@ class TuiApp {
 
     try {
       // 2. Parallel background data loading
+      void this.loadSystemEnv()
       const launcherArgs = this.ctx.get('cmdlineArgs')?.get?.() ?? []
       const continueLast = launcherArgs.includes('-c') || launcherArgs.includes('--continue') || process.argv.includes('-c') || process.argv.includes('--continue')
 
@@ -314,13 +321,13 @@ class TuiApp {
       this.disposers.push(this.ctx.on('skills/change', () => {
         void this.refreshSkills()
       }))
-      if (this.ctx.userQuestions?.registerProvider) {
-        this.disposers.push(this.ctx.userQuestions.registerProvider({
+      if (this.userQuestions?.registerProvider) {
+        this.disposers.push(this.userQuestions.registerProvider({
           ask: (request) => this.openQuestion(request)
         }))
       }
-      if (typeof this.ctx.jobs?.onJobsChanged === 'function') {
-        this.disposers.push(this.ctx.jobs.onJobsChanged(() => {
+      if (typeof this.jobsService?.onJobsChanged === 'function') {
+        this.disposers.push(this.jobsService.onJobsChanged(() => {
           if (this.jobPanel) void this.refreshJobsPanel()
           else this.scheduleRender()
         }))
@@ -449,7 +456,7 @@ class TuiApp {
     if (this.agent?.session) {
       try {
         await Promise.race([
-          this.ctx.sessions?.flush?.(this.agent.session),
+          this.sessionsService?.flush?.(this.agent.session),
           new Promise((resolve) => setTimeout(resolve, 500))
         ])
       } catch {}
@@ -492,7 +499,7 @@ class TuiApp {
       this.streaming = { text: '', reasoning: '', tool: undefined }
       this.message = ''
       this.lastQueuedText = undefined
-      void this.ctx.sessions.flush(this.agent.session).catch(() => {})
+      void this.sessionsService?.flush?.(this.agent.session)?.catch?.(() => {})
     }
     this.scheduleRender()
   }
@@ -909,7 +916,7 @@ class TuiApp {
         await writeFile(filePath, image.data)
       } catch {}
     }
-    const attachments = this.ctx.attachments
+    const attachments = this.attachmentsService
     let ref
     if (typeof attachments?.validateImage === 'function' && typeof attachments?.saveImage === 'function') {
       try {
@@ -1218,9 +1225,9 @@ class TuiApp {
     const selection = this.ctx.agentDefaultModel?.currentSelection?.()
     const isDeepSeek = /deepseek/i.test(selection?.provider ?? '') || /deepseek/i.test(selection?.model ?? '')
     let supportsNativeVision = !isDeepSeek
-    if (this.ctx.llm?.resolveModelInfo) {
+    if (this.llmService?.resolveModelInfo) {
       try {
-        const info = await this.ctx.llm.resolveModelInfo(selection?.provider, selection?.model)
+        const info = await this.llmService.resolveModelInfo(selection?.provider, selection?.model)
         if (info?.capabilities && typeof info.capabilities.vision === 'boolean') {
           supportsNativeVision = info.capabilities.vision
         }
@@ -1580,7 +1587,7 @@ class TuiApp {
 
   async openModelPicker() {
     try {
-      const llm = this.ctx.llm ?? this.ctx.get?.('llm')
+      const llm = this.llmService
       const providers = llm?.listProviders?.() ?? []
       const entries = []
       for (const provider of providers) {
@@ -1770,7 +1777,7 @@ class TuiApp {
   jobSnapshots() {
     let remote = []
     try {
-      remote = this.ctx.jobs?.list?.(this.agent) ?? []
+      remote = this.jobsService?.list?.(this.agent) ?? []
     } catch {}
     const local = (this.localBackgroundJobs ?? []).map((job) => ({
       id: job.id,
@@ -1824,7 +1831,7 @@ class TuiApp {
       this.scheduleRender()
       return
     }
-    if (typeof this.ctx.jobs?.read !== 'function') {
+    if (typeof this.jobsService?.read !== 'function') {
       panel.outputJobId = entry.id
       panel.outputError = 'job output reading is not available in this profile'
       panel.output = undefined
@@ -1837,7 +1844,7 @@ class TuiApp {
     panel.output = undefined
     this.scheduleRender()
     try {
-      const result = await this.ctx.jobs.read(entry.id, this.agent)
+      const result = await this.jobsService.read(entry.id, this.agent)
       panel.output = this.jobOutputText(result) || '(no new output)'
       if (result?.job) {
         panel.entries = panel.entries.map((item) => item.id === result.job.id ? result.job : item)
@@ -1868,7 +1875,7 @@ class TuiApp {
       this.scheduleRender()
       return
     }
-    if (typeof this.ctx.jobs?.kill !== 'function') {
+    if (typeof this.jobsService?.kill !== 'function') {
       panel.outputJobId = entry.id
       panel.outputError = 'job cancellation is not available in this profile'
       panel.output = undefined
@@ -1881,7 +1888,7 @@ class TuiApp {
     panel.output = undefined
     this.scheduleRender()
     try {
-      const result = await this.ctx.jobs.kill(entry.id, this.agent, 'cancelled from TUI')
+      const result = await this.jobsService.kill(entry.id, this.agent, 'cancelled from TUI')
       const outcome = result?.outcome === 'already-finished' ? 'already finished' : 'cancellation requested'
       panel.output = `${outcome} · ${entry.id}`
       if (result?.job) {
@@ -1958,7 +1965,7 @@ class TuiApp {
   }
 
   planModeService() {
-    return this.agent?.ctx?.get?.('planMode') ?? this.ctx.planMode
+    return this.agent?.ctx?.get?.('planMode') ?? this.ctx.get?.('planMode')
   }
 
   async togglePlanMode() {
@@ -2082,7 +2089,7 @@ class TuiApp {
       this.attachRequestOverride(agent)
       if (previous) {
         await Promise.race([
-          this.ctx.sessions.flush(previous.agent.session),
+          this.sessionsService?.flush?.(previous.agent.session),
           new Promise((resolve) => setTimeout(resolve, 500))
         ]).catch(() => {})
         try {
@@ -2165,10 +2172,10 @@ class TuiApp {
   async refreshSkills() {
     if (!this.agent) return
     try {
-      const skills = await this.ctx.skills.list({
+      const skills = await (this.skillsService?.list?.({
         cwd: this.agent.session.header.cwd ?? process.cwd(),
         scope: this.agent
-      })
+      }) ?? [])
       this.skills = skills
         .filter((skill) => skill.invocation?.userInvocable !== false)
         .map((skill) => ({
