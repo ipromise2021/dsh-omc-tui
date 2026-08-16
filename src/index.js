@@ -884,7 +884,7 @@ class TuiApp {
               const rlines = this.streaming.reasoning.split('\n').length
               const ms = this.reasoningAt ? Date.now() - this.reasoningAt : undefined
               const msStr = ms !== undefined ? ` · ${(ms / 1000).toFixed(1)}s` : ''
-              headerLines.push(`  ${ANSI.dim}✻ thinking · ${rlines} lines${msStr}${ANSI.reset}`)
+              headerLines.push(`  ${ANSI.dim}⚛ thinking · ${rlines} lines${msStr}${ANSI.reset}`)
               headerLines.push('')
               this.reasoningBlocks.unshift({
                 key: `reason-stream-${event.seq || Date.now()}`,
@@ -3861,12 +3861,12 @@ class TuiApp {
           if (block) {
             const ms = block.ms !== undefined ? ` · ${(block.ms / 1000).toFixed(1)}s` : ''
             if (this.expandedKeys.has(block.key)) {
-              push(ANSI.dim, `  ✻ thinking · ${block.lines} lines${ms}`)
+              push(ANSI.dim, `  ⚛ thinking · ${block.lines} lines${ms}`)
               for (const line of wrap(block.text, contentWidth - 4)) {
                 push(ANSI.detail, `    ${line}`)
               }
             } else {
-              push(ANSI.dim, `  ✻ thinking · ${block.lines} lines${ms}`)
+              push(ANSI.dim, `  ⚛ thinking · ${block.lines} lines${ms}`)
             }
             if (answerText) rows.push('')
           }
