@@ -91,12 +91,12 @@ send("/resume\r")
 assert wait_for("SESSIONS", 25), "resume picker did not open"
 snapshot("after-resume")
 send("\r")   # resume first (most recent) session
-time.sleep(2.5)
+drain(4.0)
 snapshot("after-resume-enter")
 
 # resize back to wide
 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
-time.sleep(0.5)
+drain(1.0)
 snapshot("back-to-wide")
 
 # quit
@@ -104,12 +104,13 @@ send("/exit\r")
 code = "timeout"
 deadline = time.time() + 15
 while time.time() < deadline:
+    drain(0.2)
     got, status = os.waitpid(pid, os.WNOHANG)
     if got == pid:
         code = os.waitstatus_to_exitcode(status)
         break
-    time.sleep(0.2)
 if code == "timeout":
+    snapshot("timeout-state")
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -123,3 +124,4 @@ except OSError:
 with open(OUT, "w") as f:
     f.write("".join(log))
 print("exit code:", code)
+assert code == 0, f"Process exited with {code}"

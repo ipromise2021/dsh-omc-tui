@@ -517,7 +517,8 @@ class TuiApp {
     this.activityIndex = -1
     this.activityAt = 0
     this.idleIndex = -1
-    this.idleAt = 0
+    this.statusRowsCache = undefined
+    this.sessionTitleCache = new Map() // sessionId -> Title object
     this.renderTimer = undefined
     this.renderPending = false
     this.animationTimer = undefined
@@ -593,9 +594,12 @@ class TuiApp {
       throw new Error('dsh-tui requires an interactive terminal (stdin and stdout must be TTYs)')
     }
     this.probeRequiredServices()
-    await this.ctx.get('loader')?.await()
+    await Promise.all([
+      this.ctx.get('loader')?.await(),
+      this.loadHistory(),
+      this.loadMru()
+    ])
     this.installSettings()
-    await Promise.all([this.loadHistory(), this.loadMru()])
     const selection = this.ctx.agentDefaultModel.currentSelection()
     const requestedPreset = this.ctx.agentPresets.defaultId
     const launcherArgs = this.ctx.get('cmdlineArgs')?.get?.() ?? []
@@ -603,10 +607,22 @@ class TuiApp {
     let resumeRecord
     if (continueLast) {
       const cwd = process.cwd()
-      const records = (await this.ctx.sessionQuery.listSessions())
-        .filter((record) => record.header.cwd === cwd)
-        .sort((a, b) => (this.mru[b.header.id] ?? b.header.createdAt) - (this.mru[a.header.id] ?? a.header.createdAt))
-      resumeRecord = records[0]
+      const mruEntries = Object.entries(this.mru).sort((a, b) => b[1] - a[1])
+      for (const [candidateId] of mruEntries) {
+        try {
+          const snapshot = await this.ctx.sessionQuery.readSession(candidateId)
+          if ((snapshot?.header?.cwd ?? snapshot?.cwd) === cwd) {
+            resumeRecord = snapshot
+            break
+          }
+        } catch {}
+      }
+      if (!resumeRecord) {
+        const records = (await this.ctx.sessionQuery.listSessions())
+          .filter((record) => (record.header?.cwd ?? record.cwd) === cwd)
+          .sort((a, b) => (this.mru[b.header.id] ?? b.header.createdAt) - (this.mru[a.header.id] ?? a.header.createdAt))
+        resumeRecord = records[0]
+      }
       if (!resumeRecord) throw new Error(`no previous Harness session found for ${cwd}; start once without -c`)
     }
     const createOptions = {
@@ -786,7 +802,11 @@ class TuiApp {
 
   async stop() {
     if (this.questionPanel) this.finishQuestion(new Error('user cancelled the question'))
-    for (const dispose of this.disposers.splice(0).reverse()) dispose?.()
+    for (const dispose of this.disposers.splice(0).reverse()) {
+      try {
+        dispose?.()
+      } catch {}
+    }
     if (!this.terminalOpen) return
     this.terminalOpen = false
     clearTimeout(this.renderTimer)
@@ -801,7 +821,10 @@ class TuiApp {
     process.stdout.write(`${TERMINAL_MOUSE_OFF}${ANSI.reset}\x1b[?25h\x1b[?2004l\n`)
     if (this.agent?.session) {
       try {
-        await this.ctx.sessions?.flush?.(this.agent.session)
+        await Promise.race([
+          this.ctx.sessions?.flush?.(this.agent.session),
+          new Promise((resolve) => setTimeout(resolve, 500))
+        ])
       } catch {}
       const sessionId = this.agent.session.header?.id
       if (sessionId) {
@@ -813,7 +836,12 @@ class TuiApp {
   async quit(code = 0) {
     const exit = this.ctx.get('appExit')
     await this.stop()
-    if (exit) exit(code)
+    if (exit) {
+      try {
+        exit(code)
+      } catch {}
+    }
+    process.exit(code)
   }
 
   // ── event adapter ──────────────────────────────────────────────────────
@@ -1921,8 +1949,7 @@ class TuiApp {
         void this.openJobsPanel()
         break
       case 'exit':
-        void this.quit(0)
-        break
+        return void this.quit(0)
       default:
         break
     }
@@ -2400,7 +2427,7 @@ class TuiApp {
       process.stdin.setRawMode(true)
       process.stdin.resume()
     }
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   jobSnapshots() {
@@ -2639,30 +2666,45 @@ class TuiApp {
         .slice(0, 50)
       if (sessions.length === 0) {
         this.log('error', 'no past sessions in this directory', '/resume')
-        this.scheduleRender()
+        this.scheduleRender(true)
         return
       }
-      // Show picker immediately with stub entries (no title yet) so SESSIONS appears fast
-      const stubs = sessions.map((record) => ({ header: record.header, title: undefined }))
-      this.picker = { sessions: stubs, selected: 0, loaded: false }
-      this.scheduleRender()
-      // Enrich with titles in the background
-      const withTitles = (await Promise.all(sessions.map(async (record) => {
-        let title
-        try {
-          title = await this.ctx.sessionQuery?.readTitle(record.header.id)
-        } catch {
-          title = undefined
+      // Show picker immediately with cached titles or placeholder for instant opening
+      const initialEntries = sessions.map((record) => {
+        const cached = this.sessionTitleCache.get(record.header.id)
+        return {
+          header: record.header,
+          title: cached,
+          titleLoading: cached === undefined
         }
-        return { header: record.header, title }
-      }))).filter((entry) => typeof entry.title?.title === 'string' && entry.title.title.trim() !== '')
-      if (this.picker) {
-        this.picker.sessions = withTitles.length > 0 ? withTitles : stubs
-        this.scheduleRender()
+      })
+      this.picker = { sessions: initialEntries, selected: 0, loaded: false }
+      this.scheduleRender(true)
+      // Fetch titles for any sessions not yet in cache asynchronously
+      const uncached = initialEntries.filter((e) => !e.title)
+      if (uncached.length > 0) {
+        void (async () => {
+          await Promise.all(uncached.map(async (entry) => {
+            try {
+              const title = await this.ctx.sessionQuery?.readTitle(entry.header.id)
+              if (title) {
+                this.sessionTitleCache.set(entry.header.id, title)
+                entry.title = title
+              }
+            } catch {
+              // fallback
+            } finally {
+              entry.titleLoading = false
+            }
+          }))
+          if (this.picker) {
+            this.scheduleRender()
+          }
+        })()
       }
     } catch (error) {
       this.log('error', error instanceof Error ? error.message : String(error), '/resume')
-      this.scheduleRender()
+      this.scheduleRender(true)
     }
   }
 
@@ -2673,6 +2715,8 @@ class TuiApp {
     if (!record) return
     picker.loaded = true
     this.picker = undefined
+    this.input = ''
+    this.cursor = 0
     this.message = `resuming ${record.header.id.slice(-4)}…`
     this.scheduleRender()
     try {
@@ -2700,8 +2744,13 @@ class TuiApp {
       this.activeModel = undefined
       this.attachRequestOverride(agent)
       if (previous) {
-        await this.ctx.sessions.flush(previous.agent.session).catch(() => {})
-        await previous.dispose().catch(() => {})
+        await Promise.race([
+          this.ctx.sessions.flush(previous.agent.session),
+          new Promise((resolve) => setTimeout(resolve, 500))
+        ]).catch(() => {})
+        try {
+          await previous.dispose()
+        } catch {}
       }
       this.reasoningBlocks = []
       this.streaming = { text: '', reasoning: '', tool: undefined }
@@ -2709,7 +2758,6 @@ class TuiApp {
       for (const event of agent.session.events) this.onSessionEvent(agent.session, event)
       this.streaming = { text: '', reasoning: '', tool: undefined }
       this.reasoningAt = undefined
-      this.message = ''
       this.usage = foldUsage(agent.session.events)
       this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
       this.viewClearedSeq = 0
@@ -2723,8 +2771,10 @@ class TuiApp {
       this.touchMru(record.header.id)
     } catch (error) {
       this.log('error', error instanceof Error ? error.message : String(error), '/resume')
+    } finally {
+      this.message = ''
+      this.scheduleRender(true)
     }
-    this.scheduleRender()
   }
 
   cancelOrQuit() {
@@ -2833,7 +2883,7 @@ class TuiApp {
     this.help = false
     this.updateMenu()
     this.maybeOpenFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   eraseBefore() {
@@ -2846,13 +2896,13 @@ class TuiApp {
       this.selection = undefined
       this.updateMenu()
       this.maybeOpenFilePicker()
-      this.scheduleRender()
+      this.scheduleRender(true)
       return
     }
     if (this.cursor <= 0) {
       if (this.input === '' && this.pendingImages.length > 0) {
         this.pendingImages.pop()
-        this.scheduleRender()
+        this.scheduleRender(true)
       }
       return
     }
@@ -2860,7 +2910,7 @@ class TuiApp {
     this.cursor -= 1
     this.updateMenu()
     this.maybeOpenFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   eraseAt() {
@@ -2869,7 +2919,7 @@ class TuiApp {
     this.input = this.input.slice(0, this.cursor) + this.input.slice(this.cursor + 1)
     this.updateMenu()
     this.maybeOpenFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   eraseToLineEnd() {
@@ -2879,7 +2929,7 @@ class TuiApp {
     this.input = this.input.slice(0, this.cursor) + this.input.slice(end)
     this.updateMenu()
     this.maybeOpenFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   eraseWordBefore() {
@@ -2897,7 +2947,7 @@ class TuiApp {
     this.cursor = start
     this.updateMenu()
     this.maybeOpenFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   moveLeft() {
@@ -2905,7 +2955,7 @@ class TuiApp {
     this.clearSelection()
     if (this.cursor > 0) this.cursor -= 1
     this.maybeOpenFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   moveRight() {
@@ -2913,7 +2963,7 @@ class TuiApp {
     this.clearSelection()
     if (this.cursor < this.input.length) this.cursor += 1
     this.maybeOpenFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   moveToLineStart() {
@@ -2921,7 +2971,7 @@ class TuiApp {
     this.clearSelection()
     this.cursor = this.input.lastIndexOf('\n', this.cursor - 1) + 1
     this.maybeOpenFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   moveToLineEnd() {
@@ -2930,7 +2980,7 @@ class TuiApp {
     const next = this.input.indexOf('\n', this.cursor)
     this.cursor = next === -1 ? this.input.length : next
     this.maybeOpenFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   moveWordLeft() {
@@ -2938,7 +2988,7 @@ class TuiApp {
     this.clearSelection()
     if (this.cursor === 0) {
       this.maybeOpenFilePicker()
-      this.scheduleRender()
+      this.scheduleRender(true)
       return
     }
     let index = this.cursor - 1
@@ -2946,7 +2996,7 @@ class TuiApp {
     while (index > 0 && !/\s/.test(this.input[index - 1])) index -= 1
     this.cursor = index
     this.maybeOpenFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   moveWordRight() {
@@ -2957,7 +3007,7 @@ class TuiApp {
     while (index < this.input.length && /\s/.test(this.input[index])) index += 1
     this.cursor = index
     this.maybeOpenFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   historyNav(direction) {
@@ -2972,7 +3022,7 @@ class TuiApp {
     this.input = index === -1 ? '' : entries[index]
     this.cursor = this.input.length
     this.closeFilePicker()
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   wordAt(index) {
@@ -4094,13 +4144,22 @@ class TuiApp {
 
   // ── rendering ──────────────────────────────────────────────────────────
 
-  scheduleRender() {
+  scheduleRender(immediate = false) {
+    if (immediate && !this.active) {
+      if (this.renderTimer) {
+        clearTimeout(this.renderTimer)
+        this.renderTimer = undefined
+      }
+      this.renderPending = false
+      this.render()
+      return
+    }
     if (this.renderPending) return
     this.renderPending = true
     // Coalesce the small token events emitted by the model. Rendering every
     // token makes ANSI/Markdown output visibly jitter; idle/input updates can
     // still use the shorter frame while an active stream gets a small batch.
-    const delay = this.active ? 56 : 16
+    const delay = this.active ? 56 : 8
     this.renderTimer = setTimeout(() => {
       this.renderPending = false
       this.render()
@@ -4144,6 +4203,15 @@ class TuiApp {
     const pending = planState.pending === undefined ? '' : `${ANSI.dim}*${ANSI.reset}`
     const effort = this.currentEffort().toUpperCase()
     const usage = this.usage
+
+    // High-performance memoization cache for typing & idle frames
+    const runningAnimStep = this.active ? Math.floor(Date.now() / 520) : 'idle'
+    const runningWordStep = this.active ? Math.floor(Date.now() / 3000) : 'idle'
+    const cacheKey = `${columns}|${density}|${mode}|${pending}|${liveModel}|${cwdName}|${this.presetName}|${effort}|${this.permissionName}|${usage.input}|${usage.output}|${usage.cacheRead}|${usage.recentInput}|${usage.contextWindow}|${this.skills.length}|${this.mcpCount}|${this.hookCount}|${runningAnimStep}|${runningWordStep}`
+    if (this.statusRowsCache && this.statusRowsCache.key === cacheKey) {
+      return this.statusRowsCache.rows
+    }
+
     const contextText = usage.contextWindow && usage.recentInput !== undefined
       ? `${formatTokens(usage.recentInput)} / ${formatTokens(usage.contextWindow)}`
       : 'awaiting first response'
@@ -4168,10 +4236,10 @@ class TuiApp {
     const titleBadge = `${ANSI.ink}${safe(title)}${ANSI.reset}`
     const row1Left = `${modeBadge}${ANSI.dim} | ${ANSI.reset}${modelBadge}${ANSI.dim} | ${ANSI.reset}${cwdBadge}${ANSI.dim} | ${ANSI.reset}${titleBadge}`
     const runningFrames = ['◉', '◎', '◌', '◍']
-    const runningFrameStep = Math.floor(Date.now() / 520)
-    const runningWordStep = Math.floor(Date.now() / 3000)
+    const runningFrameStep = typeof runningAnimStep === 'number' ? runningAnimStep : 0
+    const runningWordStepVal = typeof runningWordStep === 'number' ? runningWordStep : 0
     const runningMark = runningFrames[runningFrameStep % runningFrames.length]
-    const runningWord = explorationWords[runningWordStep % explorationWords.length]
+    const runningWord = explorationWords[runningWordStepVal % explorationWords.length]
     const running = this.active ? `${ANSI.blue}${runningMark} ${runningWord}${ANSI.reset} · ` : ''
     const presetBadge = `${ANSI.muted}preset ${ANSI.peach ?? ANSI.blueSoft}${this.presetName ?? 'standard'}${ANSI.reset}`
     const effortColor = effort === 'HIGH' ? (ANSI.coral ?? ANSI.terracotta) : (ANSI.amber ?? ANSI.blueSoft)
@@ -4185,7 +4253,9 @@ class TuiApp {
       const minLeft = `${modeBadge}${ANSI.dim} | ${ANSI.reset}${modelBadge}${ANSI.dim} · ${ANSI.reset}${ANSI.blueSoft}${percent}%${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${permBadge}`
       const minRight = `${running}${presetBadge}${ANSI.dim} · ${ANSI.reset}${effortBadge}`
       const minGap = Math.max(1, effectiveColumns - widthOf(visibleOf(minLeft)) - widthOf(visibleOf(minRight)))
-      return [`  ${minLeft}${' '.repeat(minGap)}${minRight}`]
+      const result = [`  ${minLeft}${' '.repeat(minGap)}${minRight}`]
+      this.statusRowsCache = { key: cacheKey, rows: result }
+      return result
     }
 
     const row2 = `  ${ANSI.muted}Context${ANSI.reset} ${meter} ${ANSI.blueSoft}${contextText}${ANSI.reset} ${ANSI.blue}· ${percent}%${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${ANSI.muted}in ${ANSI.bold}${ANSI.ink}${formatTokens(usage.input)}${ANSI.reset}${ANSI.muted} · out ${ANSI.bold}${ANSI.ink}${formatTokens(usage.output)}${ANSI.reset}${ANSI.muted} · cache ${ANSI.bold}${ANSI.bash}${cachePercent}%${ANSI.reset}`
@@ -4195,7 +4265,9 @@ class TuiApp {
       const row2CompactRight = permRow.trim()
       const row2CompactLeft = `${ANSI.muted}Context${ANSI.reset} ${meter} ${ANSI.blueSoft}${percent}%${ANSI.reset} ${ANSI.dim}(in ${formatTokens(usage.input)} · out ${formatTokens(usage.output)})${ANSI.reset}`
       const r2Gap = Math.max(1, effectiveColumns - widthOf(visibleOf(row2CompactLeft)) - widthOf(visibleOf(row2CompactRight)))
-      return [row1, `  ${row2CompactLeft}${' '.repeat(r2Gap)}${row2CompactRight}`]
+      const result = [row1, `  ${row2CompactLeft}${' '.repeat(r2Gap)}${row2CompactRight}`]
+      this.statusRowsCache = { key: cacheKey, rows: result }
+      return result
     }
 
     const recent = this.recentUsage()
@@ -4207,7 +4279,9 @@ class TuiApp {
     const mcpBadge = this.mcpCount > 0 ? `${ANSI.teal}${this.mcpCount} MCPs${ANSI.reset}` : `${ANSI.dim}0 MCPs${ANSI.reset}`
     const toolText = recent.toolDetails.length > 0 ? recent.toolDetails.join(', ') : '—'
     const row3 = `  ${ANSI.muted}prompt ${ANSI.reset}${ANSI.blueSoft}${promptText}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${skillBadge}${ANSI.dim} · ${ANSI.reset}${mcpBadge}${ANSI.dim} · ${ANSI.reset}${hookBadge}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}tools ${ANSI.bash}${shorten(toolText, Math.max(16, effectiveColumns - 58))}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}jobs ${jobBadge}`
-    return [row1, row2, row3, permRow]
+    const result = [row1, row2, row3, permRow]
+    this.statusRowsCache = { key: cacheKey, rows: result }
+    return result
   }
 
   inputFrame(columns) {
@@ -4720,7 +4794,7 @@ class TuiApp {
         '',
         ...shown.map((entry, index) => {
           const marker = index + start === this.picker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          const title = entry.title?.title || '新会话'
+          const title = entry.title?.title || (entry.titleLoading ? '⠋ 加载会话中…' : '新会话')
           const shortId = entry.header.id.length > 8 ? entry.header.id.slice(0, 8) : entry.header.id
           const time = formatTime(entry.header.createdAt)
           return `${marker}  ${ANSI.blueSoft}${truncateWidth(safe(title), Math.max(20, columns - 36))}${ANSI.reset}  ${ANSI.dim}${shortId} · ${time}${ANSI.reset}`
