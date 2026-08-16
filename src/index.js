@@ -102,14 +102,17 @@ function applyTheme(theme) { ANSI = { reset: '\x1b[0m', bold: '\x1b[1m', ...(THE
 // shared terminal process, so a mode left behind by another TUI must not turn
 // VS Code wheel gestures into input bytes for this TUI.
 const TERMINAL_MOUSE_OFF = '\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1007l'
+const STATUSLINE_MODES = ['detailed', 'compact', 'minimal']
 function tuiSettingsSchema(value) {
   if (value !== undefined && (typeof value !== 'object' || value === null || Array.isArray(value))) throw new TypeError('dsh-tui settings must be an object')
   const source = value ?? {}; const theme = source.theme ?? defaultTheme
   if (!Object.hasOwn(THEMES, theme)) throw new TypeError(`dsh-tui.settings.theme must be one of: ${Object.keys(THEMES).join(', ')}`)
+  const statusline = source.statusline ?? 'detailed'
+  if (!STATUSLINE_MODES.includes(statusline)) throw new TypeError(`dsh-tui.settings.statusline must be one of: ${STATUSLINE_MODES.join(', ')}`)
   if (source.persistHistory !== undefined && typeof source.persistHistory !== 'boolean') throw new TypeError('dsh-tui.settings.persistHistory must be boolean')
-  return { theme, persistHistory: source.persistHistory ?? true }
+  return { theme, statusline, persistHistory: source.persistHistory ?? true }
 }
-tuiSettingsSchema.toJSON = () => ({ type: 'object', properties: { theme: { type: 'string', enum: Object.keys(THEMES), default: defaultTheme }, persistHistory: { type: 'boolean', default: true } } })
+tuiSettingsSchema.toJSON = () => ({ type: 'object', properties: { theme: { type: 'string', enum: Object.keys(THEMES), default: defaultTheme }, statusline: { type: 'string', enum: STATUSLINE_MODES, default: 'detailed' }, persistHistory: { type: 'boolean', default: true } } })
 
 const activityWords = [
   'Building something great',
@@ -1752,10 +1755,20 @@ class TuiApp {
 
   async cycleSetting(direction = 1) {
     if (!this.settingsPicker || !this.settingsScope) return
-    const key = ['theme', 'persistHistory'][this.settingsPicker.selected]
+    const keys = ['theme', 'statusline', 'persistHistory']
+    const key = keys[this.settingsPicker.selected]
     const current = this.preferences[key]
-    const themes = Object.keys(THEMES)
-    const next = key === 'theme' ? themes[(themes.indexOf(current) + direction + themes.length) % themes.length] : !current
+    let next
+    if (key === 'theme') {
+      const themes = Object.keys(THEMES)
+      next = themes[(themes.indexOf(current) + direction + themes.length) % themes.length]
+    } else if (key === 'statusline') {
+      const modes = STATUSLINE_MODES
+      const curIdx = Math.max(0, modes.indexOf(current ?? 'detailed'))
+      next = modes[(curIdx + direction + modes.length) % modes.length]
+    } else {
+      next = !current
+    }
     try { await this.settingsScope.update({ [key]: next }); this.log('ok', `${key} · ${next}`, '/settings') }
     catch (error) { this.log('error', error instanceof Error ? error.message : String(error), '/settings') }
     this.scheduleRender()
@@ -3804,6 +3817,7 @@ class TuiApp {
   }
 
   statusRows(columns) {
+    const density = this.preferences?.statusline ?? 'detailed'
     const selection = this.agent.options
     const liveModel = this.activeModel?.model ?? selection.model
     const cwdName = process.cwd().split('/').filter(Boolean).pop() || process.cwd()
@@ -3845,8 +3859,26 @@ class TuiApp {
     const row1Right = `${running}${presetBadge}${ANSI.dim} · ${ANSI.reset}${effortBadge}`
     const row1Gap = Math.max(1, columns - widthOf(visibleOf(row1Left)) - widthOf(visibleOf(row1Right)))
     const row1 = `${row1Left}${' '.repeat(row1Gap)}${row1Right}`
-    const recent = this.recentUsage()
+
+    if (density === 'minimal') {
+      const permBadge = `${ANSI.blue}${this.permissionName ?? 'custom'}${ANSI.reset}`
+      const minLeft = `${modeBadge}${ANSI.dim} | ${ANSI.reset}${modelBadge}${ANSI.dim} · ${ANSI.reset}${ANSI.blueSoft}${percent}%${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${permBadge}`
+      const minRight = `${running}${presetBadge}${ANSI.dim} · ${ANSI.reset}${effortBadge}`
+      const minGap = Math.max(1, columns - widthOf(visibleOf(minLeft)) - widthOf(visibleOf(minRight)))
+      return [`${minLeft}${' '.repeat(minGap)}${minRight}`]
+    }
+
     const row2 = `${ANSI.muted}Context${ANSI.reset} ${meter} ${ANSI.blueSoft}${contextText}${ANSI.reset} ${ANSI.blue}· ${percent}%${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${ANSI.muted}in ${ANSI.bold}${ANSI.ink}${formatTokens(usage.input)}${ANSI.reset}${ANSI.muted} · out ${ANSI.bold}${ANSI.ink}${formatTokens(usage.output)}${ANSI.reset}${ANSI.muted} · cache ${ANSI.bold}${ANSI.bash}${cachePercent}%${ANSI.reset}`
+    const permRow = `${ANSI.blue}▶▶${ANSI.reset} ${ANSI.muted}permission${ANSI.reset} ${ANSI.blue}${this.permissionName ?? 'custom'}${ANSI.reset}${ANSI.dim} · Shift+Tab${ANSI.reset}`
+
+    if (density === 'compact') {
+      const row2CompactRight = permRow
+      const row2CompactLeft = `${ANSI.muted}Context${ANSI.reset} ${meter} ${ANSI.blueSoft}${percent}%${ANSI.reset} ${ANSI.dim}(in ${formatTokens(usage.input)} · out ${formatTokens(usage.output)})${ANSI.reset}`
+      const r2Gap = Math.max(1, columns - widthOf(visibleOf(row2CompactLeft)) - widthOf(visibleOf(row2CompactRight)))
+      return [row1, `${row2CompactLeft}${' '.repeat(r2Gap)}${row2CompactRight}`]
+    }
+
+    const recent = this.recentUsage()
     const promptText = this.agent?.ctx?.get?.('systemPrompt') ? 'system' : 'harness'
     const totalJobs = (recent.jobs.length || 0) + (this.localBackgroundJobs?.filter((j) => j.status === 'running').length || 0)
     const jobBadge = totalJobs > 0 ? `${ANSI.amber}${totalJobs} active${ANSI.reset}` : `${ANSI.dim}0${ANSI.reset}`
@@ -3855,8 +3887,7 @@ class TuiApp {
     const mcpBadge = this.mcpCount > 0 ? `${ANSI.teal}${this.mcpCount} MCPs${ANSI.reset}` : `${ANSI.dim}0 MCPs${ANSI.reset}`
     const toolText = recent.toolDetails.length > 0 ? recent.toolDetails.join(', ') : '—'
     const row3 = `${ANSI.muted}prompt ${ANSI.reset}${ANSI.blueSoft}${promptText}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${skillBadge}${ANSI.dim} · ${ANSI.reset}${mcpBadge}${ANSI.dim} · ${ANSI.reset}${hookBadge}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}tools ${ANSI.bash}${shorten(toolText, Math.max(16, columns - 58))}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}jobs ${jobBadge}`
-    const row4 = `${ANSI.blue}▶▶${ANSI.reset} ${ANSI.muted}permission${ANSI.reset} ${ANSI.blue}${this.permissionName ?? 'custom'}${ANSI.reset}${ANSI.dim} · Shift+Tab${ANSI.reset}`
-    return [row1, row2, row3, row4]
+    return [row1, row2, row3, permRow]
   }
 
   inputFrame(columns) {
@@ -4213,10 +4244,12 @@ class TuiApp {
     if (this.settingsPicker) {
       const descriptions = {
         theme: 'color theme (claude / deepseek / mono / light)',
+        statusline: 'density: detailed (4 rows), compact (2 rows), minimal (1 row)',
         'history persistence': 'save sessions to disk for /resume'
       }
       const entries = [
         ['theme', this.preferences.theme, descriptions.theme],
+        ['statusline density', this.preferences.statusline ?? 'detailed', descriptions.statusline],
         ['history persistence', this.preferences.persistHistory ? 'on' : 'off', descriptions['history persistence']]
       ]
       return [
