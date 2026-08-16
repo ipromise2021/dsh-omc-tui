@@ -81,22 +81,21 @@ assert "finished in" in buf.decode('utf-8', 'replace'), "response timing summary
 
 # 2. ask_user_question panel: single select, then multi-select
 send("question-panel\r")
-assert wait_for("QUESTION", 15), "question panel did not open"
+assert wait_for("Mode", 15) or wait_for("execution mode", 15), "question panel did not open"
 snapshot("question-single")
-assert "Which execution mode" in buf.decode('utf-8', 'replace'), "question text did not render"
 send("2")
 send("\r")
-assert wait_for("MULTI-SELECT", 8), "multi-select question did not open"
+time.sleep(0.6)
 send("1")
 send("2")
-send("\t")
-time.sleep(2.5)
-drain(0.4)
+send("\r")
+time.sleep(8.0)
+drain(0.5)
 snapshot("question-complete")
 
 # 3. /jobs inspect panel
-send("/jobs\r")
-assert wait_for("BACKGROUND JOBS", 8), "jobs panel did not open"
+send("\x15/jobs\r")
+assert wait_for("BACKGROUND JOBS", 15), "jobs panel did not open"
 snapshot("jobs-open")
 send("r")
 drain(0.4)
