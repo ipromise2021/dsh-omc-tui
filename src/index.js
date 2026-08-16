@@ -3899,7 +3899,7 @@ class TuiApp {
               if (Number.isFinite(durationMs) && durationMs >= 0) {
                 const tools = allEvents.slice(startIndex).filter((e) => e.type === 'tool/call').length
                 const toolsText = tools > 0 ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : ''
-                push(ANSI.dim, `  ✓ finished in ${formatDurationMs(durationMs)}${toolsText}`)
+                push(ANSI.dim, `  ✻ finished in ${formatDurationMs(durationMs)}${toolsText}`)
               }
             }
           }
