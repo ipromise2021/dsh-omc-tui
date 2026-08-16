@@ -156,11 +156,11 @@ try:
     send("/exit\r")
     deadline = time.time() + 15
     while time.time() < deadline:
+        drain(0.2)
         got, status = os.waitpid(pid, os.WNOHANG)
         if got == pid:
             cleanup(os.waitstatus_to_exitcode(status))
             raise SystemExit
-        time.sleep(0.2)
 except SystemExit:
     raise
 except Exception as error:
