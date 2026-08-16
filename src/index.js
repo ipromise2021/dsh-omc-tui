@@ -877,7 +877,7 @@ class TuiApp {
             this.commitUnprintedEvents()
             const columns = Math.max(60, process.stdout.columns || 100)
             const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
-            const headerLines = [`  ${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`]
+            const headerLines = [`${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`]
             if (this.streaming.reasoning) {
               const rlines = this.streaming.reasoning.split('\n').length
               const ms = this.reasoningAt ? Date.now() - this.reasoningAt : undefined
@@ -3823,7 +3823,7 @@ class TuiApp {
       switch (event.type) {
         case 'user/message': {
           if (event.data.source?.kind !== 'user') break
-          push(ANSI.blue, `  ${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
+          push(ANSI.blue, `${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
           for (const block of event.data.content ?? []) {
             if (block.type === 'image') {
               const ref = block.attachment
@@ -3831,16 +3831,16 @@ class TuiApp {
               const dimensions = ref?.width && ref?.height ? ` · ${ref.width}×${ref.height}` : ''
               push(ANSI.dim, `  ◱ image · ${size}${dimensions}`)
             } else if (block.type === 'text') {
-              const blockWidth = Math.max(24, contentWidth - 4)
+              const blockWidth = Math.max(24, contentWidth - 2)
               const innerWidth = blockWidth - 2
               const displayText = compactExpandedFileReferences(block.text)
               const wrapped = wrap(displayText, innerWidth - 2)
-              push('', `  ${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
+              push('', `${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
               for (const line of wrapped) {
                 const padding = ' '.repeat(Math.max(0, innerWidth - 2 - widthOf(line)))
-                push('', `  ${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
+                push('', `${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
               }
-              push('', `  ${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
+              push('', `${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
             }
           }
           rows.push('')
@@ -3851,7 +3851,7 @@ class TuiApp {
           const answerText = fullAnswerText
           const block = this.reasoningBlocks.find((entry) => entry.key === `reason-${event.seq}`)
           if (!answerText && !block) break
-          push(ANSI.blueSoft, `  DSH  ${ANSI.muted}${this.activeModel?.model ?? this.agent?.options?.model ?? ''} · ${formatTime(event.time)}`)
+          push(ANSI.blueSoft, `DSH  ${ANSI.muted}${this.activeModel?.model ?? this.agent?.options?.model ?? ''} · ${formatTime(event.time)}`)
           if (block) {
             const ms = block.ms !== undefined ? ` · ${(block.ms / 1000).toFixed(1)}s` : ''
             if (this.expandedKeys.has(block.key)) {
@@ -4201,6 +4201,7 @@ class TuiApp {
     const inputLines = this.inputFrame(columns)
 
     if (this.active || this.agent?.status === 'running' || this.streaming.reasoning || this.streaming.tool || this.streamBuffer || this.streaming.text) {
+      lines.push('')
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]
       const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
@@ -4208,6 +4209,7 @@ class TuiApp {
 
       if (this.streamBuffer) {
         lines.push(`  ${ANSI.answer}${this.streamBuffer}${ANSI.blue}▋${ANSI.reset}`)
+        lines.push('')
       }
 
       if (this.streaming.reasoning) {
