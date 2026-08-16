@@ -3440,12 +3440,29 @@ class TuiApp {
     return [...merged.values()]
   }
 
-  commandItemRow(item, marker, columns) {
+  commandItemRow(item, marker, columns, query = '') {
     const isSkill = item.kind === 'skill'
+    const isSelected = marker.includes('>')
     const kind = isSkill ? 'skill' : 'cmd'
-    const nameColor = isSkill ? ANSI.blue : ANSI.blueSoft
-    const description = shorten(item.description ?? '', Math.max(18, columns - 30))
-    return `${marker} ${nameColor}/${safe(item.name)}${ANSI.reset} ${ANSI.dim}${kind}${ANSI.reset} ${ANSI.muted}${description}${ANSI.reset}`
+    const name = safe(item.name)
+    const description = shorten(item.description ?? '', Math.max(18, columns - 32))
+
+    let nameFormatted
+    const cleanQuery = query.replace(/^\/+/, '').toLowerCase()
+    if (cleanQuery && name.toLowerCase().startsWith(cleanQuery)) {
+      const matchPart = name.slice(0, cleanQuery.length)
+      const restPart = name.slice(cleanQuery.length)
+      const matchColor = `${ANSI.bold}${ANSI.ink}`
+      const restColor = isSelected ? (isSkill ? ANSI.teal : ANSI.blueSoft) : ANSI.muted
+      nameFormatted = `${ANSI.dim}/${ANSI.reset}${matchColor}${matchPart}${ANSI.reset}${restColor}${restPart}${ANSI.reset}`
+    } else {
+      const nameColor = isSelected ? (isSkill ? ANSI.teal : ANSI.blueSoft) : ANSI.muted
+      nameFormatted = `${ANSI.dim}/${ANSI.reset}${nameColor}${name}${ANSI.reset}`
+    }
+
+    const kindColor = isSkill ? ANSI.teal : ANSI.dim
+    const descColor = isSelected ? ANSI.ink : ANSI.dim
+    return `${marker} ${nameFormatted} ${kindColor}${kind}${ANSI.reset} ${descColor}${description}${ANSI.reset}`
   }
 
   renderMarkdownRows(text, contentWidth, base) {
@@ -4165,9 +4182,12 @@ class TuiApp {
         ...(shown.length === 0
           ? [`${ANSI.dim}no skills loaded in this workspace${ANSI.reset}`]
           : shown.map((skill, index) => {
-              const marker = index + start === this.skillsPanel.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
+              const isSelected = index + start === this.skillsPanel.selected
+              const marker = isSelected ? `${ANSI.blue}>${ANSI.reset}` : ' '
+              const nameColor = isSelected ? ANSI.teal : ANSI.muted
+              const descColor = isSelected ? ANSI.ink : ANSI.dim
               const desc = shorten(safe(skill.description ?? ''), Math.max(20, columns - 32))
-              return `${marker}  ${ANSI.teal}/${safe(skill.name)}${ANSI.reset}  ${ANSI.dim}${desc}${ANSI.reset}`
+              return `${marker}  ${nameColor}/${safe(skill.name)}${ANSI.reset}  ${descColor}${desc}${ANSI.reset}`
             })),
         '',
         `${ANSI.muted}↑↓ navigate  ·  Esc close${ANSI.reset}`
@@ -4175,6 +4195,7 @@ class TuiApp {
     }
     if (this.menu) {
       const items = this.menu.items
+      const query = this.menu.prefix ?? ''
       const start = Math.min(Math.max(0, this.menu.selected - capacity + 1), Math.max(0, items.length - capacity))
       const shown = items.slice(start, start + capacity)
       const skillCount = items.filter((item) => item.kind === 'skill').length
@@ -4183,7 +4204,7 @@ class TuiApp {
         '',
         ...shown.map((item, index) => {
           const marker = index + start === this.menu.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          return this.commandItemRow(item, marker, columns)
+          return this.commandItemRow(item, marker, columns, query)
         }),
         '',
         `${ANSI.muted}↑↓ navigate  ·  Enter or Tab select  ·  Esc close${ANSI.reset}`
@@ -4290,6 +4311,7 @@ class TuiApp {
     }
     if (this.commandPalette) {
       const items = this.commandPalette.items
+      const query = this.commandPalette.query ?? ''
       const start = Math.min(Math.max(0, this.commandPalette.selected - capacity + 1), Math.max(0, items.length - capacity))
       const shown = items.slice(start, start + capacity)
       return [
@@ -4297,7 +4319,7 @@ class TuiApp {
         '',
         ...shown.map((item, index) => {
           const marker = index + start === this.commandPalette.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-          return this.commandItemRow(item, marker, columns)
+          return this.commandItemRow(item, marker, columns, query)
         }),
         '',
         `${ANSI.muted}↑↓ navigate  ·  Enter run  ·  Tab insert skill  ·  Esc close${ANSI.reset}`
