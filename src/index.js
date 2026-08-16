@@ -811,6 +811,7 @@ class TuiApp {
       this.commitUnprintedEvents()
       this.streaming = { text: '', reasoning: '', tool: undefined }
       this.message = ''
+      this.lastQueuedText = undefined
       void this.ctx.sessions.flush(this.agent.session).catch(() => {})
     }
     this.scheduleRender()
@@ -1537,6 +1538,9 @@ class TuiApp {
       }
     }
     if (fullText) content.push({ type: 'text', text: fullText })
+    if (this.agent?.status === 'running' && fullText) {
+      this.lastQueuedText = fullText
+    }
     this.agent.followup(userMessage(content))
     this.scheduleRender()
   }
@@ -1679,9 +1683,13 @@ class TuiApp {
         })()
         break
       case 'steer': {
-        const message = line.replace(/^\s*\/steer\s*/, '').trim()
+        let message = line.replace(/^\s*\/steer\s*/, '').trim()
+        if (!message && this.lastQueuedText) {
+          message = this.lastQueuedText
+          this.lastQueuedText = undefined
+        }
         if (!message) {
-          this.log('error', 'usage: /steer <message>', '/steer')
+          this.log('error', 'usage: /steer <message> (or /steer alone to promote queued message)', '/steer')
           break
         }
         if (this.agent?.status !== 'running') {
@@ -1689,7 +1697,7 @@ class TuiApp {
           break
         }
         this.agent.steer(userMessage([{ type: 'text', text: message }]))
-        this.log('ok', 'steered', '/steer')
+        this.log('ok', `steered with: "${shorten(message, 48)}"`, '/steer')
         break
       }
       case 'mcp':
