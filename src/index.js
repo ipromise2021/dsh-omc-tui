@@ -1616,21 +1616,32 @@ class TuiApp {
         break
       }
       case 'compact': {
+        if (this.compacting) {
+          this.log('ok', 'Compaction is already in progress, please wait…', '/compact')
+          break
+        }
         const registry = this.ctx.commands
         const found = registry?.find(this.agent, 'compact')
         if (found) {
-          this.message = 'running /compact…'
+          this.compacting = true
+          this.message = 'compacting conversation history…'
+          this.log('ok', 'Compacting conversation history to save context tokens…', '/compact')
           this.scheduleRender()
           void (async () => {
             try {
               const ctrl = new AbortController()
               const execution = await registry.execute(this.agent, line || '/compact', ctrl.signal)
               const result = execution?.result
-              if (result?.kind === 'success') this.log('ok', result.text ?? 'done', '/compact')
-              else if (result?.kind === 'error') this.log('error', result.text ?? 'failed', '/compact')
+              if (result?.kind === 'success') {
+                const text = result.text ?? 'Compacted conversation history'
+                this.log('ok', `${text} · Context window updated.`, '/compact')
+              } else if (result?.kind === 'error') {
+                this.log('error', result.text ?? 'failed', '/compact')
+              }
             } catch (err) {
               this.log('error', err instanceof Error ? err.message : String(err), '/compact')
             } finally {
+              this.compacting = false
               this.message = ''
               this.scheduleRender()
             }
