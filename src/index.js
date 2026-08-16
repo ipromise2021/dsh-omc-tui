@@ -164,6 +164,7 @@ const explorationWords = [
 const LOCAL_COMMANDS = [
   { name: 'plan', description: 'toggle between plan mode and build mode' },
   { name: 'skills', description: 'list all available skills in this workspace' },
+  { name: 'ask', description: 'quick side query without polluting session context' },
   { name: 'compact', description: 'compact conversation history to save tokens' },
   { name: 'rename', description: 'rename the current session' },
   { name: 'context', description: 'show context window usage and token distribution' },
@@ -1649,6 +1650,56 @@ class TuiApp {
         } else {
           this.log('ok', 'No compactable history yet.', '/compact')
         }
+        break
+      }
+      case 'ask': {
+        const query = line.replace(/^\/ask\s*/i, '').trim()
+        if (!query) {
+          this.log('error', 'usage: /ask <question...>', '/ask')
+          break
+        }
+        this.message = 'asking side query…'
+        this.log('ok', `${ANSI.bold}${query}${ANSI.reset}`, 'YOU (ask)')
+        this.scheduleRender()
+        void (async () => {
+          try {
+            const selection = this.ctx.agentDefaultModel.currentSelection()
+            const tempSessionId = `side-ask-${randomUUID()}`
+            const { agent: tempAgent, dispose } = await this.ctx.agents.create({
+              sessionId: tempSessionId,
+              meta: { cwd: process.cwd(), ephemeral: true },
+              agentOptions: { provider: selection.provider, model: selection.model }
+            })
+            let fullResponse = ''
+            const cleanupEvent = this.ctx.on('session/event', (session, event) => {
+              if (session.id === tempSessionId && event.type === 'assistant/message') {
+                const text = textOf(event.data.message.content)
+                if (text) fullResponse = text
+              }
+            })
+            tempAgent.followup(userMessage([{ type: 'text', text: query }]))
+            await new Promise((resolve) => {
+              const off = this.ctx.on('agent/status', ({ agent: a, status }) => {
+                if (a === tempAgent && (status === 'idle' || status === 'error')) {
+                  off()
+                  resolve()
+                }
+              })
+            })
+            cleanupEvent()
+            try { dispose() } catch {}
+            if (fullResponse) {
+              this.log('ok', fullResponse, `DSH (ask) · ${selection.model}`)
+            } else {
+              this.log('error', 'No response received for side query', '/ask')
+            }
+          } catch (err) {
+            this.log('error', err instanceof Error ? err.message : String(err), '/ask')
+          } finally {
+            this.message = ''
+            this.scheduleRender()
+          }
+        })()
         break
       }
       case 'help':
