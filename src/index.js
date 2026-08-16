@@ -4137,7 +4137,28 @@ class TuiApp {
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]
       const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
       const elapsedSec = this.reasoningAt ? Math.max(1, Math.floor((Date.now() - this.reasoningAt) / 1000)) : 1
-      if (this.streaming.reasoning) {
+      const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
+
+      if (this.streaming.text) {
+        lines.push(`${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${ANSI.blue}${frame} generating (${elapsedSec}s)${ANSI.reset}`)
+        const mdRows = this.renderMarkdownRows(this.streaming.text, columns - 2, ANSI.answer)
+        const maxLiveLines = Math.max(3, Math.min(10, rows - 12 - (panelRows.length > 0 ? panelRows.length : 4)))
+        const sliceStart = Math.max(0, mdRows.length - maxLiveLines)
+        if (sliceStart > 0) {
+          lines.push(`${ANSI.dim}  ↑ ... ${sliceStart} more lines above${ANSI.reset}`)
+        }
+        const shownRows = mdRows.slice(sliceStart)
+        for (let i = 0; i < shownRows.length; i++) {
+          const r = shownRows[i]
+          if (r === null) {
+            lines.push('')
+          } else {
+            const isLast = i === shownRows.length - 1
+            const cursor = isLast ? `${ANSI.blue}▋${ANSI.reset}` : ''
+            lines.push(r[0] + r[1] + cursor)
+          }
+        }
+      } else if (this.streaming.reasoning) {
         const snippet = this.streaming.reasoning.trim().replace(/\s+/g, ' ')
         const text = snippet ? ` · ${shorten(snippet, Math.max(16, columns - 40))}` : ''
         lines.push(`${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ↓ tokens)${text}${ANSI.reset}`)
@@ -4146,8 +4167,6 @@ class TuiApp {
         const toolName = this.streaming.tool.name || 'tool'
         lines.push(`${ANSI.amber}${frame} ${this.activityPhrase()}${dots} (${elapsedSec}s)${ANSI.reset}`)
         lines.push(`  ${ANSI.dim}└ ⚙ ${toolName} · ${shorten(this.streaming.tool.args.trim().replace(/\s+/g, ' '), Math.max(20, columns - toolName.length - 12))}${ANSI.reset}`)
-      } else if (this.streaming.text) {
-        lines.push(`${ANSI.blue}${frame} Generating response${dots} (${elapsedSec}s)${ANSI.reset}`)
       } else {
         lines.push(`${ANSI.blue}${ANSI.bold}${frame} ${this.activityPhrase()}${dots} (${elapsedSec}s)${ANSI.reset}`)
       }
