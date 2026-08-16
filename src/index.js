@@ -35,23 +35,23 @@ const THEMES = {
   },
   deepseek: {
     terracotta: '\x1b[38;5;209m',
-    amber: '\x1b[38;5;214m',
-    peach: '\x1b[38;5;75m',
-    teal: '\x1b[38;5;39m',
-    cyan: '\x1b[38;5;39m',
-    blue: '\x1b[38;5;39m',        // DeepSeek blue #00afff
-    blueSoft: '\x1b[38;5;75m',    // Soft blue #5fafff
+    amber: '\x1b[38;5;220m',      // Lighter golden amber
+    peach: '\x1b[38;5;117m',      // Lighter sky blue #87d7ff
+    teal: '\x1b[38;5;80m',        // Lighter teal cyan
+    cyan: '\x1b[38;5;80m',
+    blue: '\x1b[38;5;74m',        // Lighter DeepSeek blue #5fafd7
+    blueSoft: '\x1b[38;5;117m',   // Light sky blue
     ink: '\x1b[38;5;255m',
-    answer: '\x1b[38;5;252m',
-    detail: '\x1b[38;5;245m',
-    dim: '\x1b[38;5;240m',
-    muted: '\x1b[38;5;245m',
-    rule: '\x1b[38;5;238m',       // Subtle divider line
-    coral: '\x1b[38;5;209m',
-    bash: '\x1b[38;5;114m',
-    bar: '\x1b[38;5;238m',
-    barFill: '\x1b[38;5;39m',
-    userBg: '\x1b[48;5;238m'
+    answer: '\x1b[38;5;253m',     // Slightly lighter off-white
+    detail: '\x1b[38;5;248m',     // Lighter medium gray
+    dim: '\x1b[38;5;243m',        // Lighter dim gray
+    muted: '\x1b[38;5;247m',      // Lighter neutral
+    rule: '\x1b[38;5;240m',       // Lighter divider
+    coral: '\x1b[38;5;210m',      // Lighter warning coral
+    bash: '\x1b[38;5;120m',       // Lighter pistachio green
+    bar: '\x1b[38;5;240m',        // Lighter track
+    barFill: '\x1b[38;5;80m',     // Lighter blue fill
+    userBg: '\x1b[48;5;236m'      // Slightly lighter bg
   },
   mono: {
     terracotta: '\x1b[1;37m',
@@ -1568,10 +1568,26 @@ class TuiApp {
       }
       case 'compact': {
         const registry = this.ctx.commands
-        if (registry?.find(this.agent, 'compact')) {
-          void this.runCommand(line || '/compact')
+        const found = registry?.find(this.agent, 'compact')
+        if (found) {
+          this.message = 'running /compact…'
+          this.scheduleRender()
+          void (async () => {
+            try {
+              const ctrl = new AbortController()
+              const execution = await registry.execute(this.agent, line || '/compact', ctrl.signal)
+              const result = execution?.result
+              if (result?.kind === 'success') this.log('ok', result.text ?? 'done', '/compact')
+              else if (result?.kind === 'error') this.log('error', result.text ?? 'failed', '/compact')
+            } catch (err) {
+              this.log('error', err instanceof Error ? err.message : String(err), '/compact')
+            } finally {
+              this.message = ''
+              this.scheduleRender()
+            }
+          })()
         } else {
-          this.log('ok', 'Compact: conversation context is already minimal.', '/compact')
+          this.log('ok', 'No compactable history yet.', '/compact')
         }
         break
       }
@@ -2025,8 +2041,9 @@ class TuiApp {
   async choosePreset(id) {
     if (!id) return
     if (this.sessionHasProduced()) {
-      this.log('error', 'preset is locked after the first turn; start a new session to switch it', '/preset')
+      // Session is active — show a confirmation panel asking user to start new session
       this.presetPicker = undefined
+      this.presetConfirm = { requestedId: id }
       this.scheduleRender()
       return
     }
@@ -2039,6 +2056,35 @@ class TuiApp {
       this.presetName = preset.id
       void this.refreshSkills()
       this.log('ok', `agent preset · ${preset.id}`, '/preset')
+    } catch (error) {
+      this.log('error', error instanceof Error ? error.message : String(error), '/preset')
+    }
+    this.message = ''
+    this.scheduleRender()
+  }
+
+  async applyPresetConfirm(confirm) {
+    const id = this.presetConfirm?.requestedId
+    this.presetConfirm = undefined
+    if (!confirm || !id) {
+      if (!confirm && id) {
+        this.log('ok', `Preset change cancelled. Start a new session to use preset "${id}".`, '/preset')
+      }
+      this.scheduleRender()
+      return
+    }
+    // User confirmed: start a new session then apply preset
+    try {
+      await this.ctx.newSession?.(this.agent)
+    } catch {}
+    this.message = `switching preset · ${id}…`
+    this.scheduleRender()
+    try {
+      const preset = await this.ctx.agentPresets.recompose(this.agent.ctx, id)
+      this.agent.session.append('agent-preset/selected', { agentPreset: preset.id })
+      this.presetName = preset.id
+      void this.refreshSkills()
+      this.log('ok', `New session started with preset "${preset.id}"`, '/preset')
     } catch (error) {
       this.log('error', error instanceof Error ? error.message : String(error), '/preset')
     }
@@ -2310,6 +2356,11 @@ class TuiApp {
         this.scheduleRender()
         return
       }
+      // Show picker immediately with stub entries (no title yet) so SESSIONS appears fast
+      const stubs = sessions.map((record) => ({ header: record.header, title: undefined }))
+      this.picker = { sessions: stubs, selected: 0, loaded: false }
+      this.scheduleRender()
+      // Enrich with titles in the background
       const withTitles = (await Promise.all(sessions.map(async (record) => {
         let title
         try {
@@ -2319,8 +2370,10 @@ class TuiApp {
         }
         return { header: record.header, title }
       }))).filter((entry) => typeof entry.title?.title === 'string' && entry.title.title.trim() !== '')
-      this.picker = { sessions: withTitles, selected: 0, loaded: false }
-      this.scheduleRender()
+      if (this.picker) {
+        this.picker.sessions = withTitles.length > 0 ? withTitles : stubs
+        this.scheduleRender()
+      }
     } catch (error) {
       this.log('error', error instanceof Error ? error.message : String(error), '/resume')
       this.scheduleRender()
@@ -2869,6 +2922,21 @@ class TuiApp {
       return
     }
 
+    if (this.presetConfirm) {
+      const answer = value.trim().toLowerCase()
+      if (answer === 'y') { void this.applyPresetConfirm(true); return }
+      if (answer === 'n' || value === '\x1b' || value === '\x03') { void this.applyPresetConfirm(false); return }
+      return
+    }
+
+    if (this.skillsPanel) {
+      if (value === '\x1b' || value === '\x03' || value === 'q') {
+        this.skillsPanel = undefined
+        this.scheduleRender()
+      } else if (value.startsWith('\x1b[')) this.onEscapeSequence(value)
+      return
+    }
+
     if (this.questionPanel) {
       this.handleQuestionToken(value)
       return
@@ -3174,6 +3242,9 @@ class TuiApp {
       } else if (this.mcpPanel) {
         this.mcpPanel.selected = Math.max(0, this.mcpPanel.selected - 1)
         this.scheduleRender()
+      } else if (this.skillsPanel) {
+        this.skillsPanel.selected = Math.max(0, this.skillsPanel.selected - 1)
+        this.scheduleRender()
       } else if (this.settingsPicker) {
         this.settingsPicker.selected = Math.max(0, this.settingsPicker.selected - 1); this.scheduleRender()
       } else if (this.menu) {
@@ -3211,6 +3282,9 @@ class TuiApp {
         this.selectJob(this.jobPanel.selected + 1)
       } else if (this.mcpPanel) {
         this.mcpPanel.selected = Math.min(this.mcpPanel.entries.length - 1, this.mcpPanel.selected + 1)
+        this.scheduleRender()
+      } else if (this.skillsPanel) {
+        this.skillsPanel.selected = Math.min((this.skills?.length ?? 1) - 1, this.skillsPanel.selected + 1)
         this.scheduleRender()
       } else if (this.settingsPicker) {
         this.settingsPicker.selected = Math.min(2, this.settingsPicker.selected + 1); this.scheduleRender()
@@ -3960,6 +4034,39 @@ class TuiApp {
       lines.push(`${ANSI.muted}↑↓ move  ·  ${numberHint}  ·  Enter or Tab submit  ·  Esc cancel${ANSI.reset}`)
       return lines
     }
+    if (this.presetConfirm) {
+      const id = this.presetConfirm.requestedId
+      return [
+        `${ANSI.muted}SWITCH PRESET${ANSI.reset} ${ANSI.dim}· ${ANSI.amber}${id}${ANSI.reset}`,
+        '',
+        `${ANSI.ink}This session already has conversation history.${ANSI.reset}`,
+        `${ANSI.dim}Switching presets requires starting a fresh session.${ANSI.reset}`,
+        '',
+        `  ${ANSI.blue}Y${ANSI.reset} ${ANSI.ink}Start new session with preset "${id}"${ANSI.reset}`,
+        `  ${ANSI.coral}N${ANSI.reset} ${ANSI.dim}Cancel — keep current session and preset${ANSI.reset}`,
+        '',
+        `${ANSI.muted}y confirm new session  ·  n or Esc cancel${ANSI.reset}`
+      ]
+    }
+    if (this.skillsPanel) {
+      const skills = this.skills ?? []
+      const slots = Math.max(1, capacity - 2)
+      const start = Math.min(Math.max(0, this.skillsPanel.selected - slots + 1), Math.max(0, skills.length - slots))
+      const shown = skills.slice(start, start + slots)
+      return [
+        `${ANSI.muted}SKILLS${ANSI.reset} ${ANSI.dim}· ${skills.length} loaded${ANSI.reset}`,
+        '',
+        ...(shown.length === 0
+          ? [`${ANSI.dim}no skills loaded in this workspace${ANSI.reset}`]
+          : shown.map((skill, index) => {
+              const marker = index + start === this.skillsPanel.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
+              const desc = shorten(safe(skill.description ?? ''), Math.max(20, columns - 32))
+              return `${marker}  ${ANSI.teal}/${safe(skill.name)}${ANSI.reset}  ${ANSI.dim}${desc}${ANSI.reset}`
+            })),
+        '',
+        `${ANSI.muted}↑↓ navigate  ·  Esc close${ANSI.reset}`
+      ]
+    }
     if (this.menu) {
       const items = this.menu.items
       const start = Math.min(Math.max(0, this.menu.selected - capacity + 1), Math.max(0, items.length - capacity))
@@ -4054,7 +4161,7 @@ class TuiApp {
           return `${cursor}  ${ANSI.blueSoft}${label}${ANSI.reset} ${ANSI.dim}·${ANSI.reset}  ${ANSI.ink}${valStr}${ANSI.reset}  ${ANSI.dim}${desc}${ANSI.reset}`
         }),
         '',
-        `${ANSI.muted}↑↓ select  ·  ←→ or Enter change  ·  Esc close${ANSI.reset}`
+        `${ANSI.muted}↑↓ select  ·  ← → or Enter change  ·  Esc close${ANSI.reset}`
       ]
     }
     if (this.effortPicker) {
@@ -4198,7 +4305,7 @@ class TuiApp {
     this.lastFooterHeight = footerLines.length
 
     let cursorMove = ''
-    const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel
+    const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.skillsPanel
     if (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasOverlay) {
       const rowInFooter = this.inputTopInFooter + (this.caretRow - (this.inputWindowStart ?? 0))
       const upLines = (footerLines.length - 1) - rowInFooter
