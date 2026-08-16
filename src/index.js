@@ -17,8 +17,8 @@ const THEMES = {
     terracotta: '\x1b[38;5;209m', // Claude signature terracotta/coral #ff875f
     amber: '\x1b[38;5;214m',      // Warm golden amber #ffaf00
     peach: '\x1b[38;5;215m',      // Soft peach #ffaf5f
-    teal: '\x1b[38;5;37m',        // Teal cyan #00afaf
-    cyan: '\x1b[38;5;37m',
+    teal: '\x1b[38;5;215m',        // Unified warm peach for secondary accents #ffaf5f
+    cyan: '\x1b[38;5;214m',       // Unified warm golden amber #ffaf00
     blue: '\x1b[38;5;209m',       // Primary accent (Claude terracotta)
     blueSoft: '\x1b[38;5;215m',   // Secondary accent (warm peach)
     ink: '\x1b[38;5;255m',        // Crisp bright white
@@ -3452,17 +3452,17 @@ class TuiApp {
     if (cleanQuery && name.toLowerCase().startsWith(cleanQuery)) {
       const matchPart = name.slice(0, cleanQuery.length)
       const restPart = name.slice(cleanQuery.length)
-      // Matched characters: bright bold amber highlight
+      // Matched characters: bright bold amber/accent highlight
       const matchColor = `${ANSI.bold}${ANSI.amber ?? ANSI.blue}`
       // Remaining characters: dim gray (or crisp ink if selected)
       const restColor = isSelected ? ANSI.ink : ANSI.dim
       nameFormatted = `${ANSI.dim}/${ANSI.reset}${matchColor}${matchPart}${ANSI.reset}${restColor}${restPart}${ANSI.reset}`
     } else {
-      const nameColor = isSelected ? (isSkill ? ANSI.teal : (ANSI.peach ?? ANSI.blueSoft)) : ANSI.dim
+      const nameColor = isSelected ? (isSkill ? (ANSI.peach ?? ANSI.blueSoft) : ANSI.blue) : ANSI.dim
       nameFormatted = `${ANSI.dim}/${ANSI.reset}${nameColor}${name}${ANSI.reset}`
     }
 
-    const kindColor = isSkill ? ANSI.teal : ANSI.dim
+    const kindColor = isSelected ? (isSkill ? (ANSI.peach ?? ANSI.blueSoft) : ANSI.blue) : ANSI.dim
     const descColor = isSelected ? ANSI.ink : ANSI.dim
     return `${marker} ${nameFormatted} ${kindColor}${kind}${ANSI.reset} ${descColor}${description}${ANSI.reset}`
   }
@@ -4186,7 +4186,7 @@ class TuiApp {
           : shown.map((skill, index) => {
               const isSelected = index + start === this.skillsPanel.selected
               const marker = isSelected ? `${ANSI.blue}>${ANSI.reset}` : ' '
-              const nameColor = isSelected ? ANSI.teal : ANSI.muted
+              const nameColor = isSelected ? (ANSI.peach ?? ANSI.blueSoft) : ANSI.dim
               const descColor = isSelected ? ANSI.ink : ANSI.dim
               const desc = shorten(safe(skill.description ?? ''), Math.max(20, columns - 32))
               return `${marker}  ${nameColor}/${safe(skill.name)}${ANSI.reset}  ${descColor}${desc}${ANSI.reset}`
