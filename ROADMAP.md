@@ -43,13 +43,18 @@ DSH Hub 当前是公开 GitHub 仓库的发现与安装目录：提交入口只�
 - [ ] 在干净 `DSH_HOME` 做 GitHub 安装验收：安装、启动、`--dump-config`、mock PTY、卸载/重装。
 - [ ] 提交公开 GitHub URL 到 DSH Hub；该站当前未显示必须 `dsh-plugin` topic 的硬性要求，topic 可作为发现性增强而非发布阻断。
 
-### P1：下一个适配迭代
+### P1：近期适配迭代（已完成）
 
-- [ ] 接入官方 `ctx.settings` / settings-file：先注册命名空间和默认值，再做 `/settings` 面板；无服务时降级为只读说明。
+- [x] 接入官方 `ctx.settings` / settings-file：注册 `tui` 命名空间 schema，支持主题与状态行密度（`detailed`/`compact`/`minimal`）即时切换与落盘。
+- [x] 诊断与全局面板：新增 `/status` 全局诊断看板与 `/context` 占用分布分析。
+- [x] 侧边隔离问答：新增 `/ask <问题>`，零上下文污染，保障主任务编码纯净。
+- [x] 深度方案审查技能：内置 Matt Pocock 经典 `/grill-me` 架构压力测试技能。
+- [x] 视觉与护眼调优：全面采用四阶柔和灰度层级（消除终端白光眩光）与 Claude 暖色调体系，菜单搜索匹配加粗高亮。
+- [x] 交互与终端兼容：全面适配 SS3 终端光标方向键（`\x1bOA/B/C/D`）与 `/preset` 交互式单选圆点确认面板。
+- [x] `/compact` 与 `/steer` 体验提升：平滑过渡防重入互斥锁与排队消息一键干预提拔。
 - [ ] 为 jobs 补一个真实生产者 E2E，验证输出单一游标、取消、结束状态和长输出的交互语义。
 - [ ] CI 矩阵固定当前 RC，并设置一条 `@deepseek-ai/dsh@latest` 预检；RC 变更先报告契约差异再升级。
 - [ ] Windows 兼容性审查与实际 PTY 验证（路径、PowerShell、raw mode、图片协议降级）。
-- [ ] 真实 provider 手动验证技能回填、preset 差异与 settings 保存；测试不得读取或打印凭据。
 
 ### P2：用户价值明确后再做
 
@@ -116,3 +121,44 @@ DSH Hub 当前是公开 GitHub 仓库的发现与安装目录：提交入口只�
 - 市场插件是第三方可执行代码，安装是外部副作用；没有来源、许可证或兼容性证据时默认高风险。
 - TUI 只管理本地视图与确认状态；profile、依赖和 bundle 真相源始终由官方 dsh CLI/pnpm/Harness 负责。
 - 任何新增 Agent-facing 能力，先更新 `HARNESS_COMPATIBILITY.md` 的服务/事件映射，再实现 UI。
+
+## 七、代码架构重构与 DSH / Cordis 规范化方案
+
+为了彻底符合 DSH 官方仓库规范与 Cordis 插件生命周期规范，后续将目前单体式的 `src/index.js`（约 4500 行）渐进式拆解为高内聚、低耦合的模块化架构：
+
+```
+src/
+├── core/                  # Cordis 插件装载与生命周期管理
+│   ├── plugin.js          # Cordis Plugin 入口 (apply, inject, schema)
+│   ├── context.js         # DSH 上下文服务解构与守护
+│   └── lifecycle.js       # 终端进程退出、信号捕获与清理
+├── renderer/              # ANSI 终端渲染子系统
+│   ├── ansi.js            # ANSI 样式 Token、256色 / TrueColor 定义
+│   ├── themes.js          # 主题注册表 (claude, deepseek, mono, light)
+│   ├── statusline.js      # 状态行三阶密度渲染 (detailed, compact, minimal)
+│   ├── markdown.js        # Markdown 轻量语法解析与分词换行渲染
+│   └── diff.js            # 行级 unified diff 语法高亮
+├── input/                 # 终端键盘与交互捕获
+│   ├── tokenizer.js       # 输入分词器 (含 ANSI、SS3 \x1bOA-D、Bracketed Paste)
+│   ├── history.js         # 提示词历史持久化与查询
+│   └── autocomplete.js    # @ 文件引用与 / 命令自动补全
+├── panels/                # 浮层交互面板控制器
+│   ├── base.js            # 面板通用状态与滚动槽位逻辑
+│   ├── preset-picker.js   # Agent Preset 选择与二次确认面板
+│   ├── model-picker.js    # 模型与推理档位面板
+│   ├── skills-panel.js    # 技能与生态面板
+│   ├── jobs-panel.js      # 后台长任务面板
+│   ├── settings-panel.js  # TUI 配置面板
+│   └── question-panel.js  # 用户交互问卷 (ask_user_question) 面板
+└── commands/              # 本地命令路由与执行器
+    ├── registry.js        # 本地命令分发中心
+    ├── ask.js             # /ask 临时隔离问答执行器
+    ├── compact.js         # /compact 平滑压缩执行器
+    ├── status.js          # /status 诊断看板
+    └── steer.js           # /steer 消息提升与实时干预
+```
+
+### 核心规范要求：
+1. **纯粹的 Cordis 依赖注入**：严禁静态导入 `@deepseek-ai/*`，所有平台能力（`agents`、`sessions`、`commands`、`skills`、`llm`、`settings`）统一通过 `inject` 注入；
+2. **单一真相源（Single Source of Truth）**：严禁在 UI 层复制会话状态机，所有状态严格源自 Harness durable event 与平台服务；
+3. **单元测试与 PTY 双层保障**：各子模块具备独立的单元测试，同时保持全套 PTY 端到端回归测试 100% 通过。

@@ -48,12 +48,21 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 - 输入编辑：光标移动（←→/Home/End/`Ctrl+A` 行首/`Ctrl+E` 行尾/`Alt+←→` 按词）、退格/Delete、`Ctrl+J` 换行、`↑↓` 历史（仅光标在行首/行尾时切换；中段按 ↑↓ 移动光标行）、粘贴（bracketed paste，超长内容输入框内部滚动跟随光标）、`Ctrl+U` 清空、`Ctrl+F` 历史搜索面板、`Ctrl+G` 用 `$EDITOR` 编辑、`Ctrl+P` 命令面板；输入历史持久化到 `$DSH_HOME/dsh-tui/history.jsonl`。
 - `!` bash 模式（参考 Claude Code）：输入 `!` 时输入框与上下两条规则线变为绿色，`Enter` 在本地 shell 直接执行命令，输出与退出码以操作日志形式回显（多行输出逐行渲染，60s 超时，最多回显 12 行）。
 - CLI 使用普通终端缓冲区，不进入备用屏幕。文本拖拽、复制和滚轮由终端模拟器原生处理；启动时会显式关闭常见鼠标报告模式，避免 VS Code 等终端把滚轮伪装为 `↑/↓` 而切换输入历史；非多行输入时 `↑/↓` 切换历史提示词，多行输入时 `↑/↓` 移动光标；`Ctrl+O` 负责展开/收起区域。
-- 所有面板（命令菜单/模型选择/会话选择/历史搜索/命令面板/effort/问卷/帮助/审批）统一显示在输入框下方，输入框始终可见。
-- 命令：`/help`、`/clear`（仅清视图）、`/model`（模型选择器，经 `ctx.llm.listProviders/listModels` 列出；选择后**当前会话立即生效**——经 `agent/request` waterfall 原位覆盖 provider/model，同时 `agentDefaultModel.saveSelection` 持久化为新会话默认）、`/preset`（空会话选择官方 agent preset，首轮后锁定）、`/effort`（档位来自 `resolveModelInfo` 的 `reasoning.efforts`，随模型/提供商动态）、`/jobs`（查看后台长任务）、`/resume`（会话选择器，仅列当前目录、按最近使用排序，恢复时重建记录的 preset）、`/recap`（本地统计当前会话轮次、工具、耗时和最近提问，不调用模型）、`/export`（导出当前转录为 Markdown 到 cwd）、`/steer`（运行中不中断地纠正方向）、`/mcp`（展示 profile 中配置的 MCP 服务器）、`/hooks`（展示 hook 桥接）、`/exit`；`/compact`、`/goal`、`/feedback`、`/plan` 等走 Harness 官方 `ctx.commands.execute`。
-- 命令/技能菜单：名称颜色差异保留，同时追加 `cmd` / `skill` 标签；`Ctrl+P` 命令面板显示当前搜索词，命令按 Enter 执行、技能按 Tab 回填到输入框。
+- 所有面板（命令菜单/模型选择/会话选择/历史搜索/命令面板/effort/问卷/帮助/审批/预设/设置）统一显示在输入框下方，输入框始终可见。
+- 命令体系：
+  - 会话与流式：`/help`、`/clear`（仅清视图）、`/recap`（本地统计）、`/export`（导出 Markdown）、`/exit`。
+  - 模型与预设：`/model`（实时模型切换与持久化）、`/effort`（动态推理档位）、`/preset`（4向方向键浏览与数字快速直达；二次确认面板支持方向键/Tab 切换单选圆点与 Enter 提交）、`/plan`（切换 plan/build 模式）。
+  - 诊断与配置：`/status`（输出 Model、Effort、Mode、Preset、Session、Token 占比、权限、Skills/MCP/Hooks 扩展与配置看板）、`/context`（展示当前上下文窗口占用分布）、`/settings`（配置主题与 statusline 密度，持久化到 `~/.dsh/settings.yaml`）、`/rename`（重命名当前会话）。
+  - 辅助与干预：`/ask <问题>`（轻量侧边临时问答，隔离执行，完全不污染主任务 Session Context）、`/steer`（运行中干预或一键将已排队消息提升为实时干预）、`/compact`（对齐 Claude Code 的平滑压缩，带即时反馈、防重入互斥锁与 Token 收益统计）、`/resume`（会话选择器）。
+  - 扩展与生态：`/skills`（技能浏览与搜索）、`/grill-me`（基于 Matt Pocock 经典法则的架构深度拷问与决策对齐技能）、`/jobs`（后台任务可见性）、`/mcp`（已配置 MCP 服务器）、`/hooks`（Hook 桥接）。
+- 命令/技能菜单：名称颜色差异保留，同时追加 `cmd` / `skill` 标签；未选中项低调灰显，搜索时匹配字符以**亮金琥珀色加粗高亮**；`Ctrl+P` 命令面板显示当前搜索词，命令按 Enter 执行、技能按 Tab 回填到输入框。
 - `?` 快捷键帮助；`Ctrl+C` 运行中中断（保留已生成文本）、空闲退出；`Esc` 运行中中断；`Ctrl+D` 空输入退出；`SIGTERM` 干净退出。启动参数 `-c` / `--continue` 从 Harness 的 `ctx.cmdlineArgs` 读取，并恢复当前目录最近一次会话。
 - 启动能力探测：硬依赖服务缺失时给出指明 bundle 的清晰报错并退出，不静默跑到半路。
-- 主题：`DSH_TUI_THEME=deepseek|mono|light` 切换配色，非法值回退默认。
+- 主题与视觉：
+  - 支持 `claude`（暖色调沙色/杏色/赤陶色）、`deepseek`（经典科技蓝）、`mono`（单色）、`light`（浅色）四款主题；
+  - 采用柔和四阶灰度层次（正文 250 雅致浅灰、标签 251 柔和亮灰白、代码 245 中灰、Thinking 241 深石板灰），彻底消除长时间注视终端的眩光感；
+  - 支持三种 Statusline 密度：`detailed`（4行详细版）、`compact`（2行紧凑版）、`minimal`（1行极简版）；
+  - 全面支持标准 ANSI 与 SS3（`\x1bOA/B/C/D`）终端光标方向键导航。
 - 窄终端（80×24）与 Unicode 宽度（CJK 双宽）处理；resize 自适应。
 
 ## 快捷键
