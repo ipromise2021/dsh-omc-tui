@@ -174,7 +174,6 @@ const LOCAL_COMMANDS = [
   { name: 'effort', description: 'set reasoning effort: off, high, or max' },
   { name: 'status', description: 'show full session and environment status' },
   { name: 'preset', description: 'select the agent preset for this blank session' },
-  { name: 'presets', description: 'select the agent preset (alias for /preset)' },
   { name: 'settings', description: 'configure TUI theme and local preferences' },
   { name: 'jobs', description: 'show background jobs and long-running work' },
   { name: 'paste', description: 'paste image from system clipboard' },
@@ -2954,6 +2953,11 @@ class TuiApp {
           index += 2
           continue
         }
+        if (/^O[A-Za-z0-9]/.test(value.slice(index + 1))) {
+          tokens.push(value.slice(index, index + 3))
+          index += 3
+          continue
+        }
         const match = value.slice(index + 1).match(/^\[[0-?]*[ -/]*[@-~]/)
         if (match) {
           tokens.push(`\x1b${match[0]}`)
@@ -3001,7 +3005,7 @@ class TuiApp {
       if (value === '\x1b' || value === '\x03' || value === 'q') {
         this.skillsPanel = undefined
         this.scheduleRender()
-      } else if (value.startsWith('\x1b[')) this.onEscapeSequence(value)
+      } else if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) this.onEscapeSequence(value)
       return
     }
 
@@ -3015,7 +3019,7 @@ class TuiApp {
       else if (value === '\x1b' || value === '\x03') {
         this.picker = undefined
         this.scheduleRender()
-      } else if (value.startsWith('\x1b[')) this.onEscapeSequence(value)
+      } else if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) this.onEscapeSequence(value)
       return
     }
 
@@ -3074,7 +3078,7 @@ class TuiApp {
       else if (value === '\x1b' || value === '\x03') {
         this.modelPicker = undefined
         this.scheduleRender()
-      } else if (value.startsWith('\x1b[')) this.onEscapeSequence(value)
+      } else if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) this.onEscapeSequence(value)
       return
     }
 
@@ -3089,7 +3093,7 @@ class TuiApp {
           this.presetPicker.selected = idx
           this.scheduleRender()
         }
-      } else if (value.startsWith('\x1b[')) this.onEscapeSequence(value)
+      } else if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) this.onEscapeSequence(value)
       return
     }
 
@@ -3097,7 +3101,7 @@ class TuiApp {
       if (value === '\x1b' || value === '\x03') {
         this.mcpPanel = undefined
         this.scheduleRender()
-      } else if (value.startsWith('\x1b[')) this.onEscapeSequence(value)
+      } else if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) this.onEscapeSequence(value)
       return
     }
 
@@ -3274,25 +3278,25 @@ class TuiApp {
   }
 
   onEscapeSequence(value) {
-    if (this.questionPanel && (value === '\x1b[A' || value === '\x1b[B')) {
+    if (this.questionPanel && (value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[B' || value === '\x1bOB')) {
       const question = this.currentQuestion()
       const optionCount = Array.isArray(question?.options) ? question.options.length : 0
       if (optionCount > 0) {
-        const delta = value === '\x1b[A' ? -1 : 1
+        const delta = (value === '\x1b[A' || value === '\x1bOA') ? -1 : 1
         const panel = this.questionPanel
         panel.selected = (panel.selected + delta + optionCount) % optionCount
         this.scheduleRender()
       }
       return
     }
-    if (this.effortPicker && (value === '\x1b[D' || value === '\x1b[C')) {
-      const delta = value === '\x1b[D' ? -1 : 1
+    if (this.effortPicker && (value === '\x1b[D' || value === '\x1bOD' || value === '\x1b[C' || value === '\x1bOC')) {
+      const delta = (value === '\x1b[D' || value === '\x1bOD') ? -1 : 1
       const { efforts } = this.effortPicker
       this.effortPicker.selected = (this.effortPicker.selected + delta + efforts.length) % efforts.length
       this.scheduleRender()
       return
     }
-    if (value === '\x1b[A') {
+    if (value === '\x1b[A' || value === '\x1bOA') {
       if (this.picker) {
         this.picker.selected = Math.max(0, this.picker.selected - 1)
         this.scheduleRender()
@@ -3333,7 +3337,7 @@ class TuiApp {
       }
       return
     }
-    if (value === '\x1b[B') {
+    if (value === '\x1b[B' || value === '\x1bOB') {
       if (this.picker) {
         this.picker.selected = Math.min(this.picker.sessions.length - 1, this.picker.selected + 1)
         this.scheduleRender()
@@ -3374,7 +3378,7 @@ class TuiApp {
       }
       return
     }
-    if (value === '\x1b[D') {
+    if (value === '\x1b[D' || value === '\x1bOD') {
       if (this.settingsPicker) return void this.cycleSetting(-1)
       if (this.presetPicker) {
         this.presetPicker.selected = (this.presetPicker.selected - 1 + this.presetPicker.entries.length) % this.presetPicker.entries.length
