@@ -3829,7 +3829,7 @@ class TuiApp {
       switch (event.type) {
         case 'user/message': {
           if (event.data.source?.kind !== 'user') break
-          push(ANSI.blue, `${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
+          push(ANSI.blue, `  ${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
           for (const block of event.data.content ?? []) {
             if (block.type === 'image') {
               const ref = block.attachment
@@ -3837,17 +3837,21 @@ class TuiApp {
               const dimensions = ref?.width && ref?.height ? ` · ${ref.width}×${ref.height}` : ''
               push(ANSI.dim, `  ◱ image · ${size}${dimensions}`)
             } else if (block.type === 'text') {
-              const blockWidth = Math.max(24, contentWidth - 2)
+              const blockWidth = Math.max(24, contentWidth - 4)
               const innerWidth = blockWidth - 2
               const displayText = compactExpandedFileReferences(block.text)
               const wrapped = wrap(displayText, innerWidth - 2)
-              push('', `${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
+              push('', `  ${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
               for (const line of wrapped) {
                 const padding = ' '.repeat(Math.max(0, innerWidth - 2 - widthOf(line)))
-                push('', `${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
+                push('', `  ${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
               }
-              push('', `${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
+              push('', `  ${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
             }
+          }
+          const skillCount = this.skills?.length || 0
+          if (skillCount > 0) {
+            push(ANSI.dim, `  ◫ 上下文注入 · skill-catalog (${skillCount} skills loaded)`)
           }
           rows.push('')
           break
