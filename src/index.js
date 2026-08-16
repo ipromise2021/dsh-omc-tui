@@ -877,12 +877,12 @@ class TuiApp {
             this.commitUnprintedEvents()
             const columns = Math.max(60, process.stdout.columns || 100)
             const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
-            const headerLines = [`${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`]
+            const headerLines = [`  ${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`]
             if (this.streaming.reasoning) {
               const rlines = this.streaming.reasoning.split('\n').length
               const ms = this.reasoningAt ? Date.now() - this.reasoningAt : undefined
               const msStr = ms !== undefined ? ` · ${(ms / 1000).toFixed(1)}s` : ''
-              headerLines.push(`${ANSI.dim}✻ thinking · ${rlines} lines${msStr}${ANSI.reset}`)
+              headerLines.push(`  ${ANSI.dim}✻ thinking · ${rlines} lines${msStr}${ANSI.reset}`)
               this.reasoningBlocks.unshift({
                 key: `reason-stream-${event.seq || Date.now()}`,
                 lines: rlines,
@@ -3634,33 +3634,31 @@ class TuiApp {
           fenced = false
         } else {
           fenced = true
-          push(ANSI.dim, `  · ${opening[1] || 'code'}${ANSI.reset}`)
+          push(ANSI.dim, `    · ${opening[1] || 'code'}${ANSI.reset}`)
         }
         continue
       }
-      // A malformed/unclosed fence should not turn the rest of the answer
-      // into a code block. Treat it as ordinary text with the marker removed.
       const normalized = !fenced && /^\s*```/.test(source) ? source.replace(/^\s*```\s*/, '') : source
       if (fenced) {
-        for (const line of wrap(source, Math.max(20, contentWidth - 4))) {
-          push(ANSI.detail, `  ${line}${ANSI.reset}`)
+        for (const line of wrap(source, Math.max(20, contentWidth - 6))) {
+          push(ANSI.detail, `    ${line}${ANSI.reset}`)
         }
         continue
       }
       if (/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(normalized)) continue
       if (/^\s*[-*_]\s*(?:[-*_]\s*){2,}$/.test(normalized)) {
-        push(ANSI.dim, `${'─'.repeat(Math.min(24, contentWidth))}${ANSI.reset}`)
+        push(ANSI.dim, `  ${'─'.repeat(Math.min(32, contentWidth - 4))}${ANSI.reset}`)
         continue
       }
       if (!normalized.trim()) {
         rows.push(null)
         continue
       }
-      let prefix = ''
+      let prefix = '  '
       let content = normalized.trim()
       const heading = content.match(/^#{1,6}\s+(.*)$/)
       if (heading) {
-        push(ANSI.blueSoft, `${ANSI.bold}${styleInlineMarkdown(heading[1])}${ANSI.reset}`)
+        push(ANSI.blueSoft, `  ${ANSI.bold}${styleInlineMarkdown(heading[1])}${ANSI.reset}`)
         continue
       }
       const table = content.includes('|') && content.split('|').length >= 3
@@ -3678,7 +3676,7 @@ class TuiApp {
           prefix = `  ${ordered[1]}. `
           content = ordered[2]
         } else if (quote) {
-          prefix = '│ '
+          prefix = '  │ '
           content = quote[1]
         }
       }
@@ -3753,52 +3751,52 @@ class TuiApp {
           const isMysql = /mysql/i.test(event.data.name)
           if (isBash) {
             const command = args.command ?? args.cmd ?? args.script
-            push(ANSI.ink, `• Running command...`)
-            if (command) push(ANSI.dim, `  └ $ ${safe(shorten(String(command), Math.max(20, contentWidth - 8)))}`)
+            push(ANSI.ink, `  • Running command...`)
+            if (command) push(ANSI.dim, `    └ $ ${safe(shorten(String(command), Math.max(20, contentWidth - 10)))}`)
           } else if (isSkill) {
             const skillName = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'loading instructions'
-            push(ANSI.ink, `• Activating skill...`)
-            push(ANSI.blueSoft, `  └ ✦ ${safe(shorten(String(skillName), Math.max(20, contentWidth - 8)))}`)
+            push(ANSI.ink, `  • Activating skill...`)
+            push(ANSI.blueSoft, `    └ ✦ ${safe(shorten(String(skillName), Math.max(20, contentWidth - 10)))}`)
           } else if (isMysql) {
             const query = args.query ?? args.sql ?? args.statement
-            push(ANSI.ink, `• Querying MySQL database...`)
-            if (query) push(ANSI.dim, `  └ 🔍 ${safe(shorten(String(query), Math.max(20, contentWidth - 8)))}`)
-            else push(ANSI.dim, `  └ ⚙ ${event.data.name}`)
+            push(ANSI.ink, `  • Querying MySQL database...`)
+            if (query) push(ANSI.dim, `    └ 🔍 ${safe(shorten(String(query), Math.max(20, contentWidth - 10)))}`)
+            else push(ANSI.dim, `    └ ⚙ ${event.data.name}`)
           } else {
             const file = args.file_path ?? args.path
-            push(ANSI.ink, `• Executing ${event.data.name}...`)
-            if (file) push(ANSI.dim, `  └ 📄 ${safe(shorten(String(file), Math.max(20, contentWidth - 8)))}`)
+            push(ANSI.ink, `  • Executing ${event.data.name}...`)
+            if (file) push(ANSI.dim, `    └ 📄 ${safe(shorten(String(file), Math.max(20, contentWidth - 10)))}`)
           }
         } else if (event.type === 'approval/asked') {
-          push(ANSI.coral, `! approval needed · ${event.data.toolName}`)
+          push(ANSI.coral, `  ! approval needed · ${event.data.toolName}`)
         } else if (event.type === 'approval/decided') {
-          push(ANSI.dim, `  ↳ ${event.data.outcome}`)
+          push(ANSI.dim, `    ↳ ${event.data.outcome}`)
         } else if (event.type === 'hook/invoked') {
-          push(ANSI.dim, `ϟ hook · ${event.data.point} · ${event.data.dialect}${event.data.matcher ? ` · ${event.data.matcher}` : ''}`)
+          push(ANSI.dim, `  ϟ hook · ${event.data.point} · ${event.data.dialect}${event.data.matcher ? ` · ${event.data.matcher}` : ''}`)
         } else if (event.type === 'hook/result') {
           const data = event.data
           const ok = data.decision === 'allow' || data.decision === 'pass'
           const decision = ok ? `${ANSI.blue}${data.decision}${ANSI.reset}` : `${ANSI.coral}${data.decision}${ANSI.reset}`
           const duration = data.durationMs !== undefined ? ` · ${(data.durationMs / 1000).toFixed(1)}s` : ''
-          push(ANSI.dim, `  ↳ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}`)
+          push(ANSI.dim, `    ↳ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}`)
         } else {
           const resultText = textOf(event.data.message.content)
           if (event.data.error) {
             const detail = event.data.error.message ?? resultText
-            push(ANSI.coral, `✗ ${event.data.error.code ?? 'error'} · ${shorten(detail, Math.max(20, contentWidth - 20))}`)
+            push(ANSI.coral, `    ✗ ${event.data.error.code ?? 'error'} · ${shorten(detail, Math.max(20, contentWidth - 22))}`)
           } else if (/^diff |\n(---|\+\+\+)/.test(`\n${resultText}`) && /^[+-]/.test(resultText.split('\n').find((l) => l.startsWith('+') || l.startsWith('-')) ?? '')) {
             renderDiffLines(resultText)
           } else if (resultText) {
             const resultLines = safe(resultText).split(/\r?\n/)
-            push(ANSI.dim, `  └ ✓ ${shorten(resultLines[0], Math.max(20, contentWidth - 8))}`)
+            push(ANSI.dim, `    └ ✓ ${shorten(resultLines[0], Math.max(20, contentWidth - 10))}`)
             if (resultLines.length > 1) {
-              push(ANSI.dim, `    ↳ ${resultLines.length - 1} more output line${resultLines.length === 2 ? '' : 's'}`)
+              push(ANSI.dim, `      ↳ ${resultLines.length - 1} more output line${resultLines.length === 2 ? '' : 's'}`)
             }
           }
         }
       }
       if (calls.length > 1 && this.expandedKeys.has(key)) {
-        push('', `${ANSI.muted}╰${'─'.repeat(Math.max(0, contentWidth - 2))}╯`)
+        push('', `  ${ANSI.muted}╰${'─'.repeat(Math.max(0, contentWidth - 4))}╯`)
       }
     }
 
@@ -3825,24 +3823,24 @@ class TuiApp {
       switch (event.type) {
         case 'user/message': {
           if (event.data.source?.kind !== 'user') break
-          push(ANSI.blue, `${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
+          push(ANSI.blue, `  ${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
           for (const block of event.data.content ?? []) {
             if (block.type === 'image') {
               const ref = block.attachment
               const size = formatImageBytes(ref?.bytes ?? 0)
               const dimensions = ref?.width && ref?.height ? ` · ${ref.width}×${ref.height}` : ''
-              push(ANSI.dim, `◱ image · ${size}${dimensions}`)
+              push(ANSI.dim, `  ◱ image · ${size}${dimensions}`)
             } else if (block.type === 'text') {
-              const blockWidth = Math.max(24, contentWidth - 2)
+              const blockWidth = Math.max(24, contentWidth - 4)
               const innerWidth = blockWidth - 2
               const displayText = compactExpandedFileReferences(block.text)
               const wrapped = wrap(displayText, innerWidth - 2)
-              push('', `${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
+              push('', `  ${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
               for (const line of wrapped) {
                 const padding = ' '.repeat(Math.max(0, innerWidth - 2 - widthOf(line)))
-                push('', `${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
+                push('', `  ${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
               }
-              push('', `${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
+              push('', `  ${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
             }
           }
           rows.push('')
@@ -3853,16 +3851,16 @@ class TuiApp {
           const answerText = fullAnswerText
           const block = this.reasoningBlocks.find((entry) => entry.key === `reason-${event.seq}`)
           if (!answerText && !block) break
-          push(ANSI.blueSoft, `DSH  ${ANSI.muted}${this.activeModel?.model ?? this.agent?.options?.model ?? ''} · ${formatTime(event.time)}`)
+          push(ANSI.blueSoft, `  DSH  ${ANSI.muted}${this.activeModel?.model ?? this.agent?.options?.model ?? ''} · ${formatTime(event.time)}`)
           if (block) {
             const ms = block.ms !== undefined ? ` · ${(block.ms / 1000).toFixed(1)}s` : ''
             if (this.expandedKeys.has(block.key)) {
-              push(ANSI.dim, `✻ thinking · ${block.lines} lines${ms}`)
-              for (const line of wrap(block.text, contentWidth - 2)) {
-                push(ANSI.detail, `  ${line}`)
+              push(ANSI.dim, `  ✻ thinking · ${block.lines} lines${ms}`)
+              for (const line of wrap(block.text, contentWidth - 4)) {
+                push(ANSI.detail, `    ${line}`)
               }
             } else {
-              push(ANSI.dim, `✻ thinking · ${block.lines} lines${ms}`)
+              push(ANSI.dim, `  ✻ thinking · ${block.lines} lines${ms}`)
             }
           }
           if (answerText) {
@@ -3876,10 +3874,10 @@ class TuiApp {
           break
         }
         case 'turn/end': {
-          if (event.data.reason?.kind === 'aborted') push(ANSI.dim, `∅ interrupted`)
+          if (event.data.reason?.kind === 'aborted') push(ANSI.dim, `  ∅ interrupted`)
           else if (event.data.reason?.kind === 'error') {
             const error = event.data.reason.error
-            push(ANSI.coral, `✗ ${error?.code ?? 'error'}: ${shorten(error?.message ?? '', contentWidth - 20)}`)
+            push(ANSI.coral, `  ✗ ${error?.code ?? 'error'}: ${shorten(error?.message ?? '', contentWidth - 20)}`)
           } else if (event.data.reason?.kind === 'completed') {
             const allEvents = this.agent?.session?.events ?? []
             let startIndex = -1
@@ -3894,7 +3892,7 @@ class TuiApp {
               if (Number.isFinite(durationMs) && durationMs >= 0) {
                 const tools = allEvents.slice(startIndex).filter((e) => e.type === 'tool/call').length
                 const toolsText = tools > 0 ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : ''
-                push(ANSI.dim, `✓ finished in ${formatDurationMs(durationMs)}${toolsText}`)
+                push(ANSI.dim, `  ✓ finished in ${formatDurationMs(durationMs)}${toolsText}`)
               }
             }
           }
@@ -4202,25 +4200,29 @@ class TuiApp {
     this.inputMaxRows = Math.max(3, Math.min(10, rows - 10))
     const inputLines = this.inputFrame(columns)
 
-    if (this.active || this.streaming.reasoning || this.streaming.tool || this.streamBuffer || this.streaming.text) {
+    if (this.active || this.agent?.status === 'running' || this.streaming.reasoning || this.streaming.tool || this.streamBuffer || this.streaming.text) {
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]
       const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
       const elapsedSec = this.reasoningAt ? Math.max(1, Math.floor((Date.now() - this.reasoningAt) / 1000)) : 1
 
       if (this.streamBuffer) {
-        lines.push(`${ANSI.answer}${this.streamBuffer}${ANSI.blue}▋${ANSI.reset}`)
-      } else if (this.streaming.reasoning) {
+        lines.push(`  ${ANSI.answer}${this.streamBuffer}${ANSI.blue}▋${ANSI.reset}`)
+      }
+
+      if (this.streaming.reasoning) {
         const snippet = this.streaming.reasoning.trim().replace(/\s+/g, ' ')
         const text = snippet ? ` · ${shorten(snippet, Math.max(16, columns - 40))}` : ''
-        lines.push(`${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ↓ tokens)${text}${ANSI.reset}`)
-        lines.push(`  ${ANSI.dim}└ Tip: Ctrl+O to expand reasoning${ANSI.reset}`)
+        lines.push(`  ${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ↓ tokens)${text}${ANSI.reset}`)
+        lines.push(`    ${ANSI.dim}└ Tip: Ctrl+O to expand reasoning${ANSI.reset}`)
       } else if (this.streaming.tool) {
         const toolName = this.streaming.tool.name || 'tool'
-        lines.push(`${ANSI.amber}${frame} ${this.activityPhrase()}${dots} (${elapsedSec}s)${ANSI.reset}`)
-        lines.push(`  ${ANSI.dim}└ ⚙ ${toolName} · ${shorten(this.streaming.tool.args.trim().replace(/\s+/g, ' '), Math.max(20, columns - toolName.length - 12))}${ANSI.reset}`)
+        lines.push(`  ${ANSI.amber}${frame} Calling ${toolName}${dots} (${elapsedSec}s)${ANSI.reset}`)
+        lines.push(`    ${ANSI.dim}└ ⚙ ${toolName} · ${shorten(this.streaming.tool.args.trim().replace(/\s+/g, ' '), Math.max(20, columns - toolName.length - 14))}${ANSI.reset}`)
+      } else if (this.streaming.text || this.streamBuffer) {
+        lines.push(`  ${ANSI.blue}${frame} Generating response${dots} (${elapsedSec}s)${ANSI.reset}`)
       } else {
-        lines.push(`${ANSI.blue}${ANSI.bold}${frame} ${this.activityPhrase()}${dots} (${elapsedSec}s)${ANSI.reset}`)
+        lines.push(`  ${ANSI.blue}${ANSI.bold}${frame} ${this.activityPhrase()}${dots} (${elapsedSec}s)${ANSI.reset}`)
       }
     }
 
