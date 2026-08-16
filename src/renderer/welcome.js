@@ -22,6 +22,6 @@ export function welcomeCardRows(columns, workspace, model, effort, ANSI = defaul
     row(`${ANSI.muted}/ commands${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}@ files${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}Cmd+V images${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}Shift+Tab permission${ANSI.reset}`),
     `${ANSI.rule}╰${'─'.repeat(outerWidth - 2)}╯${ANSI.reset}`,
     '',
-    `${ANSI.blueSoft}Tip:${ANSI.reset} ${ANSI.muted}type a message to start  ·  ? shortcuts  ·  /effort reasoning level${ANSI.reset}`
+    `${ANSI.blueSoft}Tip:${ANSI.reset} ${ANSI.muted}enter a message to start  ·  ? shortcuts  ·  /effort reasoning level${ANSI.reset}`
   ]
 }

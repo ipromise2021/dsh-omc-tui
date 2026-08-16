@@ -240,124 +240,135 @@ class TuiApp {
       throw new Error('dsh-tui requires an interactive terminal (stdin and stdout must be TTYs)')
     }
     this.probeRequiredServices()
-    await Promise.all([
-      this.ctx.get('loader')?.await(),
-      this.loadHistory(),
-      this.loadMru()
-    ])
-    this.installSettings()
-    const selection = this.ctx.agentDefaultModel.currentSelection()
-    const requestedPreset = this.ctx.agentPresets.defaultId
-    const launcherArgs = this.ctx.get('cmdlineArgs')?.get?.() ?? []
-    const continueLast = launcherArgs.includes('-c') || launcherArgs.includes('--continue') || process.argv.includes('-c') || process.argv.includes('--continue')
-    let resumeRecord
-    const cwd = process.cwd()
-    if (continueLast) {
-      const mruEntries = Object.entries(this.mru).sort((a, b) => b[1] - a[1])
-      for (const [candidateId] of mruEntries) {
-        try {
-          const snapshot = await this.ctx.sessionQuery.readSession(candidateId)
-          if ((snapshot?.header?.cwd ?? snapshot?.cwd) === cwd) {
-            resumeRecord = snapshot
-            break
-          }
-        } catch {}
-      }
-      if (!resumeRecord) {
-        const records = (await this.ctx.sessionQuery.listSessions())
-          .filter((record) => (record.header?.cwd ?? record.cwd) === cwd)
-          .sort((a, b) => (this.mru[b.header.id] ?? b.header.createdAt) - (this.mru[a.header.id] ?? a.header.createdAt))
-        resumeRecord = records[0]
-      }
-      if (!resumeRecord) throw new Error(`no previous Harness session found for ${cwd}; start once without -c`)
-    }
-    const createOptions = {
-      sessionId: `session-${randomUUID()}`,
-      meta: { cwd: process.cwd(), agentPreset: requestedPreset },
-      agentOptions: { provider: selection.provider, model: selection.model },
-      setup: async (agentCtx) => {
-        await this.ctx.agentPresets.mount(agentCtx, resumeRecord?.header.agentPreset ?? requestedPreset)
-      }
-    }
-    const { agent, dispose } = resumeRecord
-      ? await this.ctx.agents.resume({ resumeSessionId: resumeRecord.header.id, agentOptions: createOptions.agentOptions, setup: createOptions.setup })
-      : await this.ctx.agents.create(createOptions)
-    this.handle = { agent, dispose }
-    this.agent = agent
-    this.presetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? resumeRecord?.header.agentPreset ?? requestedPreset
-    this.reasoningEffort = selection.reasoningEffort
-    this.attachRequestOverride(agent)
-    this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
-    this.usage = foldUsage(agent.session.events)
-    this.viewClearedSeq = resumeRecord ? 0 : agent.session.seq
-    if (resumeRecord) {
-      // Rebuild transient presentation state (not persisted by Harness) from
-      // the durable event log so historical Thinking blocks remain expandable.
-      this.reasoningBlocks = []
-      this.streaming = { text: '', reasoning: '', tool: undefined }
-      this.reasoningAt = undefined
-      for (const event of agent.session.events) this.onSessionEvent(agent.session, event)
-      this.streaming = { text: '', reasoning: '', tool: undefined }
-      this.reasoningAt = undefined
-      this.message = ''
-      this.touchMru(resumeRecord.header.id)
-    }
 
-    this.disposers.push(this.ctx.on('session/event', (session, event) => this.onSessionEvent(session, event)))
-    this.disposers.push(this.ctx.on('agent/status', ({ agent: changed, status }) => {
-      if (changed !== this.agent) return
-      this.onStatus(status)
-    }))
-    this.disposers.push(this.ctx.on('approval/request', (request, next) => {
-      if (request.agent !== this.agent) return next()
-      return this.requestApproval(request)
-    }))
-    this.disposers.push(this.ctx.on('skills/change', () => {
-      void this.refreshSkills()
-    }))
-    this.disposers.push(this.ctx.userQuestions.registerProvider({
-      ask: (request) => this.openQuestion(request)
-    }))
-    if (typeof this.ctx.jobs?.onJobsChanged === 'function') {
-      this.disposers.push(this.ctx.jobs.onJobsChanged(() => {
-        if (this.jobPanel) void this.refreshJobsPanel()
-        else this.scheduleRender()
-      }))
-    }
-
+    // 1. Instantly open terminal and render welcome card (0ms latency!)
     this.openTerminal()
+    this.installSettings()
+    const cwd = process.cwd()
     const columns = Math.max(60, process.stdout.columns || 100)
     const contentWidth = Math.max(24, columns - 2)
     const workspace = truncateWidth(safe(cwd), Math.max(24, contentWidth - 24))
-    const model = truncateWidth(`${selection.provider}/${selection.model}`, Math.max(20, contentWidth - 28))
-    const welcome = welcomeCardRows(columns, workspace, model, this.currentEffort().toUpperCase())
+    const initialSelection = this.ctx.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+    const initialModel = truncateWidth(`${initialSelection.provider}/${initialSelection.model}`, Math.max(20, contentWidth - 28))
+    const welcome = welcomeCardRows(columns, workspace, initialModel, (initialSelection.reasoningEffort ?? 'default').toUpperCase())
     this.commitToScrollback(welcome)
-
-    if (resumeRecord) {
-      const pastRows = this.formatEvents(this.agent.session.events, columns)
-      if (pastRows.length > 0) await this.commitToScrollbackChunked(pastRows)
-      this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
-    } else {
-      this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
-    }
-
-    void this.refreshSkills()
-    void this.refreshEnvironmentSummary()
     this.render()
+
+    let resolveInit
+    this.sessionInitPromise = new Promise((resolve) => { resolveInit = resolve })
+
+    try {
+      // 2. Parallel background data loading
+      const launcherArgs = this.ctx.get('cmdlineArgs')?.get?.() ?? []
+      const continueLast = launcherArgs.includes('-c') || launcherArgs.includes('--continue') || process.argv.includes('-c') || process.argv.includes('--continue')
+
+      const [,, resumeRecord] = await Promise.all([
+        this.loadHistory(),
+        this.loadMru(),
+        continueLast ? this.findResumeRecord(cwd) : Promise.resolve(undefined)
+      ])
+
+      const selection = this.ctx.agentDefaultModel.currentSelection()
+      const requestedPreset = this.ctx.agentPresets.defaultId
+
+      const createOptions = {
+        sessionId: `session-${randomUUID()}`,
+        meta: { cwd: process.cwd(), agentPreset: requestedPreset },
+        agentOptions: { provider: selection.provider, model: selection.model },
+        setup: async (agentCtx) => {
+          await this.ctx.agentPresets.mount(agentCtx, resumeRecord?.header.agentPreset ?? requestedPreset)
+        }
+      }
+      const { agent, dispose } = resumeRecord
+        ? await this.ctx.agents.resume({ resumeSessionId: resumeRecord.header.id, agentOptions: createOptions.agentOptions, setup: createOptions.setup })
+        : await this.ctx.agents.create(createOptions)
+
+      this.handle = { agent, dispose }
+      this.agent = agent
+      this.presetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? resumeRecord?.header.agentPreset ?? requestedPreset
+      this.reasoningEffort = selection.reasoningEffort
+      this.attachRequestOverride(agent)
+      this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
+      this.usage = foldUsage(agent.session.events)
+      this.viewClearedSeq = resumeRecord ? 0 : agent.session.seq
+      if (resumeRecord) {
+        this.reasoningBlocks = []
+        this.streaming = { text: '', reasoning: '', tool: undefined }
+        this.reasoningAt = undefined
+        for (const event of agent.session.events) this.onSessionEvent(agent.session, event)
+        this.streaming = { text: '', reasoning: '', tool: undefined }
+        this.reasoningAt = undefined
+        this.message = ''
+        this.touchMru(resumeRecord.header.id)
+      }
+
+      this.disposers.push(this.ctx.on('session/event', (session, event) => this.onSessionEvent(session, event)))
+      this.disposers.push(this.ctx.on('agent/status', ({ agent: changed, status }) => {
+        if (changed !== this.agent) return
+        this.onStatus(status)
+      }))
+      this.disposers.push(this.ctx.on('approval/request', (request, next) => {
+        if (request.agent !== this.agent) return next()
+        return this.requestApproval(request)
+      }))
+      this.disposers.push(this.ctx.on('skills/change', () => {
+        void this.refreshSkills()
+      }))
+      if (this.ctx.userQuestions?.registerProvider) {
+        this.disposers.push(this.ctx.userQuestions.registerProvider({
+          ask: (request) => this.openQuestion(request)
+        }))
+      }
+      if (typeof this.ctx.jobs?.onJobsChanged === 'function') {
+        this.disposers.push(this.ctx.jobs.onJobsChanged(() => {
+          if (this.jobPanel) void this.refreshJobsPanel()
+          else this.scheduleRender()
+        }))
+      }
+
+      if (resumeRecord) {
+        const pastRows = this.formatEvents(this.agent.session.events, columns)
+        if (pastRows.length > 0) await this.commitToScrollbackChunked(pastRows)
+        this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
+      } else {
+        this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
+      }
+
+      void this.refreshSkills()
+      void this.refreshEnvironmentSummary()
+    } finally {
+      this.sessionInitPromise = undefined
+      if (resolveInit) resolveInit()
+      this.render()
+    }
+  }
+
+  async findResumeRecord(cwd) {
+    const mruEntries = Object.entries(this.mru || {}).sort((a, b) => b[1] - a[1])
+    for (const [candidateId] of mruEntries) {
+      try {
+        const snapshot = await this.ctx.sessionQuery.readSession(candidateId)
+        if ((snapshot?.header?.cwd ?? snapshot?.cwd) === cwd) {
+          return snapshot
+        }
+      } catch {}
+    }
+    const records = (await this.ctx.sessionQuery.listSessions())
+      .filter((record) => (record.header?.cwd ?? record.cwd) === cwd)
+      .sort((a, b) => ((this.mru?.[b.header.id] ?? b.header.createdAt) - (this.mru?.[a.header.id] ?? a.header.createdAt)))
+    if (records.length === 0) throw new Error(`no previous Harness session found for ${cwd}; start once without -c`)
+    return records[0]
   }
 
   probeRequiredServices() {
     const required = [
       'agents',
-      'sessions',
       'permissionPresets',
       'commands',
       'sessionQuery',
       'agentDefaultModel',
-      'skills',
-      'attachments',
-      'userQuestions',
-      'agentPresets', 'settings'
+      'agentPresets',
+      'settings'
     ]
     const problems = required.filter((service) => !this.ctx[service]).map((service) => `ctx.${service}`)
     if (typeof this.ctx.get?.('appExit') !== 'function') problems.push('ctx.get("appExit")')
@@ -2495,7 +2506,8 @@ class TuiApp {
 
   // ── input dispatch ─────────────────────────────────────────────────────
 
-  handleInput(chunk) {
+  async handleInput(chunk) {
+    if (this.sessionInitPromise) await this.sessionInitPromise
     if (process.stdin.isTTY && !process.stdin.isRaw) process.stdin.setRawMode(true)
     const value = chunk.toString('utf8')
     // One-shot compatibility aid for terminal-specific wheel bugs. It records
@@ -3138,6 +3150,14 @@ class TuiApp {
   }
 
   statusRows(columns) {
+    if (!this.agent) {
+      const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? {}
+      const liveModel = selection.model ?? 'deepseek-v4-flash'
+      const cwdName = process.cwd().split('/').filter(Boolean).pop() || process.cwd()
+      return [
+        `  ${ANSI.blueSoft}BUILD${ANSI.reset} | ${ANSI.dim}[${liveModel}]${ANSI.reset} | ${ANSI.dim}${cwdName}${ANSI.reset} | ${ANSI.dim}initializing session…${ANSI.reset}`
+      ]
+    }
     const density = this.preferences?.statusline ?? 'detailed'
     const selection = this.agent.options
     const liveModel = this.activeModel?.model ?? selection.model
@@ -3182,6 +3202,11 @@ class TuiApp {
     const prompt = bashMode ? `${ANSI.bash}❯${ANSI.reset} ` : `${ANSI.blue}❯${ANSI.reset} `
     const prefixWidth = 2
     const draftWidth = Math.max(24, columns - prefixWidth - 4)
+    if (!this.agent) {
+      this.caretRow = 0
+      this.caretCol = prefixWidth
+      return [`${prompt}${ANSI.muted}starting session…${ANSI.reset}`]
+    }
     if (this.questionPanel) {
       return [`${prompt}${ANSI.muted}choose an option above · number keys or ↑↓ · Enter submit${ANSI.reset}`]
     }
@@ -3402,7 +3427,7 @@ class TuiApp {
   }
 
   render() {
-    if (!this.terminalOpen || !this.agent) return
+    if (!this.terminalOpen) return
     const columns = Math.max(60, process.stdout.columns || 100)
     const rows = Math.max(16, process.stdout.rows || 30)
     const footerLines = this.buildFooter(columns, rows)
