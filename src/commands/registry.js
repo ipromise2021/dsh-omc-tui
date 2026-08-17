@@ -83,7 +83,7 @@ export function handleLocalCommand(app, commandName, line = '') {
       app.pendingImages = []
       app.localLog = []
       app.clearFooter()
-      process.stdout.write('\x1b[2J\x1b[H')
+      process.stdout.write('\x1b[3J\x1b[2J\x1b[H')
       const cwd = app.agent.session.header.cwd ?? process.cwd()
       const columns = Math.max(60, process.stdout.columns || 100)
       const contentWidth = Math.max(24, columns - 2)

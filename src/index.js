@@ -203,8 +203,9 @@ class TuiApp {
       clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         if (!this.terminalOpen) return
-        this.repaint(true)
-      }, 50)
+        this.clearFooter()
+        this.render()
+      }, 40)
     }
     this.disposers.push(() => clearTimeout(resizeTimer))
   }
@@ -590,7 +591,7 @@ class TuiApp {
     try {
       this.clearFooter()
       if (clearScreen) {
-        process.stdout.write('\x1b[2J\x1b[H')
+        process.stdout.write('\x1b[3J\x1b[2J\x1b[H')
       }
       // Replay session events
       const allRows = [...welcome, ...pastRows]
