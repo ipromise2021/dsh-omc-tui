@@ -567,8 +567,19 @@ class TuiApp {
     const unprinted = allEvents.filter((e) => e.seq > (this.lastCommittedSeq ?? 0) && e.seq >= this.viewClearedSeq)
     if (unprinted.length === 0) return
     const columns = Math.max(60, process.stdout.columns || 100)
-    const formatted = this.formatEvents(unprinted, columns)
+    
+    // Only format tool events, approvals, and user messages during live execution
+    // Assistant message text and thoughts are handled by flushStreamBuffer and flushThinking
+    const toolEventsOnly = unprinted.filter((e) => 
+      e.type === 'tool/call' || e.type === 'tool/result' || 
+      e.type === 'approval/asked' || e.type === 'approval/decided' || 
+      e.type === 'hook/invoked' || e.type === 'hook/result' ||
+      e.type === 'user/message'
+    )
     this.lastCommittedSeq = allEvents[allEvents.length - 1]?.seq ?? this.lastCommittedSeq
+    if (toolEventsOnly.length === 0) return
+    
+    const formatted = this.formatEvents(toolEventsOnly, columns)
     if (formatted.length > 0) {
       this.commitToScrollback(formatted)
     }

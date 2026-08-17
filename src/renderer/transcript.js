@@ -139,8 +139,21 @@ export function formatEvents(events, columns, options = {}) {
       continue
     }
     if (group.length > 0) {
-      if (isStrongEvent(event.type)) flushGroup()
-      else continue
+      let hasMoreToolsAhead = false
+      if (event.type === 'assistant/message') {
+        const text = textOf(event.data?.message?.content)?.trim()
+        if (!text || text.length < 120) {
+          for (let n = eventIndex + 1; n < events.length; n++) {
+            if (isToolEvent(events[n].type)) {
+              hasMoreToolsAhead = true
+              break
+            }
+            if (events[n].type === 'user/message' || events[n].type === 'turn/end') break
+          }
+        }
+      }
+      if (!hasMoreToolsAhead && isStrongEvent(event.type)) flushGroup()
+      else if (!hasMoreToolsAhead) continue
     }
     renderGroup(group)
     group = []
