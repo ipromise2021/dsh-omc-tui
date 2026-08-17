@@ -3604,13 +3604,17 @@ class TuiApp {
 
     if (this.compactState) {
       lines.push('')
-      const percent = Math.min(100, Math.max(0, this.compactState.percent ?? 0))
-      const meterWidth = Math.min(28, Math.max(16, columns - 24))
-      const filled = Math.min(meterWidth, Math.max(0, Math.round((percent / 100) * meterWidth)))
-      const bar = `${(ANSI.blue ?? ANSI.amber)}${'█'.repeat(filled)}${ANSI.rule}${'░'.repeat(meterWidth - filled)}${ANSI.reset} ${ANSI.blueSoft}${percent}%${ANSI.reset}`
-      
-      lines.push(`  ${ANSI.blueSoft}✻${ANSI.reset} ${ANSI.bold}Compacting conversation...${ANSI.reset}`)
-      lines.push(`    ${bar}`)
+      const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+      const frame = frames[Math.floor(Date.now() / 80) % frames.length]
+      const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
+      const elapsed = this.compactState.startedAt
+        ? ((Date.now() - this.compactState.startedAt) / 1000).toFixed(1)
+        : '0.1'
+
+      lines.push(`  ${ANSI.blueSoft}${frame}${ANSI.reset} ${ANSI.bold}Compacting conversation history${dots}${ANSI.reset} ${ANSI.dim}(${elapsed}s)${ANSI.reset}`)
+      if (this.compactState.phrase) {
+        lines.push(`    ${ANSI.dim}│ ${this.compactState.phrase}${ANSI.reset}`)
+      }
       if (this.compactState.tip) {
         lines.push(`    ${ANSI.dim}└ ${this.compactState.tip}${ANSI.reset}`)
       }

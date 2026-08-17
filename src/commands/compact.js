@@ -1,6 +1,14 @@
 import { shorten, formatTokens } from '../renderer/ansi.js'
 import { ANSI } from '../renderer/themes.js'
 
+const COMPACT_PHRASES = [
+  'Distilling key context and decisions',
+  'Summarizing conversation thread memories',
+  'Pruning obsolete message turns',
+  'Compressing workspace file contexts',
+  'Synthesizing final compacted summary'
+]
+
 const COMPACT_TIPS = [
   'Tip: Say "fan out subagents" and Claude sends a team. Each one digs deep so nothing gets missed.',
   'Tip: Use @filename to inject specific file contents directly into conversation context.',
@@ -30,35 +38,38 @@ export async function handleCompact(app, line) {
   // Print command header in scrollback immediately
   app.commitToScrollback(['', `${ANSI.blue}${ANSI.bold}❯ /compact${ANSI.reset}`])
 
-  // Initialize Claude Code-style live compact state
+  const startedAt = Date.now()
   let currentTipIndex = Math.floor(Math.random() * COMPACT_TIPS.length)
-  let percent = 2
+  let currentPhraseIndex = 0
+
   app.compactState = {
-    percent,
+    startedAt,
+    phrase: COMPACT_PHRASES[currentPhraseIndex],
     tip: COMPACT_TIPS[currentTipIndex]
   }
   app.scheduleRender()
 
-  // Progress animation timer
+  // Live animation timer (smooth spinner & phrase rotation)
   let timer
+  let step = 0
   timer = setInterval(() => {
     if (!app.compactState) {
       clearInterval(timer)
       return
     }
-    // Asymptotically advance progress up to 94% while waiting for completion
-    if (percent < 30) percent += 4
-    else if (percent < 70) percent += 3
-    else if (percent < 92) percent += 1
-
-    // Rotate tip every ~4 seconds
-    if (Math.random() < 0.1) {
+    step++
+    // Rotate phrase every ~1.8s
+    if (step % 18 === 0) {
+      currentPhraseIndex = (currentPhraseIndex + 1) % COMPACT_PHRASES.length
+      app.compactState.phrase = COMPACT_PHRASES[currentPhraseIndex]
+    }
+    // Rotate tip every ~4.5s
+    if (step % 45 === 0) {
       currentTipIndex = (currentTipIndex + 1) % COMPACT_TIPS.length
       app.compactState.tip = COMPACT_TIPS[currentTipIndex]
     }
-    app.compactState.percent = percent
     app.scheduleRender()
-  }, 160)
+  }, 100)
 
   // Track token usage before compaction
   const beforeTokens = app.agent?.session?.usage?.input ?? app.agent?.session?.events?.length ?? 0
@@ -69,8 +80,7 @@ export async function handleCompact(app, line) {
     const result = execution?.result
 
     clearInterval(timer)
-    if (app.compactState) app.compactState.percent = 100
-    app.scheduleRender()
+    const totalSec = ((Date.now() - startedAt) / 1000).toFixed(1)
 
     if (result?.kind === 'success' || result?.text) {
       const text = result.text ?? 'Conversation compacted successfully'
@@ -87,7 +97,7 @@ export async function handleCompact(app, line) {
           : ''
         
         const summaryLines = [
-          `  ${ANSI.blueSoft}✔${ANSI.reset} ${ANSI.bold}Conversation compacted successfully${ANSI.reset}`,
+          `  ${ANSI.blueSoft}✔${ANSI.reset} ${ANSI.bold}Conversation compacted successfully${ANSI.reset} ${ANSI.dim}(in ${totalSec}s)${ANSI.reset}`,
           `    ${ANSI.dim}└ ${text}${tokenDiff} · Context window freed for new tasks${ANSI.reset}`,
           ''
         ]
