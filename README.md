@@ -261,6 +261,21 @@ python3 test/pty-interaction.py /tmp/interaction.log # 菜单/快捷键/多行�
 
 ---
 
+## 🛠️ 本地开发与发布流程 (Development & Publishing)
+
+```sh
+# 1. 快速语法与模块导入完整性校验
+npm run verify
+
+# 2. 重新渲染 README / 宣传场景截图 (可选)
+npm run render-assets
+
+# 3. 发布至公共 npm 镜像 / DSH 插件体系
+npm publish --access public
+```
+
+---
+
 ## 🏗️ 架构规范与单一真相源 (Architecture & SSOT)
 
 1. **纯粹的 Cordis 依赖注入**：严禁静态 import `@deepseek-ai/*`，依赖解析与宿主环境完全解耦；
