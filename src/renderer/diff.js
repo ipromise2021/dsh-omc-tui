@@ -8,6 +8,9 @@ export function renderDiffLines(text, contentWidth, ANSI = defaultAnsi) {
   const lines = text.split('\n')
   let inDiff = false
   let count = 0
+  const removeBg = ANSI.diffRemoveBg ?? '\x1b[48;5;52m'
+  const addBg = ANSI.diffAddBg ?? '\x1b[48;5;236m'
+
   for (const line of lines) {
     if (count >= 24) {
       push(ANSI.muted, `… ${lines.length - 24} more diff lines`)
@@ -17,9 +20,11 @@ export function renderDiffLines(text, contentWidth, ANSI = defaultAnsi) {
       inDiff = true
       push(ANSI.muted, truncateWidth(safe(line), contentWidth - 2))
       count += 1
-    } else if (inDiff && (line.startsWith('+') || line.startsWith('-'))) {
-      const color = line.startsWith('+') ? ANSI.blue : ANSI.coral
-      push(color, truncateWidth(safe(line), contentWidth - 2))
+    } else if (inDiff && line.startsWith('-')) {
+      push(`${removeBg}${ANSI.coral}`, ` ${truncateWidth(safe(line), contentWidth - 4)} `)
+      count += 1
+    } else if (inDiff && line.startsWith('+')) {
+      push(`${addBg}${ANSI.blue}`, ` ${truncateWidth(safe(line), contentWidth - 4)} `)
       count += 1
     } else if (inDiff) {
       push(ANSI.ink, truncateWidth(safe(line), contentWidth - 2))
@@ -58,16 +63,21 @@ export function approvalDiffLines(request, argsOrColumns, columnsOrAnsi, ANSI = 
   const newLines = String(args.new_str ?? args.newContent ?? args.replacementContent ?? '').split('\n').filter((l, idx, arr) => idx < arr.length - 1 || l.length > 0)
   const hasEditDiff = (args.old_str !== undefined || args.oldContent !== undefined || args.targetContent !== undefined || args.new_str !== undefined || args.newContent !== undefined || args.replacementContent !== undefined)
 
+  const removeBg = ansiTheme.diffRemoveBg ?? '\x1b[48;5;52m'
+  const addBg = ansiTheme.diffAddBg ?? '\x1b[48;5;236m'
+
   if (hasEditDiff) {
     let curLine = startLine
     for (const oldLine of oldLines.slice(0, 8)) {
       const numStr = String(curLine).padStart(4, ' ')
-      lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${ansiTheme.coral}- ${truncateWidth(safe(oldLine), Math.max(20, columns - 10))}${ansiTheme.reset}`)
+      const content = truncateWidth(safe(oldLine), Math.max(20, columns - 12))
+      lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${removeBg}${ansiTheme.coral} - ${content} ${ansiTheme.reset}`)
       curLine++
     }
     for (const newLine of newLines.slice(0, 8)) {
       const numStr = String(curLine).padStart(4, ' ')
-      lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${ansiTheme.blue || ansiTheme.ok}+ ${truncateWidth(safe(newLine), Math.max(20, columns - 10))}${ansiTheme.reset}`)
+      const content = truncateWidth(safe(newLine), Math.max(20, columns - 12))
+      lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${addBg}${ansiTheme.blue || ansiTheme.ok} + ${content} ${ansiTheme.reset}`)
       curLine++
     }
     return lines
@@ -93,7 +103,8 @@ export function approvalDiffLines(request, argsOrColumns, columnsOrAnsi, ANSI = 
       lines.push(`  ${ansiTheme.dim}new file · ${newContentLines.length} lines${ansiTheme.reset}`)
       for (let idx = 0; idx < Math.min(8, newContentLines.length); idx++) {
         const numStr = String(idx + 1).padStart(4, ' ')
-        lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${ansiTheme.blue}+ ${truncateWidth(safe(newContentLines[idx]), Math.max(20, columns - 10))}${ansiTheme.reset}`)
+        const content = truncateWidth(safe(newContentLines[idx]), Math.max(20, columns - 12))
+        lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${addBg}${ansiTheme.blue} + ${content} ${ansiTheme.reset}`)
       }
       if (newContentLines.length > 8) {
         lines.push(`  ${ansiTheme.dim}… ${newContentLines.length - 8} more lines${ansiTheme.reset}`)
@@ -121,12 +132,14 @@ export function approvalDiffLines(request, argsOrColumns, columnsOrAnsi, ANSI = 
         }
         if (oldLine !== undefined) {
           const numStr = String(lineNum).padStart(4, ' ')
-          lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${ansiTheme.coral}- ${truncateWidth(safe(oldLine), Math.max(20, columns - 10))}${ansiTheme.reset}`)
+          const content = truncateWidth(safe(oldLine), Math.max(20, columns - 12))
+          lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${removeBg}${ansiTheme.coral} - ${content} ${ansiTheme.reset}`)
           diffCount++
         }
         if (newLine !== undefined) {
           const numStr = String(lineNum).padStart(4, ' ')
-          lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${ansiTheme.blue}+ ${truncateWidth(safe(newLine), Math.max(20, columns - 10))}${ansiTheme.reset}`)
+          const content = truncateWidth(safe(newLine), Math.max(20, columns - 12))
+          lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${addBg}${ansiTheme.blue} + ${content} ${ansiTheme.reset}`)
           diffCount++
         }
         lastShownLine = lineNum
