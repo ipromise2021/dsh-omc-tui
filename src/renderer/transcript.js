@@ -291,7 +291,6 @@ export function formatEvents(events, columns, options = {}) {
             }
           }
         }
-        rows.push('')
         break
       }
       case 'local/log': {
