@@ -104,14 +104,17 @@ export function formatEvents(events, columns, options = {}) {
           const diffLines = renderDiffLines(resultText, contentWidth, ANSI)
           for (const line of diffLines) rows.push(line)
         } else if (resultText) {
-          const resultLines = safe(resultText).split(/\r?\n/).filter((l) => l.trim().length > 0)
-          if (resultLines.length > 0) {
-            push(ANSI.dim, `${indent}  └ ${shorten(resultLines[0], Math.max(20, contentWidth - 10))}`)
-            for (let idx = 1; idx < Math.min(4, resultLines.length); idx++) {
-              push(ANSI.dim, `${indent}    ${shorten(resultLines[idx], Math.max(20, contentWidth - 10))}`)
-            }
-            if (resultLines.length > 4) {
-              push(ANSI.dim, `${indent}    … ${resultLines.length - 4} more lines`)
+          const isExpanded = expandedKeys.has(key) || expandedKeys.has(`tool-${event.seq}`)
+          if (isExpanded) {
+            const resultLines = safe(resultText).split(/\r?\n/).filter((l) => l.trim().length > 0)
+            if (resultLines.length > 0) {
+              push(ANSI.dim, `${indent}  └ ${shorten(resultLines[0], Math.max(20, contentWidth - 10))}`)
+              for (let idx = 1; idx < Math.min(4, resultLines.length); idx++) {
+                push(ANSI.dim, `${indent}    ${shorten(resultLines[idx], Math.max(20, contentWidth - 10))}`)
+              }
+              if (resultLines.length > 4) {
+                push(ANSI.dim, `${indent}    … ${resultLines.length - 4} more lines`)
+              }
             }
           }
         }
