@@ -151,6 +151,13 @@ export function formatEvents(events, columns, options = {}) {
         if (event.data.source?.kind !== 'user') break
         const contentBlocks = event.data.content ?? []
         const isBashCmd = contentBlocks.some((b) => b.type === 'text' && b.text?.startsWith('!') && !b.text?.startsWith('!!'))
+        if (!isBashCmd) {
+          const timeText = formatTime(event.time)
+          const timeWidth = widthOf(timeText) + 2
+          const leftDash = '──'
+          const rightDashLen = Math.max(4, contentWidth - 4 - 2 - timeWidth)
+          push('', `  ${ANSI.rule}${leftDash}${ANSI.reset} ${ANSI.muted}${timeText}${ANSI.reset} ${ANSI.rule}${'─'.repeat(rightDashLen)}${ANSI.reset}`)
+        }
         for (const block of contentBlocks) {
           if (block.type === 'image') {
             const ref = block.attachment
@@ -174,7 +181,7 @@ export function formatEvents(events, columns, options = {}) {
               const displayText = compactExpandedFileReferences(rawText)
               const wrapped = wrap(displayText, Math.max(20, contentWidth - 4))
               for (const [idx, line] of wrapped.entries()) {
-                const prefix = idx === 0 ? `${(ANSI.cyan ?? ANSI.blueSoft)}${ANSI.bold}>${ANSI.reset} ` : `  `
+                const prefix = idx === 0 ? `  ${(ANSI.cyan ?? ANSI.blueSoft)}${ANSI.bold}>${ANSI.reset} ` : `    `
                 push('', `${prefix}${ANSI.ink}${ANSI.bold}${line}${ANSI.reset}`)
               }
             }
