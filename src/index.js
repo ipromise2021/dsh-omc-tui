@@ -1054,15 +1054,39 @@ class TuiApp {
 
   formatLogEntry(entry) {
     const lines = []
-    const color = entry.kind === 'error' ? ANSI.coral : entry.kind === 'denied' ? ANSI.dim : ANSI.blue
     if (entry.command) {
-      lines.push('')
-      lines.push(`${ANSI.dim}❯ ${entry.command}${ANSI.reset}`)
-      for (const line of String(entry.text ?? '').split('\n')) {
-        lines.push(`${color}  ⎿ ${line}${ANSI.reset}`)
+      const isBash = entry.command === '!' || entry.command === 'exit 0' || /^exit /.test(entry.command)
+      const isExitLine = /^exit /.test(entry.command)
+      if (isExitLine) {
+        // Output block: render command output cleanly
+        const exitCode = parseInt(entry.command.replace('exit ', ''), 10)
+        const ok = exitCode === 0
+        const outputText = String(entry.text ?? '').trimEnd()
+        if (outputText) {
+          const outputLines = outputText.split('\n')
+          for (const [i, line] of outputLines.entries()) {
+            const prefix = i === 0 ? `  ${ANSI.dim}└${ANSI.reset} ` : `    `
+            lines.push(`${prefix}${ok ? ANSI.answer : ANSI.coral}${line}${ANSI.reset}`)
+          }
+        }
+        if (!ok) {
+          lines.push(`  ${ANSI.coral}↳ exit ${exitCode}${ANSI.reset}`)
+        }
+        lines.push('')
+      } else {
+        // Command header: Claude Code style — highlighted command bar
+        lines.push('')
+        const cmdDisplay = entry.command === '!' ? '' : entry.command
+        const bar = `${ANSI.bash}${ANSI.bold}! ${cmdDisplay}${ANSI.reset}`
+        lines.push(bar)
+        if (entry.text) {
+          for (const line of String(entry.text).split('\n')) {
+            lines.push(`${ANSI.dim}  ${line}${ANSI.reset}`)
+          }
+        }
       }
-      lines.push('')
     } else {
+      const color = entry.kind === 'error' ? ANSI.coral : entry.kind === 'denied' ? ANSI.dim : ANSI.blue
       const marker = entry.kind === 'error' ? '✗' : entry.kind === 'ok' ? '·' : '∅'
       for (const [index, line] of String(entry.text ?? '').split('\n').entries()) {
         lines.push(`${color}${index === 0 ? marker : ' '} ${line}${ANSI.reset}`)
@@ -2583,8 +2607,8 @@ class TuiApp {
 
   finishBash(code, output) {
     this.message = ''
-    const lines = output.trimEnd().split('\n').slice(-12)
-    const preview = lines.map((line) => shorten(line, 110)).join('\n')
+    const lines = output.trimEnd().split('\n').slice(-30)
+    const preview = lines.map((line) => shorten(line, 200)).join('\n')
     const label = code === null ? 'spawn failed' : `exit ${code}`
     if (preview) this.log(code === 0 ? 'ok' : 'error', preview, label)
     else this.log('ok', '(no output)', label)
