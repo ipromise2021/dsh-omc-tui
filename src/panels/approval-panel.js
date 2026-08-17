@@ -1,11 +1,12 @@
 import { safe, shorten, truncateWidth } from '../renderer/ansi.js'
 import { ANSI as defaultAnsi } from '../renderer/themes.js'
 
-export function renderInlineApproval(pendingApproval, approvalChoice, approvalDiffLines, columns, ANSI = defaultAnsi) {
+export function renderInlineApproval(pendingApproval, approvalChoice = 0, approvalDiffLines, columns, ANSI = defaultAnsi) {
   if (!pendingApproval) return []
   const request = pendingApproval.request || {}
-  const choice = approvalChoice === 'deny' ? 'deny' : 'allow'
-  const isAllow = choice === 'allow'
+  const selectedIndex = typeof approvalChoice === 'number'
+    ? approvalChoice
+    : (approvalChoice === 'deny' ? 2 : (approvalChoice === 'always' ? 1 : 0))
   const border = ANSI.rule || ANSI.dim || '\x1b[38;5;238m'
   const rule = `${border}${'─'.repeat(columns)}${ANSI.reset}`
 
@@ -38,6 +39,7 @@ export function renderInlineApproval(pendingApproval, approvalChoice, approvalDi
     if (file) lines.push(`  ${ANSI.dim}${safe(file)}${ANSI.reset}`)
   } else if (isCmd) {
     lines.push(`  ${ANSI.bold}${ANSI.ink}Run command${ANSI.reset}`)
+    if (command) lines.push(`  ${ANSI.dim}$ ${safe(command)}${ANSI.reset}`)
   } else {
     lines.push(`  ${ANSI.bold}${ANSI.ink}Action requested · ${safe(toolName)}${ANSI.reset}`)
   }
@@ -68,7 +70,7 @@ export function renderInlineApproval(pendingApproval, approvalChoice, approvalDi
   if (isEscalate) {
     promptText = '是否同意将权限提升为 workspace-write 并继续执行？'
   } else if (isEdit && file) {
-    promptText = `是否同意对 ${safe(file)} 进行上述修改？`
+    promptText = `是否同意对 ${safe(file)} 进行修改？`
   } else if (isCmd && command) {
     promptText = '是否同意在终端中执行此命令？'
   } else {
@@ -76,23 +78,46 @@ export function renderInlineApproval(pendingApproval, approvalChoice, approvalDi
   }
   lines.push(`  ${ANSI.ink}${ANSI.bold}${promptText}${ANSI.reset}`)
 
-  // 6. Numbered vertical options (list item style)
-  const opt1Marker = isAllow ? `${ANSI.blue}>${ANSI.reset}` : ' '
-  const opt1Text = isAllow
-    ? `${ANSI.blueSoft}${ANSI.bold}1. 同意 (Yes · Y)${ANSI.reset}  ${ANSI.dim}允许本次权限提升并继续执行${ANSI.reset}`
-    : `${ANSI.dim}1. 同意 (Yes · Y)${ANSI.reset}`
+  // 6. 3 Vertical Options (Claude Code standard)
+  let opt1Label = '1. Yes (Y)'
+  let opt1Desc = '仅允许本次操作'
+  let opt2Label = '2. Yes, allow all edits during this session (Shift+Tab)'
+  let opt2Desc = '会话全程自动允许此类操作'
+  let opt3Label = '3. No (N)'
+  let opt3Desc = '拒绝授权并立即终止本次对话'
 
-  const opt2Marker = !isAllow ? `${ANSI.coral}>${ANSI.reset}` : ' '
-  const opt2Text = !isAllow
-    ? `${ANSI.coral}${ANSI.bold}2. 拒绝并终止 (No · N)${ANSI.reset}  ${ANSI.dim}拒绝授权并立即终止本次对话${ANSI.reset}`
-    : `${ANSI.dim}2. 拒绝并终止 (No · N)${ANSI.reset}`
+  if (isCmd) {
+    opt2Label = '2. Yes, allow all commands during this session (Shift+Tab)'
+    opt2Desc = '会话全程自动允许执行终端命令'
+  } else if (isEscalate) {
+    opt1Label = '1. 同意临时提升 (Yes · Y)'
+    opt1Desc = '允许本次提升至 workspace-write'
+    opt2Label = '2. 全程保持 workspace-write 模式 (Shift+Tab)'
+    opt2Desc = '会话期间全程保持写权限'
+    opt3Label = '3. 拒绝并终止 (No · N)'
+    opt3Desc = '拒绝授权并立即终止本次对话'
+  }
 
-  lines.push(`  ${opt1Marker}  ${opt1Text}`)
-  lines.push(`  ${opt2Marker}  ${opt2Text}`)
+  const options = [
+    { label: opt1Label, desc: opt1Desc, color: ANSI.blueSoft },
+    { label: opt2Label, desc: opt2Desc, color: ANSI.blueSoft },
+    { label: opt3Label, desc: opt3Desc, color: ANSI.coral }
+  ]
+
+  for (let i = 0; i < options.length; i++) {
+    const isSelected = selectedIndex === i
+    const marker = isSelected ? `${ANSI.blue}>${ANSI.reset}` : ' '
+    const opt = options[i]
+    if (isSelected) {
+      lines.push(`  ${marker}  ${opt.color}${ANSI.bold}${opt.label}${ANSI.reset}  ${ANSI.dim}${opt.desc}${ANSI.reset}`)
+    } else {
+      lines.push(`  ${marker}  ${ANSI.dim}${opt.label}${ANSI.reset}`)
+    }
+  }
 
   // 7. Footer hint
   lines.push('')
-  lines.push(`  ${ANSI.muted}↑↓ / Tab 切换  ·  Enter / Space 确认  ·  1/2 或 y/n 快速选择  ·  Esc 拒绝并终止${ANSI.reset}`)
+  lines.push(`  ${ANSI.muted}↑↓ / Tab 切换  ·  Enter / Space 确认  ·  1/2/3 或 y/n 快速选择  ·  Esc 拒绝并终止${ANSI.reset}`)
 
   return lines
 }

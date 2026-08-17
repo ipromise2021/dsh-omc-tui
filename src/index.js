@@ -1171,12 +1171,15 @@ class TuiApp {
     this.scheduleRender()
   }
 
-  answerQuestion() {
+  saveCurrentQuestionAnswer() {
     const panel = this.questionPanel
+    if (!panel) return
     const question = this.currentQuestion()
-    if (!panel || !question) return
+    if (!question) return
     const options = Array.isArray(question.options) ? question.options : []
-    if (options.length > 0 && panel.selectedOptions.size === 0) panel.selectedOptions.add(panel.selected)
+    if (options.length > 0 && panel.selectedOptions.size === 0 && !question.multiSelect && !question.multi_select) {
+      panel.selectedOptions.add(panel.selected)
+    }
     const selected = [...panel.selectedOptions]
       .sort((a, b) => a - b)
       .map((index) => {
@@ -1185,22 +1188,32 @@ class TuiApp {
         return String(opt?.label ?? opt?.value ?? opt?.text ?? '')
       })
       .filter(Boolean)
-    panel.answers.push({ id: String(question.id ?? `question-${panel.index + 1}`), selected })
-    if (panel.index + 1 < panel.questions.length) {
+    panel.answers[panel.index] = { id: String(question.id ?? `question-${panel.index + 1}`), selected }
+  }
+
+  answerQuestion() {
+    const panel = this.questionPanel
+    if (!panel) return
+    this.saveCurrentQuestionAnswer()
+    const totalTabs = panel.questions.length + 1
+    if (panel.index + 1 < totalTabs) {
       panel.index += 1
       panel.selected = 0
       panel.selectedOptions = new Set()
       this.scheduleRender()
       return
     }
-    this.finishQuestion(undefined, { answers: panel.answers })
+    this.finishQuestion(undefined, { answers: panel.answers.filter(Boolean) })
   }
 
   handleQuestionToken(value) {
     const panel = this.questionPanel
+    if (!panel) return
+    const isConfirmTab = panel.index >= panel.questions.length
+    const totalTabs = panel.questions.length + 1
     const question = this.currentQuestion()
-    if (!panel || !question) return
-    const options = Array.isArray(question.options) ? question.options : []
+    const options = Array.isArray(question?.options) ? question.options : []
+
     if (value === '\x1b' || value === '\x03') {
       this.finishQuestion(new Error('user cancelled the question'))
       this.active = false
@@ -1218,18 +1231,43 @@ class TuiApp {
       this.scheduleRender()
       return
     }
+
+    if (isConfirmTab) {
+      if (value === '\r' || value === ' ') {
+        this.finishQuestion(undefined, { answers: panel.answers.filter(Boolean) })
+        return
+      }
+      if (value === '\t' || value === 'l') {
+        panel.index = 0
+        panel.selected = 0
+        this.scheduleRender()
+        return
+      }
+      if (value === '\x1b[Z' || value === 'h') {
+        panel.index = panel.questions.length - 1
+        panel.selected = 0
+        this.scheduleRender()
+        return
+      }
+      return
+    }
+
     if (value === '\r') {
       this.answerQuestion()
       return
     }
     if (value === '\t') {
-      if (panel.questions.length > 1) {
-        panel.index = (panel.index + 1) % panel.questions.length
-        panel.selected = 0
-        this.scheduleRender()
-      } else {
-        this.answerQuestion()
-      }
+      this.saveCurrentQuestionAnswer()
+      panel.index = (panel.index + 1) % totalTabs
+      panel.selected = 0
+      this.scheduleRender()
+      return
+    }
+    if (value === '\x1b[Z') {
+      this.saveCurrentQuestionAnswer()
+      panel.index = (panel.index - 1 + totalTabs) % totalTabs
+      panel.selected = 0
+      this.scheduleRender()
       return
     }
     if (value === ' ') {
@@ -1246,9 +1284,10 @@ class TuiApp {
       this.scheduleRender()
       return
     }
-    if ((value === 'h' || value === 'l') && panel.questions.length > 1) {
+    if ((value === 'h' || value === 'l')) {
+      this.saveCurrentQuestionAnswer()
       const delta = value === 'h' ? -1 : 1
-      panel.index = (panel.index + delta + panel.questions.length) % panel.questions.length
+      panel.index = (panel.index + delta + totalTabs) % totalTabs
       panel.selected = 0
       this.scheduleRender()
       return
@@ -2703,22 +2742,56 @@ class TuiApp {
 
   handleToken(value) {
     if (this.pendingApproval) {
+      if (typeof this.approvalChoice !== 'number') {
+        this.approvalChoice = 0
+      }
       const isUp = value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[D' || value === '\x1bOD' || value === 'k'
       const isDown = value === '\x1b[B' || value === '\x1bOB' || value === '\x1b[C' || value === '\x1bOC' || value === '\t' || value === 'j'
-      if (isUp) { this.approvalChoice = 'allow'; this.scheduleRender(); return }
-      if (isDown) { this.approvalChoice = 'deny'; this.scheduleRender(); return }
-
-      const answer = value.trim().toLowerCase()
-      const isApprove = value === '\r' ? (this.approvalChoice !== 'deny') : (value === ' ' ? (this.approvalChoice !== 'deny') : (answer === 'y' || answer === '1'))
-      const isReject = value === '\r' ? (this.approvalChoice === 'deny') : (value === ' ' ? (this.approvalChoice === 'deny') : (answer === 'n' || answer === '2' || value === '\x1b' || value === '\x03'))
-
-      if (isApprove) {
-        this.pendingApproval.settle('allowed-once')
+      if (isUp) {
+        this.approvalChoice = (this.approvalChoice - 1 + 3) % 3
         this.scheduleRender()
         return
       }
-      if (isReject) {
+      if (isDown) {
+        this.approvalChoice = (this.approvalChoice + 1) % 3
+        this.scheduleRender()
+        return
+      }
+
+      const isShiftTab = value === '\x1b[Z'
+      const answer = value.trim().toLowerCase()
+
+      let chosenIndex = this.approvalChoice
+      if (value === '\r' || value === ' ') {
+        chosenIndex = this.approvalChoice
+      } else if (isShiftTab || answer === '2') {
+        chosenIndex = 1
+      } else if (answer === 'y' || answer === '1') {
+        chosenIndex = 0
+      } else if (answer === 'n' || answer === '3' || value === '\x1b' || value === '\x03') {
+        chosenIndex = 2
+      } else {
+        return
+      }
+
+      if (chosenIndex === 0) {
+        this.pendingApproval.settle('allowed-once')
+        this.approvalChoice = 0
+        this.scheduleRender()
+        return
+      }
+      if (chosenIndex === 1) {
+        this.ctx.permissionPresets?.select?.(this.agent?.session, 'workspace-write')
+        this.permissionName = 'workspace-write'
+        this.pendingApproval.settle('allowed-once')
+        this.approvalChoice = 0
+        this.log('ok', 'permission mode · workspace-write (session wide)', 'Shift+Tab')
+        this.scheduleRender()
+        return
+      }
+      if (chosenIndex === 2) {
         this.pendingApproval.settle('rejected')
+        this.approvalChoice = 0
         this.active = false
         this.streaming = { text: '', reasoning: '', tool: undefined }
         this.streamBuffer = ''
