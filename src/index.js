@@ -864,30 +864,7 @@ class TuiApp {
         this.flushStreamBuffer(true)
         this.commitUnprintedEvents()
         this.onTurnEnd(event.data.reason)
-
-        let finishLine = ''
-        if (event.data.reason?.kind === 'completed') {
-          let startIndex = -1
-          const allEvents = this.agent?.session?.events ?? []
-          for (let cursor = allEvents.length - 1; cursor >= 0; cursor -= 1) {
-            if (allEvents[cursor].type === 'turn/start') {
-              startIndex = cursor
-              break
-            }
-          }
-          if (startIndex >= 0) {
-            const durationMs = Number(event.time) - Number(allEvents[startIndex].time)
-            if (Number.isFinite(durationMs) && durationMs >= 0) {
-              const tools = allEvents.slice(startIndex).filter((e) => e.type === 'tool/call').length
-              const toolPart = tools > 0 ? ` · ${tools} tool${tools > 1 ? 's' : ''}` : ''
-              finishLine = `  ${ANSI.dim}✻ finished in ${(durationMs / 1000).toFixed(1)}s${toolPart}${ANSI.reset}`
-            }
-          }
-        }
-
-        if (finishLine) {
-          this.commitToScrollback([finishLine])
-        }
+        this.repaint(true)
         break
       }
       default:
@@ -3837,7 +3814,7 @@ class TuiApp {
     const content = lines.join('\n') + '\n'
 
     const footerLines = this.buildFooter(columns, rows)
-    const footerText = footerLines.map((line) => `${truncateAnsi(line, columns - 1)}\x1b[K`).join('\n')
+    const footerText = footerLines.map((line) => `${truncateAnsi(line, columns)}\x1b[K`).join('\n')
     this.lastFooterHeight = footerLines.length
     this.lastColumns = columns
 
@@ -3951,10 +3928,10 @@ class TuiApp {
     }
 
     const inputLines = this.inputFrame(columns)
-    lines.push(`${this.ruleStyle()}${'─'.repeat(Math.max(10, columns - 1))}${ANSI.reset}`)
+    lines.push(`${this.ruleStyle()}${'─'.repeat(Math.max(10, columns))}${ANSI.reset}`)
     this.inputTopInFooter = lines.length
     lines.push(...inputLines)
-    lines.push(`${this.ruleStyle()}${'─'.repeat(Math.max(10, columns - 1))}${ANSI.reset}`)
+    lines.push(`${this.ruleStyle()}${'─'.repeat(Math.max(10, columns))}${ANSI.reset}`)
     lines.push(...statusRows)
 
     return lines
@@ -3994,7 +3971,7 @@ class TuiApp {
     const columns = Math.max(60, process.stdout.columns || 100)
     const rows = Math.max(16, process.stdout.rows || 30)
     const footerLines = this.buildFooter(columns, rows)
-    const footerText = footerLines.map((line) => `${truncateAnsi(line, columns - 1)}\x1b[K`).join('\n')
+    const footerText = footerLines.map((line) => `${truncateAnsi(line, columns)}\x1b[K`).join('\n')
 
     let erase = ''
     if (this.lastFooterHeight > 0) {
