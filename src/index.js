@@ -585,7 +585,16 @@ class TuiApp {
     const welcome = welcomeCardRows(columns, workspace, model, (this.currentEffort?.() ?? 'DEFAULT').toUpperCase())
 
     const visibleEvents = this.agent?.session?.events?.filter((e) => e.seq >= this.viewClearedSeq) ?? []
-    const pastRows = this.formatEvents(visibleEvents, columns)
+    const logEvents = this.localLog
+      .filter((e) => e.seq >= (this.viewClearedSeq ?? 0) && e.command !== '!' && !/^exit /.test(e.command ?? ''))
+      .map((entry) => ({
+        type: 'local/log',
+        time: entry.time || Date.now(),
+        seq: entry.seq ?? 0,
+        data: entry
+      }))
+    const combined = [...visibleEvents, ...logEvents].sort((a, b) => (a.time || 0) - (b.time || 0))
+    const pastRows = this.formatEvents(combined, columns)
 
     this.isCommittingScrollback = true
     try {
@@ -593,17 +602,10 @@ class TuiApp {
       if (clearScreen) {
         process.stdout.write('\x1b[3J\x1b[2J\x1b[H')
       }
-      // Replay session events
+      // Replay all events in strict chronological order
       const allRows = [...welcome, ...pastRows]
       if (allRows.length > 0) {
         process.stdout.write(allRows.join('\n') + '\n')
-      }
-      // Replay local log (commands/diagnostics not in session events)
-      const localRows = this.localLog
-        .filter((e) => e.seq >= (this.viewClearedSeq ?? 0) && e.command !== '!' && !/^exit /.test(e.command ?? ''))
-        .flatMap((e) => this.formatLogEntry(e))
-      if (localRows.length > 0) {
-        process.stdout.write(localRows.join('\n') + '\n')
       }
       if (this.agent?.session?.events?.length) {
         this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? this.lastCommittedSeq

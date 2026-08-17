@@ -172,9 +172,13 @@ export function formatEvents(events, columns, options = {}) {
               }
             } else {
               const displayText = compactExpandedFileReferences(rawText)
-              const wrapped = wrap(displayText, Math.max(20, contentWidth - 4))
+              const wrapped = wrap(displayText, Math.max(20, contentWidth - 8))
+              const maxLineWidth = Math.max(4, ...wrapped.map((l) => widthOf(l)))
+              const bg = ANSI.userBg || '\x1b[48;5;237m'
+              const fg = ANSI.ink || '\x1b[38;5;255m'
               for (const line of wrapped) {
-                push('', `  ${ANSI.ink}${ANSI.bold}${line}${ANSI.reset}`)
+                const pad = ' '.repeat(Math.max(0, maxLineWidth - widthOf(line)))
+                push('', `  ${bg}  ${fg}${ANSI.bold}${line}${pad}  ${ANSI.reset}`)
               }
               push(ANSI.dim, `  ${formatTime(event.time)}`)
             }
@@ -246,6 +250,24 @@ export function formatEvents(events, columns, options = {}) {
               const toolsText = tools > 0 ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : ''
               push(ANSI.dim, `  ✻ finished in ${formatDurationMs(durationMs)}${toolsText}`)
             }
+          }
+        }
+        rows.push('')
+        break
+      }
+      case 'local/log': {
+        const entry = event.data ?? {}
+        if (entry.command) {
+          push('', `${ANSI.bash}${ANSI.bold}! ${entry.command}${ANSI.reset}`)
+          if (entry.text) {
+            for (const line of String(entry.text).split('\n')) {
+              push('', `  ${ANSI.dim}${line}${ANSI.reset}`)
+            }
+          }
+        } else if (entry.text) {
+          const color = entry.kind === 'error' ? ANSI.coral : (entry.kind === 'ok' ? ANSI.blue : ANSI.dim)
+          for (const line of String(entry.text).split('\n')) {
+            push('', `  ${color}${line}${ANSI.reset}`)
           }
         }
         rows.push('')
