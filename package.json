@@ -1,8 +1,13 @@
 {
   "name": "dsh-omc-tui",
   "version": "0.1.0",
-  "description": "Oh-My-Claude (OMC): A personal exploratory Claude-Code-styled ANSI terminal profile for DeepSeek Harness",
+  "description": "DeepSeek Harness (DSH) 原生全功能终端交互界面 · Keyboard-first Terminal TUI for DeepSeek Harness",
   "type": "module",
+  "scripts": {
+    "verify": "node -e \"Promise.all([import('./src/index.js'), import('./src/renderer/themes.js'), import('./src/commands/registry.js')]).then(() => console.log('✓ All modules verified OK!'))\"",
+    "test": "python3 test/pty-e2e.py",
+    "render-assets": "node scripts/render-tui-scenes.mjs"
+  },
   "engines": {
     "node": ">=20"
   },

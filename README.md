@@ -37,8 +37,9 @@
 | 📊 **四行 Statusline** | 身份 / Token / 生态 / 权限四行全景，`/status` 一键体检 |
 | 🎨 **护眼调色板** | 四阶柔和灰度 + `claude` / `deepseek` / `mono` / `light` 四款主题热切换 |
 | 🖼️ **图片粘贴** | iTerm2 OSC 1337 + Kitty Graphics，自动转官方 Attachment 管道 |
-| ⚡ **`/ask` 侧问** | 独立临时会话作答，不污染主任务 Context 与 Token 预算 |
-| 🐚 **`!` Bash / `/jobs`** | 本地 Shell 直执行，后台任务面板查看输出与取消 |
+| ⚡ **`/btw` 旁路问答** | 独立临时会话作答，不污染主任务 Context 与 Token 预算 |
+| 🗜️ **`/compact` 压缩** | 科技感动态微脉冲加载与小贴士，一键释放上下文 Token |
+| 🐚 **`!` Bash / `/jobs`** | 琥珀金 Shell 直通模式，后台任务面板查看实时输出与取消 |
 
 ---
 
@@ -60,20 +61,24 @@
 | :--- | :--- |
 | Node.js | `v20+` / `v22+`（以 `package.json` engines 为准） |
 | DeepSeek Harness | `^0.1.0-rc.6`（以 `peerDependencies` 为准） |
-| 终端 | 支持 ANSI 256 色即可（VS Code / iTerm2 / 原生 Terminal 等） |
+| 终端 | 支持 ANSI 256 色即可（VS Code / iTerm2 / WezTerm / 原生 Terminal 等） |
+| 推荐等宽字体 | *JetBrains Mono*, *Fira Code*, *Cascadia Code*, *SF Mono*, *Menlo* 等（支持 Unicode 边框与 CJK 字符） |
 | 图片粘贴（可选） | iTerm2（OSC 1337）或支持 Kitty Graphics 的终端 |
 
 ---
 
 ## ⚡ 快速开始与安装 (Installation & Usage)
 
-### 1. 从公开 GitHub 仓库安装 (推荐)
+### 1. 从插件市场 / GitHub 安装
 
 ```sh
-# 1. 将 dsh-omc-tui 添加至 tui profile
+# 方式 A：从 GitHub 仓库安装
 npx --yes @deepseek-ai/dsh@latest plugin --profile tui add github:ipromise2021/dsh-omc-tui
 
-# 2. 启动 tui profile
+# 方式 B：从 npm 官方仓库安装 (发布后可用)
+npx --yes @deepseek-ai/dsh@latest plugin --profile tui add dsh-omc-tui
+
+# 启动 tui profile 交互会话
 npx --yes @deepseek-ai/dsh@latest --profile tui
 ```
 
