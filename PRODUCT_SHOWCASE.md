@@ -32,9 +32,15 @@
 
 ---
 
-### 5. `/status` 全局看板 (System Diagnostic Dashboard)
+### 5. 交互式多选决策与 Submit 提交面板 (Multi-Tab Decision Panel)
+![多选项决策与 Submit 提交面板](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/ask-user-question.png)
+*图 5：`ask_user_question` 交互面板 · 多 Tab 勾选状态指示、答案明细审查与单键快速提交/取消*
+
+---
+
+### 6. `/status` 全局看板 (System Diagnostic Dashboard)
 ![/status 诊断看板](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/status.png)
-*图 5：`/status` 全局体检看板 · 模型配置、Token 消耗分布、扩展组件与会话健康度综合分析*
+*图 6：`/status` 全局体检看板 · 模型配置、Token 消耗分布、扩展组件与会话健康度综合分析*
 
 </div>
 

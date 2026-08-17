@@ -16,14 +16,20 @@
 
 ---
 
-## 📸 运行界面概览 (Actual Terminal Interface)
+## 📑 目录 (Table of Contents)
 
-<div align="center">
-
-![DSH OMC 终端运行主界面](assets/welcome.png)
-*DSH OMC 终端启动截图：欢迎卡片、4 行 Statusline 状态指示器与护眼调色板*
-
-</div>
+- [✨ 特性速览](#特性速览-features-at-a-glance)
+- [📸 实际界面](#实际界面-screenshots)
+- [🧭 项目定位](#项目定位-background)
+- [✅ 环境要求](#环境要求-requirements)
+- [🚀 快速开始](#快速开始-quick-start)
+- [🌟 核心功能](#核心功能-core-features)
+- [⌨️ 快捷键速查](#快捷键速查-keybindings)
+- [🛠️ 命令参考](#命令参考-commands-reference)
+- [🔌 MCP 与 Hooks 集成](#mcp-与-hooks-集成-integrations)
+- [🧑‍💻 开发者专区](#开发者专区-for-developers)
+- [⚠️ 已知限制](#已知限制-known-limitations)
+- [📄 开源许可证](#开源许可证-license)
 
 ---
 
@@ -43,15 +49,37 @@
 
 ---
 
-## 📖 项目背景与初心 (Background)
+## 📸 实际界面 (Screenshots)
 
-`dsh-omc-tui` (Oh-My-Claude) 是 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的原生终端 TUI 插件。它属于 Harness 的 **projection layer**：负责终端渲染、键盘交互和局部面板，不是独立的 Agent runtime，也不复制模型、会话、工具或持久化状态。
+<div align="center">
 
-平时写代码时我个人非常喜欢使用 **Claude Code CLI**，很喜欢它那种清爽、轻快、键盘优先（Keyboard-First）的交互质感。在研究 DSH 时，发现 DSH 底层封装了非常强大的 Cordis 服务组合、Durable Session 事件流、工具调度与审批机制，于是萌生了自己动手写一个终端界面的想法：
+### 1. 终端启动与 4 行 Statusline
+![DSH OMC 终端运行主界面](assets/welcome.png)
+*欢迎卡片、4 行 Statusline 状态指示器与护眼调色板*
 
-- **方便日常调用**：在熟悉的纯终端环境里，调用 DSH 提供的 Agent、会话、工具与审批能力；
-- **实现喜欢的交互**：尝试在终端中做出自己用着最舒服的体验（比如坚持不进备用屏幕以保留终端原生滚轮、调教柔和四阶灰度消除白光刺眼感、实现 `@` 文件逐层补全与 Thinking 折叠等）；
-- **持续打磨**：这是一个个人维护的 pre-release 项目，功能会随 Harness 契约和实际使用持续完善，也欢迎喜欢终端 Coding 的朋友交流探讨。
+---
+
+### 2. 实际运行与流式渲染交互
+![实际运行与流式渲染交互](assets/stream-and-diff.png)
+*真实对话流式渲染 · 折叠式 Thinking 思维链（`Ctrl+O` 穿透）、Markdown 语法渲染与工具调用*
+
+---
+
+### 3. 行内安全审批与 Diff 预览
+![行内安全审批与 Diff 预览](assets/approval-card.png)
+*文件修改与权限提升审批 · 行级红绿 Diff 差异预览与单键快速审批*
+
+</div>
+
+更多场景截图（`@` 文件树补全面板、多选项决策面板、`/status` 全局看板、图片直贴等）详见 [PRODUCT_SHOWCASE.md](PRODUCT_SHOWCASE.md)。
+
+---
+
+## 🧭 项目定位 (Background)
+
+`dsh-omc-tui` (Oh-My-Claude) 是 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的原生终端 TUI 插件，属于 Harness 的 **projection layer**：只负责终端渲染、键盘交互与局部面板，不复制模型、会话、工具或持久化状态——真相源始终是 Harness 官方服务与 durable event。
+
+作者日常重度使用 **Claude Code CLI** 的键盘优先交互，在研究 DSH 后动手实现了这个纯终端界面：方便在熟悉的环境里直接调用 DSH 的 Agent / 会话 / 工具 / 审批能力，坚持不进备用屏幕以保留终端原生滚轮与划选复制，并持续打磨护眼配色与交互细节。这是一个个人维护的 pre-release 项目，功能随 Harness 契约与实际使用持续完善，欢迎交流与贡献。
 
 ---
 
@@ -67,9 +95,9 @@
 
 ---
 
-## ⚡ 快速开始与安装 (Installation & Usage)
+## 🚀 快速开始 (Quick Start)
 
-### 1. 从插件市场 / GitHub 安装
+### 1. 从 GitHub / npm 安装
 
 ```sh
 # 方式 A：从 GitHub 仓库安装
@@ -85,7 +113,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 ### 2. 本地开发与调试安装
 
 ```sh
-# 推荐在隔离的 DSH_HOME 目录中进行调试，避免改写 ~/.dsh
+# 推荐在隔离的 DSH_HOME 目录中调试，避免改写 ~/.dsh
 export DSH_HOME=/private/tmp/dsh-tui-dev
 
 # 挂载本地代码路径
@@ -99,65 +127,49 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 
 ---
 
-## 🌟 核心功能深度解析 (Detailed Features)
+## 🌟 核心功能 (Core Features)
 
-### 1. 🚀 追加式普通缓冲区（Zero Alternate Screen）与 流式 Markdown / Diff 渲染
-- **绝不进入备用屏幕**：摒弃传统全屏清屏（`CSI ?1049h`），所有已完成的对话消息、工具调用、思考过程与 Diff 结果直接追加至终端原生 Scrollback 历史。
-- **原生滚轮与鼠标选择**：在 VS Code 终端或 iTerm2 中，鼠标滚轮可自如向上回看历史，鼠标可随意框选多行文本并直接复制，绝不会误触发 `↑/↓` 历史提示词切换。
+### 1. 🚀 追加式普通缓冲区（Zero Alternate Screen）
 
----
+**绝不进入备用屏幕**（摒弃 `CSI ?1049h` 全屏清屏）：已完成的对话消息、工具调用、Thinking 与 Diff 直接追加进终端原生 Scrollback 历史——滚轮自如回看、鼠标随意划选复制，绝不会误触发 `↑/↓` 历史提示词切换。
 
 ### 2. 📁 `@` 路径逐级下钻补全与代码块智能展开
-- **交互补全**：输入 `@` 默认列出当前工作目录的一级目录与文件。支持字符模糊过滤、`↑↓` 快速选定、`Enter` 钻入子目录或选中文件、`Esc`/`Backspace` 返回上级目录。
-- **上下文展开**：提交时自动读取选中文件内容，并按文件后缀生成带 Markdown 语言标签的代码块注入模型 Prompt（单文件超过 16KB 自动保护截断）。
-- **紧凑回显**：对话区回显仅保留紧凑的 `@path`，避免超长文件内容刷屏。
 
----
+输入 `@` 默认列出工作区一级目录与文件：支持字符模糊过滤、`↑↓` 快速选定、`Enter` 钻入子目录或选中文件、`Esc`/`Backspace` 返回上级。提交时自动读取文件并按后缀生成带语言标签的代码块注入 Prompt（单文件超 16KB 自动截断保护），对话区仅回显紧凑的 `@path`。
 
 ### 3. 🛡️ `approval/request` 行内安全审批
-- **行级红绿 Diff 预览**：当模型执行文件修改或危险命令时，审批卡片清晰展示文件名与 `-/+` 行级色彩差异。
-- **单键快速决策**：支持 `Y`（允许一次）、`N` / `Esc`（拒绝），支持队列串行处理，审批前预输入的字符会自动消费。
 
----
+模型执行文件修改或危险命令时，审批卡片清晰展示文件名与 `-/+` 行级红绿 Diff 预览；`Y`（允许一次）、`N`/`Esc`（拒绝）单键决策，支持审批队列串行处理，审批前预输入的字符自动消费。
 
 ### 4. 📊 四行全景 Statusline 与 `/status` 诊断看板
-- **第 1 行（身份）**：`BUILD/PLAN 模式 | [模型名] | 工作目录 | 会话标题`，带动态探索状态（`◉ Exploring`）；
-- **第 2 行（Token 经济学）**：块状进度条 `█████░░░░░░░░░ 38%`、In / Out / Cache 实时命中率；
-- **第 3 行（生态看板）**：已挂载 Skills 数、MCP 服务数、Hook 拦截点、最近工具结果、后台 Jobs 计数；
-- **第 4 行（权限指示）**：当前权限预设（`workspace-write` 等），支持 `Shift+Tab` 一键轮转；
-- **`/status` 命令**：一键输出环境、Token 占用分布、扩展组件与运行态全局体检报告。
 
----
+- **第 1 行（身份）**：`BUILD/PLAN` 模式 | 模型名 | 工作目录 | 会话标题，带动态探索状态（`◉ Exploring`）；
+- **第 2 行（Token 经济学）**：块状进度条 `█████░░░░░░░░░ 38%` 与 In / Out / Cache 实时命中率；
+- **第 3 行（生态看板）**：Skills 数、MCP 服务数、Hook 拦截点、最近工具结果、后台 Jobs 计数；
+- **第 4 行（权限指示）**：当前权限预设（`workspace-write` 等），`Shift+Tab` 一键轮转；
+- **`/status`**：一键输出环境、Token 占用分布、扩展组件与运行态全局体检报告。
 
-### 5. 🎨 护眼四阶灰度与 Claude 暖色调体系
-- **消除眩光感**：经过反复目视调校的四阶柔和灰度：
-  - **正文回答**：`250` 雅致浅灰（柔和高可读性）；
-  - **标签/高亮**：`251` 亮白微光；
-  - **代码/边界**：`245` 中灰；
-  - **Thinking 思维链**：`241` 深石板灰。
-- **四款调色板**：内置 `claude`（暖赤陶/琥珀金）、`deepseek`（经典科技蓝）、`mono`（纯黑白极简）、`light`（明亮浅色），支持通过 `/settings` 实时热切换并持久化至 `$DSH_HOME/settings.yaml`（默认 `~/.dsh/settings.yaml`）。
+### 5. 🎨 护眼四阶灰度与四款主题
 
----
+经过反复目视调校的四阶柔和灰度消除纯白眩光：正文 `250` 雅致浅灰、标签/高亮 `251` 亮白微光、代码/边界 `245` 中灰、Thinking `241` 深石板灰。内置 `claude`（暖赤陶/琥珀金）、`deepseek`（经典科技蓝）、`mono`（纯黑白极简）、`light`（明亮浅色）四款调色板，`/settings` 实时热切换并持久化至 `$DSH_HOME/settings.yaml`（默认 `~/.dsh/settings.yaml`）。
 
 ### 6. 🖼️ 双图形协议终端图片粘贴
-- **iTerm2 OSC 1337 + Kitty Graphics**：支持通过 `Cmd/Ctrl+V` 将剪贴板中的图片直接粘贴至终端。
-- **官方 Attachment 管道**：底层状态机自动捕获图像二进制并转存为官方 Attachment Ref，随消息提交。对纯文本模型自动降级为友好占位符，避免接口 400 异常。
 
----
+支持 iTerm2 **OSC 1337** 与 **Kitty Graphics**，`Cmd/Ctrl+V` 将剪贴板图片直接粘贴进终端；底层状态机自动捕获图像二进制并转存为官方 Attachment Ref 随消息提交，对纯文本模型自动降级为友好占位符，避免接口 400 异常。
 
 ### 7. ⚡ 零污染侧边临时提问（`/btw <query>`）
-- 在执行复杂代码任务时，可使用 `/btw <问题>` 进行临时概念查询（如 `/btw JS Map 遍历效率`）。
-- 系统在后台创建独立的临时会话作答，**完全不污染主任务 Session Context，不浪费主任务 Token 预算**。
 
----
+执行复杂任务时可随时 `/btw <问题>`（如 `/btw JS Map 遍历效率`）做临时概念查询：系统在后台创建独立临时会话作答，**完全不污染主任务 Session Context，不浪费主任务 Token 预算**。
 
 ### 8. 🐚 `!` 本地 Bash 快速执行与后台任务（`/jobs`）
-- 输入 `!` 时输入框边框高亮变绿，`Enter` 直接在本地宿主 Shell 中执行命令，输出逐行持久化输出到对话日志中（支持 `Ctrl+B` 一键转入后台执行）。
-- 基于官方 `ctx.jobs` 构建的任务面板，支持列出任务状态、游标读取实时输出、`k` 请求取消、`r` 刷新，不伪造虚假进度。
+
+输入 `!` 时输入框边框高亮变绿，`Enter` 直接在本地宿主 Shell 中执行命令，输出逐行持久化写入对话日志（`Ctrl+B` 一键转入后台）。`/jobs` 面板基于官方 `ctx.jobs` 构建：列出任务状态、游标读取实时输出、`k` 取消、`r` 刷新，不伪造虚假进度。
+
+> 每个特性的设计动机、问题记录与交互细节见 [PRODUCT_SHOWCASE.md](PRODUCT_SHOWCASE.md)。
 
 ---
 
-## ⌨️ 完整快捷键速查表 (Keybindings)
+## ⌨️ 快捷键速查 (Keybindings)
 
 | 按键 / 快捷键 | 对应动作 | 交互说明 |
 | :--- | :--- | :--- |
@@ -185,7 +197,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 
 ---
 
-## 🛠️ 命令体系全集 (Commands Reference)
+## 🛠️ 命令参考 (Commands Reference)
 
 | 命令 | 分类 | 详细功能说明 |
 | :--- | :--- | :--- |
@@ -215,14 +227,13 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 
 ---
 
-## 🔌 MCP 服务器与 Hooks 集成
+## 🔌 MCP 与 Hooks 集成 (Integrations)
 
-### 1. MCP 服务器配置 (`cordis.patch.yml`)
-MCP 不是本插件默认安装的服务。若 profile 已安装 `@deepseek-ai/dsh-mcp-client`，可在 profile 补丁中声明服务器；TUI 只负责读取并展示已挂载的服务：
+MCP 与 Hooks 均为**可选的 profile 级集成**，不由 TUI 自行伪造或持久化——TUI 只负责读取并展示已挂载的服务（`/mcp`、`/hooks`）。若 profile 已安装对应 bundle（如 `@deepseek-ai/dsh-mcp-client`、`@deepseek-ai/dsh-hooks-claude-code`），在 profile 补丁 `cordis.patch.yml` 中声明即可：
 
 ```yaml
 - insert:
-    # 浏览器自动化 Playwright MCP
+    # Playwright 浏览器自动化 MCP (stdio)
     - id: mcp-browser
       name: '@deepseek-ai/dsh-mcp-client'
       config:
@@ -231,19 +242,7 @@ MCP 不是本插件默认安装的服务。若 profile 已安装 `@deepseek-ai/d
         command: npx
         args: ['-y', '@playwright/mcp']
 
-    # 本地数据库 MCP (Streamable HTTP)
-    - id: mcp-mysql
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        serverName: mysql
-        transport: streamable-http
-        url: http://localhost:3307/mcp
-```
-
-### 2. Claude Code 风格 Hooks
-Hooks 同样属于可选的 profile 集成，不由 TUI 自行伪造或持久化：
-```yaml
-- insert:
+    # Claude Code 风格 Hooks（读取 ./.claude/hooks.json）
     - id: hooks-cc
       name: '@deepseek-ai/dsh-hooks-claude-code'
       config:
@@ -252,50 +251,29 @@ Hooks 同样属于可选的 profile 集成，不由 TUI 自行伪造或持久化
 
 ---
 
-## 🧪 自动化测试套件 (Test Suite)
+## 🧑‍💻 开发者专区 (For Developers)
 
-本项目包含全套无凭据 Mock 环境与 PTY 端到端自动化回归测试：
-
-```sh
-# 运行全套 PTY E2E 回归测试
-python3 test/pty-e2e.py        /tmp/e2e.log        # 流式/审批/usage/权限/中断/退出
-python3 test/pty-resume.py     /tmp/resume.log     # /compact/窄终端/会话恢复
-python3 test/pty-image.py      /tmp/image.log      # OSC 1337 / Kitty 图片粘贴→attachment
-python3 test/pty-file.py       /tmp/file.log       # @ 引用目录浏览与代码块展开
-python3 test/pty-features.py   /tmp/features.log   # 审批 diff/推理折叠/工具组/模型切换
-python3 test/pty-interaction.py /tmp/interaction.log # 菜单/快捷键/多行输入/状态行
-```
-
----
-
-## 🛠️ 本地开发与发布流程 (Development & Publishing)
-
-```sh
-# 1. 快速语法与模块导入完整性校验
-npm run verify
-
-# 2. 默认 PTY E2E 回归测试
-npm test
-
-# 3. 重新渲染 README / 宣传场景截图 (可选)
-npm run render-assets
-
-# 4. 发布至公共 npm 镜像 / DSH 插件体系
-npm publish --access public
-```
-
----
-
-## 🏗️ 架构规范与单一真相源 (Architecture & SSOT)
+### 架构规范 (Architecture & SSOT)
 
 1. **薄 UI projection layer**：TUI 负责服务/事件映射、局部视图与原生追加渲染，不实现第二套 Agent runtime；
-2. **纯粹的 Cordis 依赖注入**：严禁静态 import `@deepseek-ai/*`，依赖解析与宿主环境完全解耦；
+2. **纯 Cordis 依赖注入**：严禁静态 import `@deepseek-ai/*`，依赖解析与宿主环境完全解耦；
 3. **单一真相源（Single Source of Truth）**：会话历史、权限、Token 用量全部以 Harness Durable Event 为准，UI 本地只保留纯粹的渲染状态；
 4. **分层节流与 Memoization**：Token 流式批处理（56ms）与状态行 Key 缓存，保证长时间高密度输出下不卡顿、不闪烁。
 
+### 本地开发与测试
+
+```sh
+npm run verify              # 模块导入完整性校验
+npm test                    # 默认 PTY E2E 回归测试
+npm run render-assets       # 重新渲染 README / 宣传场景截图（可选）
+npm publish --access public # 发布至 npm / DSH 插件体系
+```
+
+测试套件基于无凭据 Mock 环境与 PTY 端到端回归：覆盖流式渲染 / 行内审批 / usage / 权限 / 中断 / 退出、`/compact` / 窄终端 / 会话恢复、OSC 1337 与 Kitty 图片粘贴、`@` 引用、审批 diff / 推理折叠 / 工具组、菜单 / 快捷键 / 多行输入 / 状态行等场景，入口见 `test/` 目录。
+
 ---
 
-## ⚠️ 已知限制与预期管理 (Known Limitations)
+## ⚠️ 已知限制 (Known Limitations)
 
 本项目是个人开发、业余时间维护，仍在边用边完善中：
 
@@ -305,6 +283,6 @@ npm publish --access public
 
 ---
 
-## 📄 开源许可证
+## 📄 开源许可证 (License)
 
 本项目基于 [MIT License](LICENSE) 开源发布。
