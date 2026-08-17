@@ -10,7 +10,7 @@
 
 **面向 DeepSeek Harness 的原生 ANSI TUI 插件 · Claude Code CLI 风格的键盘优先终端界面**
 
-[设计亮点与功能详解](PRODUCT_SHOWCASE.md) · [Harness 兼容性记录](HARNESS_COMPATIBILITY.md)
+[设计亮点与功能详解](PRODUCT_SHOWCASE.md) · [Harness 兼容性记录](HARNESS_COMPATIBILITY.md) · [工作记录与变更日志](CHANGELOG.md)
 
 **💬 个人维护的 pre-release 项目：功能边用边完善，如遇 Bug 或想提建议，欢迎 [提交 Issue](https://github.com/ipromise2021/dsh-omc-tui/issues) 或 PR——你的每一条反馈都很宝贵！**
 
