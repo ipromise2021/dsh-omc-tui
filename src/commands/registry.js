@@ -9,8 +9,7 @@ import { handleStatus } from './status.js'
 export const LOCAL_COMMANDS = [
   { name: 'plan', description: 'toggle between plan mode and build mode' },
   { name: 'skills', description: 'list all available skills in this workspace' },
-  { name: 'ask', description: 'quick side query without polluting session context' },
-  { name: 'btw', description: 'ask a side question without adding to session context (same as /ask)' },
+  { name: 'btw', description: 'ask a side question without adding to session context' },
   { name: 'compact', description: 'compact conversation history to save tokens' },
   { name: 'rename', description: 'rename the current session' },
   { name: 'context', description: 'show context window usage and token distribution' },
