@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { textOf, widthOf, wrap } from '../renderer/ansi.js'
+import { textOf, widthOf } from '../renderer/ansi.js'
 import { userMessage } from '../core/events.js'
 import { renderMarkdownRows } from '../renderer/markdown.js'
 import { ANSI } from '../renderer/themes.js'
 
-export async function handleAsk(app, line) {
-  const query = line.replace(/^\/(?:ask|btw)\s*/i, '').trim()
+export async function handleBtw(app, line) {
+  const query = line.replace(/^\/btw\s*/i, '').trim()
   if (!query) {
     const usageLines = [
       '',
