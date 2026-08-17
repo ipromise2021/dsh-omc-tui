@@ -53,7 +53,7 @@ export function formatEvents(events, columns, options = {}) {
         if (isBash) {
           const command = args.command ?? args.cmd ?? args.script
           push(ANSI.ink, `  • Running command...`)
-          if (command) push(ANSI.dim, `    └ $ ${safe(shorten(String(command), Math.max(20, contentWidth - 10)))}`)
+          if (command) push(ANSI.dim, `    └ $ ${ANSI.amber}${safe(shorten(String(command), Math.max(20, contentWidth - 10)))}${ANSI.reset}`)
         } else if (isSkill) {
           const skillName = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'loading instructions'
           push(ANSI.ink, `  • Activating skill...`)
