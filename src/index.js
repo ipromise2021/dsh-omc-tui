@@ -1369,6 +1369,16 @@ class TuiApp {
     }
 
     let fullText = text
+    // Inject any pending bash context (command + output) from prior ! executions
+    if (this.pendingBashContext?.length) {
+      const ctxBlock = this.pendingBashContext.map(({ command, output, exitCode }) => [
+        `<bash_result command=${JSON.stringify(command)} exit_code="${exitCode ?? 'null'}">`,
+        output,
+        '</bash_result>'
+      ].join('\n')).join('\n\n')
+      fullText = fullText ? `${ctxBlock}\n\n${fullText}` : ctxBlock
+      this.pendingBashContext = undefined
+    }
     if (images.length > 0) {
       const paths = images.map((img) => img.filePath || img.path).filter(Boolean)
       if (paths.length > 0) {
@@ -2570,6 +2580,7 @@ class TuiApp {
       startedAt: Date.now()
     }
     this.activeBash = active
+    this.lastBashCommand = command
     let ended = false
     const timer = setTimeout(() => {
       if (!ended) {
@@ -2622,6 +2633,15 @@ class TuiApp {
     const label = code === null ? 'spawn failed' : `exit ${code}`
     if (preview) this.log(code === 0 ? 'ok' : 'error', preview, label)
     else this.log('ok', '(no output)', label)
+    // Auto-inject command result into the next user message
+    if (this.agent) {
+      const cmdCtx = preview || '(no output)'
+      this.pendingBashContext = [
+        ...(this.pendingBashContext ?? []),
+        { command: this.lastBashCommand ?? '?', output: cmdCtx, exitCode: code }
+      ]
+    }
+    this.lastBashCommand = undefined
     this.scheduleRender()
   }
 
