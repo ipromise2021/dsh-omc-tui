@@ -1,98 +1,202 @@
-# DSH OMC (Oh-My-Claude TUI) · 产品亮点与设计白皮书
+# DSH OMC (Oh-My-Claude TUI) · 个人设计心得与功能记录
 
-> **产品定位**：面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的下一代键盘优先（Keyboard-First）原生 ANSI 终端 Coding Agent 交互界面。致敬并对标 Claude Code 交互哲学，追求极致流畅、零眩光、沉浸式开发体验。
-
----
-
-## 🌟 核心视觉预览 (Product Previews)
-
-### 1. 沉浸式编码主界面 (Hero Stream & Diff View)
-![DSH OMC 主界面预览](assets/hero-preview.png)
-*图 1：DSH OMC 终端主界面 · 0ms 即时渲染欢迎卡片、折叠式思维链（Thinking）、流式语法高亮与行级红绿 Diff 预览*
-
-### 2. 交互式审批与文件上下文补全 (Interactive Modals & `@` Completion)
-![交互式面板与补全](assets/interaction-showcase.png)
-*图 2：行内安全审批卡片（Approval Card）与 `@` 逐级工作区文件路径自动补全浮层*
+> **项目初心**：这是一个个人开发者在学习和探索 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 时开发的轻量终端 TUI 插件。因为平时很喜欢 **Claude Code CLI** 的极简风格与交互手感，所以在终端里尝试做一套符合自己使用习惯的界面，方便顺手调用 DSH 底层封装的 Agent、工具与会话能力。
 
 ---
 
-## 💡 产品设计哲学与 6 大核心亮点 (Key Highlights)
+## 📸 终端实际界面预览 (Actual Terminal Screenshots)
 
-### 1. 彻底摆脱全帧清屏：追加式普通缓冲区（Zero Alternate Screen）
-- **痛点**：传统 TUI（如部分 Webview / 备用屏幕全屏应用）会拦截或扭曲终端的原生鼠标行为。在 VS Code 中，滚轮常被错误映射为方向键触发历史切换，且无法使用鼠标原生高亮划选和快速复制。
-- **解法**：DSH OMC 采用 **追加式普通缓冲区（Scrollback Stream）**。已完成的消息、代码块和工具执行结果实时追加至终端历史，仅将输入框与 4 行状态指示器固定于底部。
-- **价值**：**完全保留终端原生滚轮回看与多行划选复制能力**，像使用经典 Unix 工具一样轻快自然。
+<div align="center">
 
----
-
-### 2. 护眼四阶灰度与 Claude 暖色调体系 (Anti-Glare Aesthetics)
-- **痛点**：长时间注视传统终端高亮白光（`\x1b[37m`）极易造成视疲劳与眩光感。
-- **解法**：建立柔和四阶灰度层次：
-  - **正文回答**：`250` 雅致浅灰（柔和可读，消除眩光）；
-  - **标签/高亮**：`251` 柔和亮灰白；
-  - **代码/细节**：`245` 中灰；
-  - **Thinking 思维链**：`241` 深石板灰（低对比度背景流动）。
-- **主题支持**：内置 `claude`（暖色调沙色/杏色/赤陶色）、`deepseek`（科技蓝）、`mono`（单色）与 `light`（明亮）四款调优调色板，一键通过 `/settings` 切换。
+### 1. 启动与状态栏 (Welcome & 4-Row Statusline)
+![DSH OMC 真实终端启动与运行界面](assets/welcome-screen.png)
+*图 1：实际运行终端截图 · 欢迎卡片、4 行 Statusline 指示器与护眼调色板*
 
 ---
 
-### 3. 思维链动态折叠与一键穿透（Thinking Fold & `Ctrl+O`）
-- **流式阶段**：实时呈现动态平滑点阵动画 `⠋ Thinking... (1.2s · ↓ tokens)`，降低用户等待焦虑。
-- **收尾折叠**：回答完成后自动折叠为紧凑徽标 `✻ thinking · 18 lines · 1.2s`，保持对话区清爽。
-- **全屏穿透**：按下 `Ctrl+O` 快捷键，当前会话中的所有思考链与并行工具组一键全部展开；再次按下全部收起。
+### 2. 流式思维链与行级 Diff 高亮 (Stream, Thinking & Diff View)
+![流式回答与 Diff 高亮](assets/stream-and-diff.png)
+*图 2：真实对话流式渲染 · 折叠式 Thinking 思维链（`Ctrl+O` 穿透）、Markdown 语法渲染与行级红绿 Diff 高亮*
 
 ---
 
-### 4. 极致的上下文交互：`@` 文件引用与双图形协议图片粘贴
-- **`@` 路径逐级补全**：输入 `@` 即可唤起当前工作区目录树。支持实时字符过滤、`Enter` 下钻目录或选定文件、`Esc` 返回上级。提交时自动读取文件并格式化为语言代码块注入 Prompt，对话区回显仅保留优雅的 `@path`，不产生文本刷屏。
-- **图片双协议原生解析**：支持通过 `Cmd/Ctrl+V` 直接粘贴图片，底层状态机自动解析 **iTerm2 OSC 1337** 与 **Kitty Graphics** 双协议，经 Harness 官方 attachment 服务落盘入库。针对纯文本模型自动降级为文本占位符，防止接口 400 报错。
+### 3. `@` 工作区路径逐级补全 (Path Autocomplete Picker)
+![@ 文件补全面板](assets/file-picker.png)
+*图 3：`@` 交互式文件树补全面板 · 实时字符过滤、子目录钻取与文件大小感知*
+
+---
+
+### 4. 行内安全审批卡片 (Interactive Security Approval Card)
+![行内安全审批卡片](assets/approval-card.png)
+*图 4：行内安全审批卡片（Approval Needed）· 行级红绿 Diff 差异预览与单键快速审批*
+
+---
+
+### 5. `/status` 全局看板 (System Diagnostic Dashboard)
+![/status 诊断看板](assets/status-dashboard.png)
+*图 5：`/status` 全局体检看板 · 模型配置、Token 消耗分布、扩展组件与会话健康度综合分析*
+
+</div>
+
+
+---
+
+## 💡 个人设计思考与 6 个核心交互细节 (Design Reflections)
+
+### 1. 坚持使用追加式普通缓冲区（Zero Alternate Screen）
+- **为什么这么做**：很多全屏终端应用喜欢进备用屏幕（Alternate Screen）来维持固定高度，但在 VS Code / iTerm2 里用鼠标滚轮时，经常会被终端错误识别成按了上下键从而疯狂翻动历史命令，而且不能用鼠标直接框选复制文字，这在日常编码时非常难受。
+- **我的做法**：DSH OMC 坚持使用 **标准缓冲区增量追加模型（Scrollback Stream）**。已经生成的消息、工具执行和 Diff 直接滚入终端原生历史，仅在底部留出输入区和状态行。
+- **使用感受**：**完全保留了终端原生的鼠标滚轮平滑回看与划选复制体验**，用起来就像普通的 Unix 命令行一样轻快自然。
+
+---
+
+### 2. 消除视觉疲劳：护眼四阶灰度与 Claude 暖色调体系 (Anti-Glare Palette)
+- **为什么这么调**：长时间盯着终端高对比度的纯白光（ANSI 37）很容易眼疲劳、出现眩光感。
+- **我的具体配置**：建立了自己看着最舒服的 **4 阶柔和灰度与暖色调**：
+  - **回答正文**：`250` 雅致浅灰（柔和可读，不刺眼）；
+  - **标题/高亮**：`251` 柔和亮灰白；
+  - **代码/次要**：`245` 中灰；
+  - **Thinking 思维链**：`241` 深石板灰；
+  - **主色调**：Claude 标志性 Terracotta 赤陶色 (`209`) 与温润琥珀金 (`214`)。
+- **快捷切换**：内置 `claude`（默认）、`deepseek`、`mono`、`light` 四款调色板，通过 `/settings` 随时热切换。
+
+---
+
+### 3. 过程透明与即时穿透：Thinking 动态折叠与 `Ctrl+O` 全屏展开
+- **流式阶段**：实时显示平滑点阵动画与耗时：`⠋ Thinking... (1.2s · ↓ tokens)`，大幅降低等待焦虑；
+- **收尾折叠**：模型开始输出正文后，思维链自动收缩为优雅的一行徽标 `✻ thinking · 18 lines · 1.2s`；
+- **全屏穿透**：按 **`Ctrl+O`** 即可瞬间展开当前会话中的所有思考全文与并行工具组；再次按下全局收起。
+
+```text
+YOU · 14:32
+╭────────────────────────────────────────────────────────────────────╮
+│ 重构 src/renderer/diff.js 中的 approvalDiffLines 函数               │
+╰────────────────────────────────────────────────────────────────────╯
+  ◫ 上下文注入 · skill-catalog (11 skills)
+
+DSH  deepseek-v4-flash · 14:32
+
+  ⚛ thinking · 18 lines · 1.2s
+  已完成对 approvalDiffLines 的参数重构，使其支持自适应提取：
+
+diff --git a/src/renderer/diff.js b/src/renderer/diff.js
+--- a/src/renderer/diff.js
++++ b/src/renderer/diff.js
+@@ -31,3 +31,11 @@
+-export function approvalDiffLines(request, args, columns, ANSI = defaultAnsi) {
++export function approvalDiffLines(request, argsOrColumns, columnsOrAnsi, ANSI = defaultAnsi) {
++  let args = typeof argsOrColumns === 'object' && argsOrColumns !== null ? argsOrColumns : undefined
++  let columns = typeof argsOrColumns === 'number' ? argsOrColumns : (typeof columnsOrAnsi === 'number' ? columnsOrAnsi : 80)
++  let ansiTheme = typeof columnsOrAnsi === 'object' && columnsOrAnsi !== null ? columnsOrAnsi : (ANSI ?? defaultAnsi)
+
+  ✻ finished in 1.8s · 1 tool
+```
+
+---
+
+### 4. 极致上下文效率：`@` 路径逐级下钻与双图形协议图片直贴
+- **`@` 路径逐级补全**：输入 `@` 即可唤起当前工作区目录树。支持实时过滤、`Enter` 选定或下钻子目录、`Esc`/`Backspace` 返回上级。提交时自动读取正文格式化为带语言高亮的代码块注入，而对话回显仅保留紧凑的 `@path`，彻底避免大文本刷屏。
+- **图片双协议原生解析**：支持在终端直接按 `Cmd/Ctrl+V` 粘贴图片，底层状态机自动解析 **iTerm2 OSC 1337** 与 **Kitty Graphics** 协议，通过 Harness 官方 attachment 服务落盘校验。对纯文本模型自动降级为文本占位符，防止 API 报错。
+
+```text
+❯ 检查 @src/
+  FILES · @src/ · 7 matching
+
+>  commands/
+   core/
+   input/
+   panels/
+   renderer/
+   image-protocol.js
+   index.js
+
+  ↑↓ navigate  ·  Enter open/select  ·  Esc up/close
+```
 
 ---
 
 ### 5. 零污染轻量级侧边提问：`/ask <query>`
-- **痛点**：在编写主任务代码时，偶尔需要临时询问一个简单概念或语法，直接提问会污染主任务会话历史并浪费大量上下文 Token。
-- **解法**：`/ask` 命令在后台创建一个独立的 `ephemeral` 临时会话，模型作答完毕后立即销毁会话。主任务上下文不受任何影响。
+- **平时使用场景**：在主任务写代码时，偶尔需要临时快速问一个简单问题（如 `"/ask JS 中的 Map 与 Object 遍历性能差异"`）。
+- **我的做法**：`/ask` 命令在后台临时起一个独立的 `ephemeral` 会话，模型回答完立即销毁。**完全不污染主任务 Session 的上下文与 Token 预算**。
 
 ---
 
-### 6. 全景四行状态指示器与实时诊断（Statusline & `/status`）
-- **第 1 行（身份）**：`BUILD/PLAN 模式 | [模型名称] | 当前目录 | 会话标题`，动态探索动画（`◉ Exploring`）；
-- **第 2 行（上下文经济学）**：块状动态进度条 `█████░░░░░░░░░ 38%`、In / Out / Cache 命中率；
-- **第 3 行（生态看板）**：Prompt 类型、已挂载 Skills 数、MCP 服务数、Hook 拦截点、最近工具结果、后台运行中 Jobs；
-- **第 4 行（权限控制）**：当前权限预设（`workspace-write` / `readonly` 等），支持 `Shift+Tab` 一键轮转。
+### 6. 全景状态指示器与系统体检看板（Statusline & `/status`）
+- **四行全景 Statusline**：
+  - **第 1 行（身份行）**：`BUILD/PLAN 模式 | [模型名] | 工作目录 | 会话标题`，带动态探索动画（`◉ Exploring`）；
+  - **第 2 行（Token 经济学）**：块状进度条 `█████░░░░░░░░░ 38%`、In / Out / Cache 命中率；
+  - **第 3 行（生态看板）**：已挂载 Skills 数、MCP 服务数、Hook 拦截点、最近工具结果、后台运行 Jobs；
+  - **第 4 行（权限控制）**：当前权限预设（`workspace-write` 等），支持 `Shift+Tab` 一键轮转。
+- **`/status` 全局体检看板**：一键输出环境、Token 用量、扩展与配置体检报告。
+
+```text
+❯ /status
+  ⎿ Model:        deepseek-official/deepseek-v4-flash · effort DEFAULT
+  ⎿ Mode:         BUILD · Preset: standard
+  ⎿ Directory:    /Users/yy0812024/work/dsh-plugin/dsh-omc-tui
+  ⎿ Session:      9c16d39a · "重构 approvalDiffLines" (4 turns, 28 events)
+  ⎿ Context:      12.4k / 200k tokens (6%) · in 11.2k, out 1.2k, cache 8.4k
+  ⎿ Permission:   workspace-write
+  ⎿ Extensions:   11 skills · 5 MCPs · 0 hooks · 0 active jobs
+  ⎿ Preferences:  theme: claude · history: on
+```
 
 ---
 
-## 🧭 功能架构与命令矩阵 (Command & Feature Matrix)
+## 🛡️ 安全审批卡片设计 (Interactive Inline Approval)
 
-| 命令 / 快捷键 | 功能分类 | 产品描述与价值 |
+当模型调用修改文件或执行危险 Shell 命令时，TUI 会弹出安全的行内审批卡片，直接呈现改动文件的行级红绿 Diff 预览：
+
+```text
+  • Executing edit...
+    └ 📄 src/renderer/diff.js
+│ ! approval needed · edit
+│ file src/renderer/diff.js
+│ - export function approvalDiffLines(request, args, columns, ANSI = defaultAnsi) {
+│ + export function approvalDiffLines(request, argsOrColumns, columnsOrAnsi, ANSI = defaultAnsi) {
+ Y · allow once   N · deny   Esc · deny
+←→ choose  ·  Enter confirm  ·  y/n also work
+```
+
+---
+
+## 🧭 全量功能矩阵与命令对照表 (Command & Feature Matrix)
+
+| 命令 / 快捷键 | 功能类别 | 交互行为与产品价值 |
 | :--- | :--- | :--- |
-| `Enter` | 基础交互 | 发送消息；命令菜单打开时执行选中项 |
-| `Ctrl+J` | 编辑器 | 在当前输入框内无缝换行 |
-| `Ctrl+C` | 运行干预 | 运行中安全中断当前回合（保留已生成文本）；空闲时退出 |
-| `Esc` | 交互撤销 | 运行中即时中断；空闲时清空输入或关闭当前浮层面板 |
+| `Enter` | 基础交互 | 发送输入内容；命令菜单/浮层打开时选定执行 |
+| `Ctrl+J` | 编辑器 | 在当前输入框内插入真实换行符（支持多行复杂输入） |
+| `Ctrl+C` | 运行干预 | 运行中安全中断当前回合（保留已生成内容）；空闲时退出 |
+| `Esc` | 交互撤销 | 运行中即时中断；空闲时清空输入、关闭浮层或清除选区 |
 | `Ctrl+O` | 视图展开 | 一键展开 / 收起全会话的 Thinking 思考全文及并行工具组 |
-| `Ctrl+G` | 外部编辑 | 调用 `$EDITOR`（如 VS Code / Vim）编辑多行复杂 Prompt |
-| `Ctrl+F` / `Ctrl+R`| 历史搜索 | 打开交互式历史提示词模糊搜索面板 |
-| `Shift+Tab` | 权限控制 | 在只读、工作区读写、全权限模式之间持久化轮转 |
-| `!` + 命令 | 本地 Bash | 进入绿色 Bash 模式，直接在本地执行 Shell 命令并捕获输出日志 |
+| `Ctrl+G` | 外部编辑 | 使用系统 `$EDITOR`（Vim / VS Code 等）编辑超长 Prompt |
+| `Ctrl+F` / `Ctrl+R` | 历史搜索 | 打开交互式输入提示词模糊搜索面板 |
+| `Ctrl+P` | 命令面板 | 快速过滤并运行任意命令或 Skill |
+| `Shift+Tab` | 权限控制 | 在只读、工作区读写、全权限预设间无缝轮转 |
+| `Ctrl+A` / `Ctrl+E` | 光标定位 | 光标快速跳至当前行首或行尾 |
+| `Alt+←` / `Alt+→` | 按词跳转 | 按单词粒度左右移动光标 |
+| `Ctrl+W` | 快速编辑 | 删除光标前的一个单词 |
+| `Ctrl+U` | 清空输入 | 一键清空输入框内容 |
+| `!` + 命令 | 本地 Bash | 本地直接执行 Shell 命令并捕获回显 |
+| `@` | 文件引用 | 打开工作区文件与目录浏览补全面板 |
+| `?` | 帮助菜单 | 空输入时打开/关闭快捷键提示卡片 |
 | `/ask <问题>` | 辅助查询 | 隔离侧边提问，不污染主会话上下文与 Token 预算 |
-| `/compact` | 上下文优化 | 对齐 Claude Code 的平滑压缩，防重入锁与 Token 节省统计 |
+| `/compact` | 上下文压缩 | 对齐 Claude Code 的平滑压缩，防重入锁与 Token 节省统计 |
 | `/steer` | 动态干预 | 运行时干预模型方向，或一键提拔已排队消息为实时指示 |
-| `/model` | 模型管理 | 两步式模型选择器（Provider → Model → 思考档位） |
-| `/preset` | Agent 预设 | 空白会话直接选择，产生内容后切换自动弹出二次确认面板 |
+| `/model` | 模型切换 | 两步式模型选择器（Provider → Model → 思考档位） |
+| `/preset` | 预设管理 | Agent 预设组合（空会话直接生效，有内容自动触发确认） |
 | `/jobs` | 任务管理 | 监控后台异步长任务，支持游标读取输出、`k` 取消、`r` 刷新 |
 | `/status` | 系统看板 | 输出模型、会话、Token 分布、扩展组件与运行态体检报告 |
 | `/settings` | 本地偏好 | 交互式配置主题配色与状态栏密度（Detailed / Compact / Minimal） |
 
 ---
 
-## 🏗️ 架构合规与技术契约 (Architecture & SSOT)
+## 🏗️ 系统架构与设计契约 (Architecture & SSOT)
 
 ```mermaid
 graph TD
     A[用户输入 / 键盘事件] --> B[Input Tokenizer & Editor]
-    B --> C{命令 / 消息分发}
+    B --> C{命令 / 消息路由}
     C -->|本地交互 / 浮层| D[Panels / Local Commands]
     C -->|Agent 提问 / Steer| E[DSH Harness Agent Service]
     E --> F[Durable Session Log]

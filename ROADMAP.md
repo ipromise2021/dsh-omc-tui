@@ -1,6 +1,6 @@
 # dsh-omc-tui (Oh-My-Claude) 功能盘点、兼容性与发布路线图
 
-> 最近复核：2026-08-15。当前包为本地开发 bundle；本文件将“已实现”、“Harness 适配边界”和“公开发布条件”分开记录。
+> 最近复核：2026-08-17。当前状态：`PRE-RELEASE HARDENING`（**缺陷攻坚中，暂不具备公开发布条件**）。
 
 ## 一、兼容性契约（发布前必须保持）
 
@@ -26,22 +26,24 @@
 - 多行编辑、上下行光标、历史、外部编辑器、鼠标、`?`、slash 与 Ctrl+P 面板；四行 statusline 与活动提示。
 - mock bundle 与 PTY 脚本覆盖流式、审批、会话恢复、图片、文件、菜单及功能回归；真实 provider 已做过基础 smoke test。
 
-## 三、DSH Hub 对照结论
+## 三、DSH Hub 对照与当前定位
 
-DSH Hub 当前是公开 GitHub 仓库的发现与安装目录：提交入口只要求公开仓库 URL，条目从仓库提取 README、许可证、包名、版本、安装命令与兼容性信息。当前目录中 `dsh-cc-tui` 和 `dsh-tianshu-tui` 都以 `dsh plugin ... add github:<owner>/<repo>` 形式安装；后者明确声明 DSH `0.1.0-rc.6` 兼容版本、LICENSE 和测试入口。
-
-本项目的 bundle 结构、`dsh.bundle.patch` 和 peer dependency 对齐方式符合 Harness 的本地安装模式；但它仍是私有开发包，尚不满足可公开收录的交付质量。不要为了追平竞品把纯展示层做成第二套 runtime：应学习其“可复现安装、明确版本、公开许可证、截图/说明、测试与来源声明”，而不是盲目复制动画、复杂布局或不稳定的会话改写功能。
+当前本项目的交互架构、四阶灰度与 `@` 补全设计已具备较好体验，但**在实际运行中仍捕获到部分关键交互缺陷（如中断退出双重日志残留、工具组折叠行间距等）**。必须坚持工程严谨性，在全部已知 Bug 清零并完成完整全套回归验证前，保持本地预发布测试状态，不盲目对外公开收录。
 
 ## 四、发布计划
 
-### P0：公开收录前阻断项
+### P0：发布前必须攻坚清零的阻断项（Blockers）
 
 - [x] 确定公开 GitHub 仓库和最终包名 (`dsh-omc-tui` / `ipromise2021/dsh-omc-tui`)；将 README 的本地路径替换为 `github:<owner>/<repo>` 安装命令。
 - [x] 选择并加入 LICENSE (`MIT`)；package 使用 `files` 白名单并连同 `LICENSE` 一并打包。
 - [x] 从 `package.json` 移除 `private: true` 并补齐版本、仓库元数据与关键词。
 - [x] 写明支持的 `@deepseek-ai/dsh` RC 版本与升级策略，提供 `--dump-config`、mock 安装及完整 PTY 测试命令。
-- [ ] 在干净 `DSH_HOME` 做 GitHub 安装验收：安装、启动、`--dump-config`、mock PTY、卸载/重装。
-- [ ] 提交公开 GitHub URL 到 DSH Hub 目录 (https://dshhub.org/#catalog)。
+- [ ] **[BUG-01] 修复中断退出时的双重 `interrupted` 回显与空行残留**：确保 `Ctrl+C` / `Esc` 中断只打印一次清晰日志，底部区域干净擦除。
+- [ ] **[BUG-02] 修复多工具折叠组（Tool Group）在中断或流式阶段的格式错位与空白行**。
+- [ ] **[BUG-03] 修复退出与 Resume 提示时的终端光标与鼠标报告模式清理**。
+- [ ] 在干净 `DSH_HOME` 做真实环境 GitHub 安装与多轮交互验收（安装、会话、审批、中断、恢复、卸载）。
+- [ ] 所有阻断项全部闭环后，再提交公开 GitHub URL 到 DSH Hub 目录。
+
 
 
 ### P1：近期适配迭代（已完成）

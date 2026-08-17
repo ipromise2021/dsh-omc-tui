@@ -1,181 +1,91 @@
-# DSH TUI 工程化记录
+# DSH OMC (Oh-My-Claude TUI) 工程化与发布前缺陷记录
 
-> 更新日期：2026-08-15  
-> 当前基线：`2cfe511 feat: improve dsh tui harness integration`
+> **更新日期**：2026-08-17  
+> **当前状态**：`PRE-RELEASE HARDENING`（**暂不具备公开发布条件，缺陷收敛中**）  
+> **基线分支**：`main` (`dsh-omc-tui`)
 
-本文记录 TUI 当前实现的工程判断和后续优化边界，避免后续为了“增加文件数量”而引入不必要的框架或重复实现 Harness 能力。
+本文档记录 TUI 的工程判断、当前已落地的模块架构、以及**阻碍公开发布的已知缺陷清单（Bug Backlog）**。在缺陷全部闭环并通过全套回归测试之前，严禁直接对外发布或提交至 DSH Hub。
 
-## 1. 项目定位
+---
 
-DSH TUI 是一个 DeepSeek Harness `dsh.bundle`，不是独立 Agent，也不是 Web UI 的复制品。
+## 1. 当前发布阻断缺陷清单 (Release Blocker Bugs)
+
+以下为真实运行中捕获并确认的待修复缺陷，必须全部修复并通过 PTY 回归后才可进入发布流程：
+
+| 缺陷编号 | 缺陷描述 | 触发场景 / 现象 | 严重程度 | 修复方案 / 目标 |
+| :--- | :--- | :--- | :---: | :--- |
+| **BUG-01** | **中断退出时出现双重 `interrupted` 与多余空白行** | 用户在工具（如 `bash`）运行中按 `Ctrl+C` 或 `Esc` 中断，终端回显出现两次 `∅ interrupted` 且伴随多行空白行残留。 | 🔴 **P0 (阻断)** | 收敛 `TuiApp` 的中断信号处理与事件广播，确保中断仅输出一次清晰的日志并干净清理底部绘制槽。 |
+| **BUG-02** | **工具折叠组（Tool Group）在中断时格式错位** | 连续多工具调用（`⚙ TOOLS · 2 · bash ×2`）遇到用户中断时，未完成工具的状态折叠留有宽字符填充与多余行。 | 🟠 **P1 (高)** | 在 `formatEvents` 中规范未完成工具组的中断状态渲染，统一尾部换行与折叠规则。 |
+| **BUG-03** | **退出与 Resume 提示的终端光标复位** | TUI 退出时输出 `Resume this session with: ...` 前后，终端光标与鼠标报告模式清理需确保幂等，防止在部分终端留下脏状态。 | 🟠 **P1 (高)** | 统一 `teardown()` 逻辑，确保 `showCursor()` 与 `TERMINAL_MOUSE_OFF` 仅执行一次。 |
+| **BUG-04** | **Windows 平台真实 PTY 与 PowerShell 路径实测** | 目前主要在 macOS xterm / VS Code 环境完成验证，Windows 下的 raw mode 与路径解析尚未进行端到端实机验证。 | 🟡 **P2 (中)** | 建立 Windows CI 矩阵或专门实机回归，验证 `COMSPEC` 与 SS3 键位映射。 |
+
+---
+
+## 2. 项目定位与工程准则
+
+DSH OMC 是一个 DeepSeek Harness `dsh.bundle`，不是独立 Agent，也不是 Web UI 的复制品。
 
 核心职责只有三类：
+1. **服务与事件映射**：将 Harness 的 `ctx.*` 服务和 Durable Session Events 映射到终端交互；
+2. **局部视图与交互**：管理输入编辑、命令面板、问卷、审批和局部视图状态；
+3. **原生追加渲染**：将思考、工具、技能、Hook 和回答流式追加到普通终端 Scrollback。
 
-1. 将 Harness 的 `ctx.*` 服务和 durable session events 映射到终端交互。
-2. 管理输入编辑、命令面板、问卷、审批和局部视图状态。
-3. 将会话、思考、工具、技能、Hook 和回答渲染到普通终端 scrollback。
+> ⚠️ **核心红线**：会话、权限、工具、MCP、Skills、任务和持久化的真相源（SSOT）必须继续由 Harness 官方服务提供。TUI 严禁在本地维护第二套平行会话状态机。
 
-会话、权限、工具、MCP、Skills、任务和持久化的真相源必须继续由 Harness 提供。TUI 不应再维护一套平行的 Agent 状态。
+---
 
-官方架构参考：
+## 3. 当前模块架构（已落地）
 
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
-- [Harness architecture](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md)
-
-## 2. 当前实现评估
-
-### 已有结构
-
-```text
-src/index.js              # 约 3,680 行：入口、Harness 适配、状态、输入和渲染集中在一个文件
-src/image-protocol.js     # 约 271 行：OSC 1337 / Kitty 图片协议解析
-test/pty-*.py             # 6 个 PTY 端到端脚本
-cordis.patch.yml          # dsh.bundle 组合声明
-README.md                 # 启动方式、功能和快捷键
-HARNESS_COMPATIBILITY.md  # 功能—服务—事件映射
-ROADMAP.md                # 功能路线图
-```
-
-这不是功能过少，而是“核心逻辑过度集中”。当前实现已经覆盖较多交互，但维护成本高，输入、事件折叠和渲染之间存在较强耦合。
-
-### 当前必须保留的设计约束
-
-- 使用 Node.js 22，与 DSH/Cordis 运行时保持一致。
-- 使用普通终端缓冲区，不进入备用屏幕。
-- 滚轮、拖拽选择和复制继续交给终端模拟器。
-- 底部输入框、面板和 statusline 只做短暂重绘。
-- 不在 TUI 内复制 Session、Permission、Jobs、MCP 或 Skills 的持久化逻辑。
-- 不为了组件化而引入会接管整个屏幕的框架。
-
-## 3. 目标模块结构
-
-后续重构应按职责拆分，优先提取纯逻辑和 Harness 适配层：
+已完成从单体 `src/index.js` 向高内聚子系统的解耦拆分：
 
 ```text
 src/
-  index.js                    # bundle 入口和启动
-  harness/
-    services.js               # ctx.* 服务探测和适配
-    events.js                 # durable event 转换、fold 和索引
-    session.js                # 创建、恢复、提交和中断
-  core/
-    state.js                  # TUI 状态模型
-    reducer.js                # 输入、事件、面板状态转换
-    commands.js               # 本地命令分发
-    history.js                # 输入历史和 MRU
-  input/
-    decoder.js                # ANSI、ESC、控制键解析
-    editor.js                 # 光标、多行、删除、历史导航
-    attachments.js            # 图片和文件引用输入
-  render/
-    ansi.js                   # 颜色、宽度、截断和换行
-    markdown.js               # 已完成回答的轻量 Markdown 渲染
-    transcript.js              # 用户、助手、thinking、tool、hook 行
-    statusline.js              # Context、preset、effort、jobs 等
-    footer.js                 # 输入框和临时面板
-  panels/
-    command-panel.js
-    picker-panel.js
-    jobs-panel.js
-    question-panel.js
-    settings-panel.js
-  attachments/
-    image-protocol.js         # 从现有 src/image-protocol.js 迁移
+├── core/                  # Cordis 插件装载与生命周期管理
+│   ├── events.js          # durable event 统一折叠、紧凑引用与格式化
+│   └── index.js           # 核心事件工具导出
+├── renderer/              # ANSI 终端渲染子系统
+│   ├── ansi.js            # ANSI 样式 Token、宽度计算、截断与转义
+│   ├── themes.js          # 主题注册表 (claude, deepseek, mono, light)
+│   ├── statusline.js      # 状态行三阶密度渲染 (detailed, compact, minimal)
+│   ├── markdown.js        # Markdown 轻量语法解析与分词换行渲染
+│   ├── diff.js            # 行级 unified diff 自适应高亮
+│   ├── transcript.js      # 会话流式事件与操作日志格式化
+│   └── welcome.js         # 欢迎卡片与版本信息渲染
+├── input/                 # 终端键盘与交互捕获
+│   ├── autocomplete.js    # @ 文件引用与目录树补全
+│   └── index.js           # 输入工具集中导出
+├── panels/                # 浮层交互面板控制器
+│   ├── help.js            # 快捷键帮助面板 (Ctrl+G 外部编辑)
+│   ├── approval-panel.js  # 行内安全审批卡片
+│   ├── file-picker.js     # @ 文件路径交互面板
+│   ├── model-picker.js    # 两步式模型选择器
+│   ├── preset-picker.js   # Agent Preset 选择与二次确认
+│   ├── question-panel.js  # ask_user_question 问卷面板
+│   ├── jobs-panel.js      # 后台长任务监控面板
+│   └── settings-panel.js  # TUI 配置面板
+├── commands/              # 本地命令路由与执行器
+│   ├── index.js           # 本地命令分发中心
+│   ├── ask.js             # /ask 隔离临时提问
+│   ├── compact.js         # /compact 平滑压缩
+│   ├── recap.js           # /recap 统计
+│   └── status.js          # /status 全局诊断看板
+├── image-protocol.js      # iTerm2 OSC 1337 / Kitty 双图形协议解析
+└── index.js               # TuiApp 调度器与 Cordis apply 插件入口
 ```
 
-### 推荐拆分顺序
+---
 
-1. 先提取 `render/ansi.js`、`render/markdown.js` 和 `core/state.js`，这些模块最容易编写纯测试。
-2. 再提取 `harness/events.js`，固定事件折叠和流式追加的输入输出契约。
-3. 再提取 `input/decoder.js` 和 `input/editor.js`，覆盖滚轮、上下键、Ctrl 键和多行输入。
-4. 最后拆分各类面板，保持 `TuiApp` 只负责编排。
+## 4. 依赖策略与框架边界
 
-不要一次性重写整个 `TuiApp`，每次拆分后都要运行 PTY 回归。
+- **纯原生追加模式**：坚决不引入 Ink、Blessed 等全屏重绘框架，避免破坏 VS Code 终端原生鼠标滚轮与划选复制。
+- **Node.js 22 运行时**：与 DSH/Cordis 保持完全一致，严禁静态引入 `@deepseek-ai/*`。
+- **轻量依赖**：保持零运行时第三方 npm 包，所有功能依赖 Node.js 内置模块与 Cordis 依赖注入。
 
-## 4. 依赖策略
+---
 
-### 暂不引入完整 TUI 框架
+## 5. 发布前验收路线图 (Release Readiness Roadmap)
 
-暂不使用 Ink、Blessed、Neo-Blessed、Terminal Kit 或其他全屏组件框架。它们可能重新接管：
-
-- 鼠标报告和滚轮；
-- 终端原生拖选；
-- scrollback 输出；
-- 光标和备用屏幕；
-- 流式追加时的重绘节奏。
-
-这些行为正是当前 TUI 已经反复修复的问题。
-
-### 可以考虑的轻量依赖
-
-只有在现有实现和测试证明有必要时才增加：
-
-- `string-width`：改进 CJK、Emoji 和组合字符宽度。
-- `wrap-ansi` / `slice-ansi`：处理带 ANSI 样式文本的换行和截断。
-- `marked` 或 `micromark`：把完整回答解析成 Markdown token，再交给自定义终端渲染器。
-- `vitest`：为纯函数和 reducer 增加快速单元测试。
-
-运行时依赖应尽量少，官方 `@deepseek-ai/*` 包继续使用 peer dependency，由 DSH profile 提供版本。
-
-## 5. Rust 评估
-
-当前不建议将 TUI 整体改写为 Rust。DSH 的核心是 Node/Cordis，Rust 前端不能直接使用 `ctx.*` 和 Cordis Loader，必须增加桥接层：
-
-```text
-Node Harness bundle
-        ↕ JSONL / IPC / WebSocket
-Rust terminal renderer
-```
-
-这会额外引入事件序列化、MCP/Skills/审批映射、双运行时发布和跨平台安装问题。
-
-只有满足以下条件时，才考虑 Rust：
-
-- Node 原生输入在 Windows 上仍无法稳定工作；
-- 超大规模流式输出造成明确性能瓶颈；
-- 需要一个与 Harness 解耦、可复用的终端前端。
-
-届时采用“Node Harness bridge + Rust Ratatui/Crossterm 前端”，而不是让 Rust 直接替换 Harness。
-
-## 6. 后续路线图
-
-### P0：结构稳定
-
-- [ ] 抽取状态模型和 reducer。
-- [ ] 固定 `session/event`、`agent/status`、`tool`、`thinking`、`approval` 的事件测试夹具。
-- [ ] 增加 `npm run check`，至少执行 Node 语法检查、Python PTY 脚本编译检查和 `git diff --check`。
-
-验收：拆分后现有 PTY 测试行为不变，滚轮不切换输入历史。
-
-### P1：渲染稳定
-
-- [ ] 抽取 ANSI 宽度、换行、Markdown token 渲染。
-- [ ] 将流式输出和最终输出使用同一套 transcript 数据模型。
-- [ ] 降低 footer/statusline 重绘范围，避免全屏闪烁。
-
-验收：长回答自然追加到 scrollback，输入区位置稳定，终端可以原生拖选和复制。
-
-### P2：Harness 适配完整
-
-- [ ] 增加官方 `ctx.settings` / settings-file 的统一适配。
-- [ ] 插件清单只读投影与 Web 对齐。
-- [ ] 插件市场安装委托官方 `dsh plugin --profile tui add`，不直接修改 profile 文件。
-
-验收：TUI 不产生独立的会话、权限、插件安装真相源。
-
-### P3：跨平台与发布
-
-- [ ] Windows Terminal、VS Code Terminal、macOS Terminal、iTerm2 回归。
-- [ ] 增加 CI 中的 Node 版本和 PTY smoke test。
-- [ ] 补充 LICENSE、版本兼容矩阵和公开发布说明。
-
-## 7. 每次修改的检查清单
-
-- 是否直接使用了官方 `ctx.*` 服务或 durable event？
-- 是否把 Web 专属行为错误地复制到了 TUI？
-- 是否改变了终端原生滚轮、拖选或 scrollback？
-- 是否把输入、面板和输出放进了固定高度容器？
-- 是否能用纯函数测试验证新增逻辑？
-- 是否需要更新 `README.md`、`HARNESS_COMPATIBILITY.md` 或 `ROADMAP.md`？
-- 是否至少通过 Node 语法检查和相关 PTY 测试？
-
+- [ ] **Phase 1 (缺陷清零)**：彻底解决 BUG-01、BUG-02、BUG-03，消除中断与会话恢复时的布局残留。
+- [ ] **Phase 2 (PTY 回归)**：运行全套 6 个 PTY 自动化脚本，确保 100% 通过无报错。
+- [ ] **Phase 3 (干净环境验收)**：在隔离 `$DSH_HOME` 下通过官方 `dsh plugin --profile tui add ...` 进行完整生命周期验证（安装、多轮会话、中断、恢复、卸载）。
+- [ ] **Phase 4 (正式发布)**：推送代码至 GitHub 并提交至 DSH Hub 目录收录。

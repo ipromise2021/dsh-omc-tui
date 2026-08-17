@@ -1,7 +1,7 @@
 {
   "name": "dsh-omc-tui",
   "version": "0.1.0",
-  "description": "Oh-My-Claude (OMC): Keyboard-first interactive ANSI terminal profile for DeepSeek Harness",
+  "description": "Oh-My-Claude (OMC): A personal exploratory Claude-Code-styled ANSI terminal profile for DeepSeek Harness",
   "type": "module",
   "main": "src/index.js",
   "exports": {
