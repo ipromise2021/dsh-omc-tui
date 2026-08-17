@@ -863,14 +863,7 @@ class TuiApp {
         this.flushThinking(event.seq)
         this.flushStreamBuffer(true)
         this.commitUnprintedEvents()
-
-        const oldFooterHeight = this.lastFooterHeight
         this.onTurnEnd(event.data.reason)
-
-        const columns = Math.max(60, process.stdout.columns || 100)
-        const rows = Math.max(16, process.stdout.rows || 30)
-        const newFooterHeight = this.buildFooter(columns, rows).length
-        const heightDiff = Math.max(0, oldFooterHeight - newFooterHeight)
 
         let finishLine = ''
         if (event.data.reason?.kind === 'completed') {
@@ -892,15 +885,8 @@ class TuiApp {
           }
         }
 
-        const lines = []
-        while (lines.length < Math.max(0, heightDiff - (finishLine ? 1 : 0))) {
-          lines.push('')
-        }
         if (finishLine) {
-          lines.push(finishLine)
-        }
-        if (lines.length > 0) {
-          this.commitToScrollback(lines)
+          this.commitToScrollback([finishLine])
         }
         break
       }
