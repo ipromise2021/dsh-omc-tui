@@ -3385,13 +3385,39 @@ class TuiApp {
 
     const slashName = this.input.match(/^\/([^\s]*)/)?.[1]
     const slashItem = slashName ? this.commandItems().find((item) => item.name === slashName) : undefined
-    const inputColor = bashMode ? ANSI.bash : slashItem?.kind === 'skill' ? ANSI.blue : slashName !== undefined ? ANSI.blueSoft : ANSI.answer
+    const slashPrefix = slashName !== undefined ? `/${slashName}` : undefined
+    const slashColor = bashMode ? ANSI.bash : slashItem?.kind === 'skill' ? `${ANSI.blue}${ANSI.bold}` : `${ANSI.blueSoft}${ANSI.bold}`
+    const fileColor = `${(ANSI.cyan ?? ANSI.teal ?? ANSI.blueSoft)}${ANSI.bold}`
+
+    const formatLineText = (text, offset) => {
+      if (bashMode) return `${ANSI.bash}${safe(text)}${ANSI.reset}`
+      let remaining = text
+      let prefixPart = ''
+      if (offset === 0 && slashPrefix && remaining.startsWith(slashPrefix)) {
+        prefixPart = `${slashColor}${safe(slashPrefix)}${ANSI.reset}`
+        remaining = remaining.slice(slashPrefix.length)
+      }
+      if (remaining.includes('@')) {
+        const parts = remaining.split(/(@[^\s]+)/g)
+        let body = ''
+        for (const part of parts) {
+          if (part.startsWith('@') && part.length > 1) {
+            body += `${fileColor}${safe(part)}${ANSI.reset}`
+          } else if (part) {
+            body += `${ANSI.ink}${safe(part)}${ANSI.reset}`
+          }
+        }
+        return `${prefixPart}${body}`
+      }
+      return `${prefixPart}${ANSI.ink}${safe(remaining)}${ANSI.reset}`
+    }
+
     const renderSelected = (text, offset) => {
-      if (!this.selection || text === '') return `${inputColor}${safe(text)}${ANSI.reset}`
+      if (!this.selection || text === '') return formatLineText(text, offset)
       const start = Math.max(0, this.selection.start - offset)
       const end = Math.min(text.length, this.selection.end - offset)
-      if (end <= start || start >= text.length) return `${inputColor}${safe(text)}${ANSI.reset}`
-      return `${inputColor}${safe(text.slice(0, start))}\x1b[7m${safe(text.slice(start, end))}\x1b[27m${safe(text.slice(end))}${ANSI.reset}`
+      if (end <= start || start >= text.length) return formatLineText(text, offset)
+      return `${ANSI.ink}${safe(text.slice(0, start))}\x1b[7m${safe(text.slice(start, end))}\x1b[27m${safe(text.slice(end))}${ANSI.reset}`
     }
 
     const limit = this.inputMaxRows ?? block.length
