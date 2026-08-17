@@ -32,7 +32,7 @@
 - [🧑‍💻 开发者专区](#开发者专区-for-developers)
 - [⚠️ 已知限制](#已知限制-known-limitations)
 - [🗺️ Roadmap（规划中）](#roadmap规划中-roadmap)
-- [🤝 反馈与贡献](#反馈与贡献-feedback-and-contributions)
+- [🤝 反馈与贡献](#反馈与贡献-feedback-contributing)
 - [📄 开源许可证](#开源许可证-license)
 
 ---
@@ -200,7 +200,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `Ctrl+G` | **外部编辑器** | 调用系统 `$EDITOR`（如 VS Code / Vim）编辑复杂 Prompt |
 | `Ctrl+F` / `Ctrl+R` | **历史搜索** | 打开交互式输入提示词模糊搜索面板 |
 | `Ctrl+P` | **命令面板** | 快速过滤并运行任意 Command 或 Skill |
-| `Ctrl+K` | **删除当前行** | 删除输入框中的当前行内容 |
+| `Ctrl+K` | **删除至行尾** | 删除光标至当前行行尾的内容 |
 | `Shift+Tab` | **权限轮转** | 在只读、工作区读写、全权限预设间无缝切换并落盘 |
 | `Ctrl+A` / `Ctrl+E` | **行首 / 行尾** | 光标快速跳至当前行首或行尾 |
 | `Alt+←` / `Alt+→` | **按词跳跃** | 按单词粒度左右快速移动光标 |
@@ -210,7 +210,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `Ctrl+B` | **转入后台** | Bash 模式执行中一键转入后台任务（`/jobs` 查看与取消） |
 | `Ctrl+L` | **清屏** | 等同 `/clear`，仅清空本地视图，保留上下文与会话历史 |
 | `Ctrl+D` | **退出** | 输入框为空时直接干净退出 TUI |
-| `!` + 命令 | **Bash 模式** | 本地直接执行 Shell 命令并捕获回显（边框变绿） |
+| `!` + 命令 | **Bash 模式** | 本地直接执行 Shell 命令并捕获回显（输入区与提示符变琥珀金） |
 | `@` | **文件引用** | 打开工作区文件与目录浏览补全面板 |
 | `?` | **帮助菜单** | 空输入时打开/关闭快捷键提示卡片 |
 
@@ -300,7 +300,7 @@ npm publish --access public # 发布至 npm / DSH 插件体系
 
 - **兼容性**：已在 VS Code / iTerm2 终端中验证，个别终端 / OS 组合可能存在渲染差异；Windows 及真实 provider 下的技能发送、长任务生产者仍待独立 E2E 验证；
 - **未适配能力**：`/plugins`（插件市场）暂未适配——规划中仅做市场发现，安装 / 移除委托给官方 `dsh plugin` CLI；`/fork`、`/rewind`、会话内全文检索需等待 Harness 提供稳定的 session/checkpoint 合约，不能通过截断 durable log 模拟；
-- **反馈渠道**：欢迎通过 [GitHub Issue](https://github.com/ipromise2021/dsh-omc-tui/issues)（建议使用 [Bug 反馈模板](.github/ISSUE_TEMPLATE/bug_report.md)）或 PR 反馈问题、一起改进，详见下方「[🤝 反馈与贡献](#反馈与贡献-feedback-and-contributions)」；
+- **反馈渠道**：欢迎通过 [GitHub Issue](https://github.com/ipromise2021/dsh-omc-tui/issues)（建议使用 [Bug 反馈模板](.github/ISSUE_TEMPLATE/bug_report.md)）或 PR 反馈问题、一起改进，详见下方「[🤝 反馈与贡献](#反馈与贡献-feedback-contributing)」；
 - **引擎依赖**：本包只提供 TUI 界面，模型、持久化、工具与 sandbox 能力均由底层 `dsh-base` bundle 提供，请确保 profile 挂载顺序正确。
 
 > 更完整的适配边界与发布前检查清单见 [HARNESS_COMPATIBILITY.md](HARNESS_COMPATIBILITY.md)。
