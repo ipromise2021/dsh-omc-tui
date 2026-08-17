@@ -57,7 +57,8 @@ export function formatEvents(events, columns, options = {}) {
         const name = event.data.name || 'tool'
         const isBash = /bash|shell|terminal|exec/i.test(name)
         const isSkill = /^skill$/i.test(name)
-        const isEdit = /edit|write|replace|patch/i.test(name)
+        const isWrite = /write|create|save/i.test(name)
+        const isEdit = /edit|replace|patch/i.test(name)
         const isRead = /read|view|cat|grep|list/i.test(name)
 
         if (isBash) {
@@ -66,6 +67,9 @@ export function formatEvents(events, columns, options = {}) {
         } else if (isSkill) {
           const skillName = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'instructions'
           push(ANSI.blueSoft, `${indent}● Skill(${safe(shorten(String(skillName), Math.max(20, contentWidth - 16)))})`)
+        } else if (isWrite) {
+          const file = args.file_path ?? args.path ?? args.targetFile ?? ''
+          push(ANSI.blueSoft, `${indent}● Write(${safe(shorten(String(file), Math.max(20, contentWidth - 16)))})`)
         } else if (isEdit) {
           const file = args.file_path ?? args.path ?? args.targetFile ?? ''
           push(ANSI.blueSoft, `${indent}● Edit(${safe(shorten(String(file), Math.max(20, contentWidth - 16)))})`)
