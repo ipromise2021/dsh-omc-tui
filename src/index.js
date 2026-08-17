@@ -3306,7 +3306,7 @@ class TuiApp {
     this.caretRow = undefined
     this.caretCol = undefined
     const bashMode = this.inBashMode()
-    const prompt = bashMode ? `${ANSI.bash}❯${ANSI.reset} ` : `${ANSI.blue}❯${ANSI.reset} `
+    const prompt = bashMode ? `${ANSI.bash}!${ANSI.reset} ` : `${ANSI.blue}❯${ANSI.reset} `
     const prefixWidth = 2
     const draftWidth = Math.max(24, columns - prefixWidth - 4)
     if (!this.agent) {
