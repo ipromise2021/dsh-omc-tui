@@ -3847,29 +3847,27 @@ class TuiApp {
       if (this.streaming.reasoning) {
         const rawLines = this.streaming.reasoning.split('\n').filter((l) => l.trim().length > 0)
         const charCount = this.streaming.reasoning.length
+        const lastLine = rawLines.length > 0 ? rawLines[rawLines.length - 1] : ''
+        const preview = shorten(lastLine.trim(), Math.max(20, columns - 12))
         lines.push(`  ${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ${charCount} chars)${ANSI.reset}`)
-        const capacity = Math.max(2, Math.min(3, Math.floor((rows - 16) / 4)))
-        const recent = rawLines.slice(-capacity)
-        for (let i = 0; i < recent.length; i++) {
-          const isLast = i === recent.length - 1
-          const preview = shorten(recent[i].trim(), Math.max(20, columns - 12))
-          const cursor = isLast ? `${ANSI.blue}▋${ANSI.reset}` : ''
-          lines.push(`    ${ANSI.dim}│ ${preview}${cursor}${ANSI.reset}`)
-        }
+        lines.push(`    ${ANSI.dim}│ ${preview}${ANSI.blue}▋${ANSI.reset}`)
       } else if (this.streaming.tool) {
         const toolName = this.streaming.tool.name || 'tool'
         const rawArgs = typeof this.streaming.tool.args === 'string' ? this.streaming.tool.args : JSON.stringify(this.streaming.tool.args ?? '')
         const cleanArgs = rawArgs.replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim()
         const toolSec = this.streaming.tool.startTime ? Math.max(1, Math.floor((Date.now() - this.streaming.tool.startTime) / 1000)) : elapsedSec
+        const preview = shorten(cleanArgs || toolName, Math.max(20, columns - 12))
         lines.push(`  ${ANSI.amber}${frame} Calling ${toolName}${dots} (${toolSec}s)${ANSI.reset}`)
-        if (cleanArgs) {
-          const preview = shorten(cleanArgs, Math.max(20, columns - 12))
-          lines.push(`    ${ANSI.dim}└ $ ${preview}${ANSI.reset}`)
-        }
+        lines.push(`    ${ANSI.dim}└ $ ${preview}${ANSI.reset}`)
       } else if (this.streaming.text || this.streamBuffer) {
+        const rawStream = (this.streamBuffer || this.streaming.text || '').split('\n').filter((l) => l.trim().length > 0)
+        const lastStreamLine = rawStream.length > 0 ? rawStream[rawStream.length - 1] : 'Streaming markdown response...'
+        const preview = shorten(lastStreamLine.trim(), Math.max(20, columns - 12))
         lines.push(`  ${ANSI.blue}${frame} Generating response${dots} (${elapsedSec}s)${ANSI.reset}`)
+        lines.push(`    ${ANSI.dim}│ ${preview}${ANSI.reset}`)
       } else {
         lines.push(`  ${ANSI.blue}${ANSI.bold}${frame} ${this.activityPhrase()}${dots} (${elapsedSec}s)${ANSI.reset}`)
+        lines.push(`    ${ANSI.dim}│ processing...${ANSI.reset}`)
       }
     }
 
