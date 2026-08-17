@@ -27,6 +27,9 @@ export async function handleCompact(app, line) {
   app.compacting = true
   app.message = 'compacting conversation…'
   
+  // Print command header in scrollback immediately
+  app.commitToScrollback(['', `${ANSI.blue}${ANSI.bold}❯ /compact${ANSI.reset}`])
+
   // Initialize Claude Code-style live compact state
   let currentTipIndex = Math.floor(Math.random() * COMPACT_TIPS.length)
   let percent = 2
@@ -73,8 +76,6 @@ export async function handleCompact(app, line) {
       const text = result.text ?? 'Conversation compacted successfully'
       if (text.includes('could not produce a useful summary') || text.includes('conversation is unchanged')) {
         const summaryLines = [
-          '',
-          `${ANSI.blue}${ANSI.bold}❯ /compact${ANSI.reset}`,
           `  ${ANSI.dim}· Conversation is already fully compacted (no new messages to compress).${ANSI.reset}`,
           ''
         ]
@@ -86,8 +87,6 @@ export async function handleCompact(app, line) {
           : ''
         
         const summaryLines = [
-          '',
-          `${ANSI.blue}${ANSI.bold}❯ /compact${ANSI.reset}`,
           `  ${ANSI.blueSoft}✔${ANSI.reset} ${ANSI.bold}Conversation compacted successfully${ANSI.reset}`,
           `    ${ANSI.dim}└ ${text}${tokenDiff} · Context window freed for new tasks${ANSI.reset}`,
           ''
