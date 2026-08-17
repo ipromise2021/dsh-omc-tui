@@ -39,35 +39,25 @@ export function truncateWidth(text, max) {
 }
 
 export function truncateAnsi(text, max) {
+  if (!text) return ''
   let out = ''
   let width = 0
-  let inEscape = false
-  let escapeSeq = ''
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    if (ch === '\x1b') {
-      inEscape = true
-      escapeSeq = ch
+  const tokens = String(text).split(/(\x1B\[[0-?]*[ -/]*[@-~]|\x1B\].*?(?:\x1B\\|\x07)|\x1B[@-Z\\-_])/g)
+  for (const token of tokens) {
+    if (!token) continue
+    if (token.startsWith('\x1b')) {
+      out += token
       continue
     }
-    if (inEscape) {
-      escapeSeq += ch
-      if (/[@-~]/.test(ch)) {
-        inEscape = false
-        out += escapeSeq
-        escapeSeq = ''
+    for (const ch of token) {
+      const w = widthOf(ch)
+      if (width + w > max) {
+        return out + '\x1b[0m'
       }
-      continue
+      out += ch
+      width += w
     }
-    const w = widthOf(ch)
-    if (width + w > max) {
-      out += '\x1b[0m'
-      break
-    }
-    out += ch
-    width += w
   }
-  if (inEscape) out += escapeSeq
   return out
 }
 
@@ -76,8 +66,14 @@ export function visibleOf(text) {
 }
 
 export function sessionTitle(events) {
-  const title = events.findLast((event) => event.type === 'session/title')?.data?.title
-  return typeof title === 'string' && title.trim() ? title.trim() : 'new session'
+  if (!Array.isArray(events)) return 'new session'
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i]?.type === 'session/title') {
+      const title = events[i]?.data?.title
+      if (typeof title === 'string' && title.trim()) return title.trim()
+    }
+  }
+  return 'new session'
 }
 
 export function padWidth(text, max) {
