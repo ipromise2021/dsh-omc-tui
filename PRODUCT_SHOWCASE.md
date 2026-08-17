@@ -1,6 +1,6 @@
 # DSH OMC (Oh-My-Claude TUI) · 设计亮点与功能详解
 
-> **项目初心**：这是一个个人开发者在学习和探索 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 时开发的轻量终端 TUI 插件。因为平时很喜欢 **Claude Code CLI** 的极简风格与交互手感，所以在终端里尝试做一套符合自己使用习惯的界面，方便顺手调用 DSH 底层封装的 Agent、工具与会话能力。
+> DSH OMC 是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的终端 TUI 插件（`dsh.bundle`），提供 **Claude Code CLI 风格**的键盘优先交互界面，直接消费 Harness 底层的 Agent、工具与会话能力。
 
 ---
 
@@ -36,26 +36,28 @@
 ![/status 诊断看板](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/status-dashboard.png)
 *图 5：`/status` 全局体检看板 · 模型配置、Token 消耗分布、扩展组件与会话健康度综合分析*
 
-</div>---
-
-## 💡 个人设计思考与 6 个核心交互细节 (Design Reflections)
-
-### 1. 坚持使用追加式普通缓冲区（Zero Alternate Screen）
-- **为什么这么做**：很多全屏终端应用喜欢进备用屏幕（Alternate Screen）来维持固定高度，但在 VS Code / iTerm2 里用鼠标滚轮时，经常会被终端错误识别成按了上下键从而疯狂翻动历史命令，而且不能用鼠标直接框选复制文字，这在日常编码时非常难受。
-- **我的做法**：DSH OMC 坚持使用 **标准缓冲区增量追加模型（Scrollback Stream）**。已经生成的消息、工具执行和 Diff 直接滚入终端原生历史，仅在底部留出输入区和状态行。
-- **使用感受**：**完全保留了终端原生的鼠标滚轮平滑回看与划选复制体验**，用起来就像普通的 Unix 命令行一样轻快自然。
+</div>
 
 ---
 
-### 2. 消除视觉疲劳：护眼四阶灰度与 Claude 暖色调体系 (Anti-Glare Palette)
-- **为什么这么调**：长时间盯着终端高对比度的纯白光（ANSI 37）很容易眼疲劳、出现眩光感。
-- **我的具体配置**：建立了自己看着最舒服的 **4 阶柔和灰度与暖色调**：
+## 💡 核心交互设计与问题记录 (Key Interaction Design)
+
+### 1. 追加式普通缓冲区（Zero Alternate Screen）
+- **问题**：备用屏幕（Alternate Screen）方案下，VS Code / iTerm2 的滚轮事件会被终端误解析为方向键，触发输入历史切换；同时鼠标无法框选复制文本。
+- **方案**：采用**标准缓冲区增量追加模型（Scrollback Stream）**——已生成的消息、工具执行与 Diff 直接追加进终端原生历史，仅在底部保留输入区与状态行。
+- **效果**：保留终端原生滚轮回看与划选复制能力，交互与普通命令行一致。
+
+---
+
+### 2. 护眼四阶灰度与 Claude 暖色调体系 (Anti-Glare Palette)
+- **问题**：高对比度纯白文本（ANSI 37）长时间盯屏易眼疲劳、产生眩光感。
+- **方案**：采用**四阶柔和灰度与暖色调**：
   - **回答正文**：`250` 雅致浅灰（柔和可读，不刺眼）；
   - **标题/高亮**：`251` 柔和亮灰白；
   - **代码/次要**：`245` 中灰；
   - **Thinking 思维链**：`241` 深石板灰；
   - **主色调**：Claude 标志性 Terracotta 赤陶色 (`209`) 与温润琥珀金 (`214`)。
-- **快捷切换**：内置 `claude`（默认）、`deepseek`、`mono`、`light` 四款调色板，通过 `/settings` 随时热切换。
+- **可配置**：内置 `claude`（默认）、`deepseek`、`mono`、`light` 四款调色板，通过 `/settings` 热切换。
 
 ---
 
@@ -113,8 +115,8 @@ diff --git a/src/renderer/diff.js b/src/renderer/diff.js
 ---
 
 ### 5. 零污染轻量级侧边提问：`/ask <query>`
-- **平时使用场景**：在主任务写代码时，偶尔需要临时快速问一个简单问题（如 `"/ask JS 中的 Map 与 Object 遍历性能差异"`）。
-- **我的做法**：`/ask` 命令在后台临时起一个独立的 `ephemeral` 会话，模型回答完立即销毁。**完全不污染主任务 Session 的上下文与 Token 预算**。
+- **场景**：主任务编码中需要临时查询概念性问题（如 `"/ask JS 中的 Map 与 Object 遍历性能差异"`）。
+- **实现**：`/ask` 在后台创建独立的 `ephemeral` 会话，回答完立即销毁。**完全不污染主任务 Session 的上下文与 Token 预算**。
 
 ---
 
