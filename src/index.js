@@ -1305,17 +1305,70 @@ class TuiApp {
     }
 
     if (isConfirmTab) {
-      if (value === '\r' || value === ' ') {
+      const isUp = value === '\x1b[A' || value === '\x1bOA' || value === 'k'
+      const isDown = value === '\x1b[B' || value === '\x1bOB' || value === 'j'
+      if (isUp) {
+        panel.selected = 0
+        this.scheduleRender()
+        return
+      }
+      if (isDown) {
+        panel.selected = 1
+        this.scheduleRender()
+        return
+      }
+
+      const answer = value.trim().toLowerCase()
+      if (answer === '1' || answer === 'y') {
         this.finishQuestion(undefined, { answers: panel.answers.filter(Boolean) })
         return
       }
-      if (value === '\t' || value === 'l') {
+      if (answer === '2' || answer === 'n' || value === '\x1b' || value === '\x03') {
+        this.finishQuestion(new Error('user cancelled the question'))
+        this.active = false
+        this.streaming = { text: '', reasoning: '', tool: undefined }
+        this.streamBuffer = ''
+        this.reasoningAt = undefined
+        this.message = ''
+        if (this.animationTimer) {
+          clearInterval(this.animationTimer)
+          this.animationTimer = undefined
+        }
+        if (this.agent?.status === 'running') {
+          this.agent.cancel({ kind: 'user' })
+        }
+        this.scheduleRender()
+        return
+      }
+
+      if (value === '\r' || value === ' ') {
+        if (panel.selected === 1) {
+          this.finishQuestion(new Error('user cancelled the question'))
+          this.active = false
+          this.streaming = { text: '', reasoning: '', tool: undefined }
+          this.streamBuffer = ''
+          this.reasoningAt = undefined
+          this.message = ''
+          if (this.animationTimer) {
+            clearInterval(this.animationTimer)
+            this.animationTimer = undefined
+          }
+          if (this.agent?.status === 'running') {
+            this.agent.cancel({ kind: 'user' })
+          }
+          this.scheduleRender()
+          return
+        }
+        this.finishQuestion(undefined, { answers: panel.answers.filter(Boolean) })
+        return
+      }
+      if (value === '\t' || value === 'l' || value === '\x1b[C' || value === '\x1bOC') {
         panel.index = 0
         panel.selected = 0
         this.scheduleRender()
         return
       }
-      if (value === '\x1b[Z' || value === 'h') {
+      if (value === '\x1b[Z' || value === 'h' || value === '\x1b[D' || value === '\x1bOD') {
         panel.index = panel.questions.length - 1
         panel.selected = 0
         this.scheduleRender()
@@ -1328,14 +1381,14 @@ class TuiApp {
       this.answerQuestion()
       return
     }
-    if (value === '\t') {
+    if (value === '\t' || value === '\x1b[C' || value === '\x1bOC') {
       this.saveCurrentQuestionAnswer()
       panel.index = (panel.index + 1) % totalTabs
       panel.selected = 0
       this.scheduleRender()
       return
     }
-    if (value === '\x1b[Z') {
+    if (value === '\x1b[Z' || value === '\x1b[D' || value === '\x1bOD') {
       this.saveCurrentQuestionAnswer()
       panel.index = (panel.index - 1 + totalTabs) % totalTabs
       panel.selected = 0
