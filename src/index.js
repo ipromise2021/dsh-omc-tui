@@ -2703,16 +2703,37 @@ class TuiApp {
 
   handleToken(value) {
     if (this.pendingApproval) {
-      if (value === '\r') {
-        this.pendingApproval.settle(this.approvalChoice === 'allow' ? 'allowed-once' : 'rejected')
+      const isUp = value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[D' || value === '\x1bOD' || value === 'k'
+      const isDown = value === '\x1b[B' || value === '\x1bOB' || value === '\x1b[C' || value === '\x1bOC' || value === '\t' || value === 'j'
+      if (isUp) { this.approvalChoice = 'allow'; this.scheduleRender(); return }
+      if (isDown) { this.approvalChoice = 'deny'; this.scheduleRender(); return }
+
+      const answer = value.trim().toLowerCase()
+      const isApprove = value === '\r' ? (this.approvalChoice !== 'deny') : (value === ' ' ? (this.approvalChoice !== 'deny') : (answer === 'y' || answer === '1'))
+      const isReject = value === '\r' ? (this.approvalChoice === 'deny') : (value === ' ' ? (this.approvalChoice === 'deny') : (answer === 'n' || answer === '2' || value === '\x1b' || value === '\x03'))
+
+      if (isApprove) {
+        this.pendingApproval.settle('allowed-once')
+        this.scheduleRender()
         return
       }
-      if (value === '\x1b[C' || value === '\t') { this.approvalChoice = 'deny'; this.scheduleRender(); return }
-      if (value === '\x1b[D' || value === '\x1b[Z') { this.approvalChoice = 'allow'; this.scheduleRender(); return }
-      if (value === '\x1b' ) { this.pendingApproval.settle('rejected'); return }
-      const answer = value.trim().toLowerCase()
-      if (answer === 'y') this.pendingApproval.settle('allowed-once')
-      if (answer === 'n') this.pendingApproval.settle('rejected')
+      if (isReject) {
+        this.pendingApproval.settle('rejected')
+        this.active = false
+        this.streaming = { text: '', reasoning: '', tool: undefined }
+        this.streamBuffer = ''
+        this.reasoningAt = undefined
+        this.message = ''
+        if (this.animationTimer) {
+          clearInterval(this.animationTimer)
+          this.animationTimer = undefined
+        }
+        if (this.agent?.status === 'running') {
+          this.agent.cancel({ kind: 'user' })
+        }
+        this.scheduleRender()
+        return
+      }
       return
     }
 

@@ -171,7 +171,7 @@ export function formatEvents(events, columns, options = {}) {
               }
             } else {
               const displayText = compactExpandedFileReferences(rawText)
-              const blockWidth = Math.max(24, Math.min(contentWidth, 100))
+              const blockWidth = Math.max(24, contentWidth)
               const innerWidth = blockWidth - 2
               const wrapped = wrap(displayText, innerWidth - 2)
               push('', `  ${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
