@@ -629,11 +629,11 @@ class TuiApp {
       const headerLines = [
         `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`,
         '',
-        `  ${ANSI.dim}⚛ Thought for ${msStr} (ctrl+o to expand)${ANSI.reset}`
+        `  ${ANSI.detail}⚛ Thought for ${msStr} (ctrl+o to expand)${ANSI.reset}`
       ]
       this.commitToScrollback(headerLines)
     } else {
-      this.commitToScrollback([`  ${ANSI.dim}⚛ Thought for ${msStr} (ctrl+o to expand)${ANSI.reset}`])
+      this.commitToScrollback([`  ${ANSI.detail}⚛ Thought for ${msStr} (ctrl+o to expand)${ANSI.reset}`])
     }
 
     const blockKey = `reason-${seq || Date.now()}`
