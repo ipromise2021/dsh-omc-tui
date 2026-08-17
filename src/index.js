@@ -863,7 +863,16 @@ class TuiApp {
         this.flushThinking(event.seq)
         this.flushStreamBuffer(true)
         this.commitUnprintedEvents()
+
+        const oldFooterHeight = this.lastFooterHeight
         this.onTurnEnd(event.data.reason)
+
+        const columns = Math.max(60, process.stdout.columns || 100)
+        const rows = Math.max(16, process.stdout.rows || 30)
+        const newFooterHeight = this.buildFooter(columns, rows).length
+        const heightDiff = Math.max(0, oldFooterHeight - newFooterHeight)
+
+        let finishLine = ''
         if (event.data.reason?.kind === 'completed') {
           let startIndex = -1
           const allEvents = this.agent?.session?.events ?? []
@@ -878,10 +887,18 @@ class TuiApp {
             if (Number.isFinite(durationMs) && durationMs >= 0) {
               const tools = allEvents.slice(startIndex).filter((e) => e.type === 'tool/call').length
               const toolPart = tools > 0 ? ` · ${tools} tool${tools > 1 ? 's' : ''}` : ''
-              const finishLine = `  ${ANSI.dim}✻ finished in ${(durationMs / 1000).toFixed(1)}s${toolPart}${ANSI.reset}`
-              this.commitToScrollback([finishLine, ''])
+              finishLine = `  ${ANSI.dim}✻ finished in ${(durationMs / 1000).toFixed(1)}s${toolPart}${ANSI.reset}`
             }
           }
+        }
+
+        const lines = []
+        if (finishLine) lines.push(finishLine)
+        while (lines.length < heightDiff) {
+          lines.push('')
+        }
+        if (lines.length > 0) {
+          this.commitToScrollback(lines)
         }
         break
       }
