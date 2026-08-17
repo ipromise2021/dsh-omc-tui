@@ -37,7 +37,7 @@
 
 ### 本地实现现状
 
-- `dsh-tui` 已经是一个可由 profile 挂载的 `dsh.bundle`：`package.json` 声明 `dsh.bundle.patch`，`cordis.patch.yml` 负责把 TUI 插入 Harness 组合树。
+- `dsh-omc-tui` 已经是一个可由 profile 挂载的 `dsh.bundle`：`package.json` 声明 `dsh.bundle.patch`，`cordis.patch.yml` 负责把 TUI 插入 Harness 组合树。
 - 当前 `src/index.js` 的能力探测包含 `ctx.agents`、`ctx.commands`、`ctx.skills`、`ctx.settings`、`ctx.jobs` 等服务，但没有 `ctx.plugins`、catalog、package-manager 或安装 broker；`LOCAL_COMMANDS` 也没有 `/plugins`、`/market`、`/install`。
 - 当前技能菜单只调用官方 `ctx.skills.list()`；它能发现已挂载的技能，不能安装或卸载新的 bundle。TUI 重启后会重新读取 profile 中的服务和技能。
 

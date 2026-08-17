@@ -12,7 +12,7 @@
 | 模型、effort、预设、权限 | `ctx.llm`、`agentDefaultModel`、`agentPresets`、`permissionPresets`、`planMode` | 已接入 |
 | 命令、技能、附件、问卷 | `ctx.commands`、`ctx.skills`、`ctx.attachments`、`ctx.userQuestions` | 已接入 |
 | 后台 jobs | `ctx.jobs.list/read/kill/onJobsChanged`；不自行推断进度 | 已接入 |
-| 设置 | `ctx.settings` + settings-file namespace；不得自造配置文件 | 未接入 |
+| 设置 | `ctx.settings` + settings-file namespace；不得自造配置文件 | 已接入 |
 
 规则：业务状态只能来自官方服务或 durable event；TUI 自己只保存光标、滚动、面板、选中项等渲染状态。可选服务必须 feature-detect，缺失时给出明确提示。上游 RC 升级时重新验证 patch、服务注入、事件形状和 PTY 回归；不得用静态 `@deepseek-ai/*` import 破坏 `link:` 安装。
 
@@ -122,9 +122,10 @@ DSH Hub 当前是公开 GitHub 仓库的发现与安装目录：提交入口只�
 - TUI 只管理本地视图与确认状态；profile、依赖和 bundle 真相源始终由官方 dsh CLI/pnpm/Harness 负责。
 - 任何新增 Agent-facing 能力，先更新 `HARNESS_COMPATIBILITY.md` 的服务/事件映射，再实现 UI。
 
-## 七、代码架构重构与 DSH / Cordis 规范化方案
+## 七、代码架构重构与 DSH / Cordis 规范化方案（已落地）
 
-为了彻底符合 DSH 官方仓库规范与 Cordis 插件生命周期规范，后续将目前单体式的 `src/index.js`（约 4500 行）渐进式拆解为高内聚、低耦合的模块化架构：
+为彻底符合 DSH 官方仓库规范与 Cordis 插件生命周期规范，已将早期单体式的 `src/index.js` 拆解为高内聚、低耦合的子系统模块化架构：
+
 
 ```
 src/
