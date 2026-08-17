@@ -10,7 +10,7 @@
 
 **个人学习与探索项目 · 采用 Claude Code CLI 风格的 DeepSeek Harness 终端界面**
 
-[设计心得与功能记录](PRODUCT_SHOWCASE.md) · [Harness 兼容性记录](HARNESS_COMPATIBILITY.md) · [开发路线与缺陷清单](ROADMAP.md)
+[设计亮点与功能详解](PRODUCT_SHOWCASE.md) · [Harness 兼容性记录](HARNESS_COMPATIBILITY.md)
 
 </div>
 
@@ -105,7 +105,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 ### 2. 📁 `@` 路径逐级下钻补全与代码块智能展开
 - **交互补全**：输入 `@` 默认列出当前工作目录的一级目录与文件。支持字符模糊过滤、`↑↓` 快速选定、`Enter` 钻入子目录或选中文件、`Esc`/`Backspace` 返回上级目录。
 - **上下文展开**：提交时自动读取选中文件内容，并按文件后缀生成带 Markdown 语言标签的代码块注入模型 Prompt（单文件超过 16KB 自动保护截断）。
-- **紧凑回显**：对话区回显仅保留紧凑的 `@path`，彻底避免超长文件内容刷屏。
+- **紧凑回显**：对话区回显仅保留紧凑的 `@path`，避免超长文件内容刷屏。
 
 ---
 
@@ -269,7 +269,7 @@ python3 test/pty-interaction.py /tmp/interaction.log # 菜单/快捷键/多行�
 本项目是个人开发、业余时间维护，仍在边用边完善中：
 
 - **兼容性**：已在 VS Code / iTerm2 终端中验证，个别终端 / OS 组合可能存在渲染差异，Harness 各版本的适配情况见 [HARNESS_COMPATIBILITY.md](HARNESS_COMPATIBILITY.md)；
-- **缺陷清单**：已知问题与开发路线见 [ROADMAP.md](ROADMAP.md)，欢迎提交 Issue 或 PR 一起改进；
+- **反馈渠道**：欢迎通过 GitHub Issue 或 PR 反馈问题、一起改进；
 - **引擎依赖**：本包只提供 TUI 界面，模型、持久化、工具与 sandbox 能力均由底层 `dsh-base` bundle 提供，请确保 profile 挂载顺序正确。
 
 ---
