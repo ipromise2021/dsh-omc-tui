@@ -19,6 +19,7 @@ import {
   widthOf,
   safe,
   truncateWidth,
+  truncateAnsi,
   visibleOf,
   padWidth,
   wrap,
@@ -2909,7 +2910,15 @@ class TuiApp {
         return
       }
       if (chosenIndex === 1) {
-        this.ctx.permissionPresets?.select?.(this.agent?.session, 'workspace-write')
+        if (this.agent?.session && this.ctx.permissionPresets) {
+          try {
+            if (typeof this.ctx.permissionPresets.set === 'function') {
+              this.ctx.permissionPresets.set(this.agent.session, 'workspace-write')
+            } else if (typeof this.ctx.permissionPresets.select === 'function') {
+              this.ctx.permissionPresets.select(this.agent.session, 'workspace-write')
+            }
+          } catch {}
+        }
         this.permissionName = 'workspace-write'
         this.pendingApproval.settle('allowed-once')
         this.approvalChoice = 0
