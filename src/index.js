@@ -3544,9 +3544,12 @@ class TuiApp {
 
   buildFooter(columns, rows) {
     const lines = []
+    const bashMode = this.inBashMode()
     const panelRows = this.panelRows(columns, rows)
     const inlineRows = this.inlinePanelRows(columns, rows)
-    const statusRows = panelRows.length > 0 ? panelRows : this.statusRows(columns)
+    const statusRows = bashMode
+      ? [`  ${ANSI.bash}! for shell mode${ANSI.reset}`]
+      : (panelRows.length > 0 ? panelRows : this.statusRows(columns))
     
     this.inputMaxRows = Math.max(3, Math.min(10, rows - 10))
     const inputLines = this.inputFrame(columns)
