@@ -48,6 +48,7 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
       push(ANSI.blueSoft, `  ${ANSI.bold}${styleInlineMarkdown(heading[1])}${ANSI.reset}`)
       continue
     }
+    let isQuote = false
     const table = content.includes('|') && content.split('|').length >= 3
     if (table) {
       content = content.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()).join('  ·  ')
@@ -65,10 +66,15 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
       } else if (quote) {
         prefix = '  │ '
         content = quote[1]
+        isQuote = true
       }
     }
+    const contIndent = isQuote ? prefix : ' '.repeat(widthOf(prefix))
+    let first = true
     for (const line of wrap(content, Math.max(20, contentWidth - widthOf(prefix)))) {
-      push('', `${prefix}${base}${styleInlineMarkdown(line)}${ANSI.reset}`)
+      const p = first ? prefix : contIndent
+      first = false
+      push('', `${p}${base}${styleInlineMarkdown(line)}${ANSI.reset}`)
     }
   }
   if (fenced) rows.push(null)

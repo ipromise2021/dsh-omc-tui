@@ -12,7 +12,7 @@ export function renderSettingsPicker(settingsPicker, preferences, ANSI = default
     ['history persistence', preferences.persistHistory ? 'on' : 'off', descriptions['history persistence']]
   ]
   return [
-    `${ANSI.muted}TUI SETTINGS${ANSI.reset} ${ANSI.dim}· stored in ~/.dsh/settings.yaml${ANSI.reset}`,
+    `${ANSI.muted}TUI SETTINGS${ANSI.reset} ${ANSI.dim}· stored in $DSH_HOME/settings.yaml (default ~/.dsh/settings.yaml)${ANSI.reset}`,
     '',
     ...entries.map(([name, value, desc], index) => {
       const cursor = index === settingsPicker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '

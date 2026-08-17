@@ -38,9 +38,11 @@
 - [x] 选择并加入 LICENSE (`MIT`)；package 使用 `files` 白名单并连同 `LICENSE` 一并打包。
 - [x] 从 `package.json` 移除 `private: true` 并补齐版本、仓库元数据与关键词。
 - [x] 写明支持的 `@deepseek-ai/dsh` RC 版本与升级策略，提供 `--dump-config`、mock 安装及完整 PTY 测试命令。
-- [ ] **[BUG-01] 修复中断退出时的双重 `interrupted` 回显与空行残留**：确保 `Ctrl+C` / `Esc` 中断只打印一次清晰日志，底部区域干净擦除。
-- [ ] **[BUG-02] 修复多工具折叠组（Tool Group）在中断或流式阶段的格式错位与空白行**。
-- [ ] **[BUG-03] 修复退出与 Resume 提示时的终端光标与鼠标报告模式清理**。
+- [x] **[BUG-00] 修复 `@` 文件引用包含内部代码块时的气泡溢出问题**（已引入结构化标签精准收折，回显仅显示 `@path`）。
+- [x] **[BUG-01] 修复中断退出时的双重 `interrupted` 回显与空行残留**（已统一由 durable transcript 单点渲染）。
+- [x] **[BUG-02] 修复恢复会话 (`-c`) 历史文本中夹杂 Footer/输入框残影**（已引入 `isCommittingScrollback` 锁与同步批量写入）。
+- [x] **[BUG-03] 修复窗口拉伸与全屏切换导致 Footer 重复堆叠**（状态栏全响应式断阶 + `onResize` 触发 `this.repaint(true)` 全视口自适应重绘）。
+- [x] **[FEAT-01] Thinking 与 Tool 动态流式草稿 + 结束自动折叠**（消灭长时间思考等待卡顿感，动态展示最近 2~3 行思维链与命令）。
 - [ ] 在干净 `DSH_HOME` 做真实环境 GitHub 安装与多轮交互验收（安装、会话、审批、中断、恢复、卸载）。
 - [ ] 所有阻断项全部闭环后，再提交公开 GitHub URL 到 DSH Hub 目录。
 
