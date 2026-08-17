@@ -3956,9 +3956,12 @@ class TuiApp {
         up = Math.max(up, Math.ceil(this.lastFooterHeight * scale) + 1)
       }
       if (up > 0) {
-        erase = `\x1b[?25l\r\x1b[${up}A\x1b[J`
+        erase = `\x1b[?25l\r\x1b[${up}A`
       } else {
-        erase = `\x1b[?25l\r\x1b[J`
+        erase = `\x1b[?25l\r`
+      }
+      if (footerLines.length < this.lastFooterHeight) {
+        erase += '\x1b[J'
       }
     }
     this.lastFooterHeight = footerLines.length
@@ -3970,7 +3973,7 @@ class TuiApp {
       const rowInFooter = this.inputTopInFooter + (this.caretRow - (this.inputWindowStart ?? 0))
       const upLines = (footerLines.length - 1) - rowInFooter
       if (upLines > 0) {
-        cursorMove = `\x1b[${upLines}A\r\x1b[${Math.max(1, (this.caretCol ?? 0) + 1)}G\x1b[?25h`
+        cursorMove = `\r\x1b[${upLines}A\x1b[${Math.max(1, (this.caretCol ?? 0) + 1)}G\x1b[?25h`
       } else {
         cursorMove = `\r\x1b[${Math.max(1, (this.caretCol ?? 0) + 1)}G\x1b[?25h`
       }
