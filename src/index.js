@@ -324,9 +324,20 @@ class TuiApp {
       this.viewClearedSeq = isResumed ? 0 : agent.session.seq
       if (isResumed) {
         this.reasoningBlocks = []
-        this.streaming = { text: '', reasoning: '', tool: undefined }
-        this.reasoningAt = undefined
-        for (const event of agent.session.events) this.onSessionEvent(agent.session, event)
+        for (const event of agent.session.events) {
+          if (event.type === 'assistant/message') {
+            const reasoningText = reasoningOf(event.data?.message?.content)
+            if (reasoningText) {
+              this.reasoningBlocks.unshift({
+                key: `reason-${event.seq}`,
+                seq: event.seq,
+                lines: reasoningText.split('\n').length,
+                text: reasoningText
+              })
+            }
+          }
+        }
+        if (this.reasoningBlocks.length > 20) this.reasoningBlocks.length = 20
         this.streaming = { text: '', reasoning: '', tool: undefined }
         this.reasoningAt = undefined
         this.message = ''
@@ -359,7 +370,9 @@ class TuiApp {
 
       if (isResumed) {
         const pastRows = this.formatEvents(this.agent.session.events, columns)
-        if (pastRows.length > 0) await this.commitToScrollbackChunked(pastRows)
+        if (pastRows.length > 0) {
+          process.stdout.write(pastRows.join('\n') + '\n')
+        }
         this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
       } else {
         this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
@@ -2426,9 +2439,20 @@ class TuiApp {
         } catch {}
       }
       this.reasoningBlocks = []
-      this.streaming = { text: '', reasoning: '', tool: undefined }
-      this.reasoningAt = undefined
-      for (const event of agent.session.events) this.onSessionEvent(agent.session, event)
+      for (const event of agent.session.events) {
+        if (event.type === 'assistant/message') {
+          const reasoningText = reasoningOf(event.data?.message?.content)
+          if (reasoningText) {
+            this.reasoningBlocks.unshift({
+              key: `reason-${event.seq}`,
+              seq: event.seq,
+              lines: reasoningText.split('\n').length,
+              text: reasoningText
+            })
+          }
+        }
+      }
+      if (this.reasoningBlocks.length > 20) this.reasoningBlocks.length = 20
       this.streaming = { text: '', reasoning: '', tool: undefined }
       this.reasoningAt = undefined
       this.usage = foldUsage(agent.session.events)
@@ -2437,7 +2461,9 @@ class TuiApp {
 
       const columns = Math.max(60, process.stdout.columns || 100)
       const pastRows = this.formatEvents(agent.session.events, columns)
-      if (pastRows.length > 0) await this.commitToScrollbackChunked(pastRows)
+      if (pastRows.length > 0) {
+        process.stdout.write(pastRows.join('\n') + '\n')
+      }
       this.lastCommittedSeq = agent.session.events[agent.session.events.length - 1]?.seq ?? 0
 
       this.log('ok', `resumed session ${record.header.id.slice(0, 8)}`, '/resume')
