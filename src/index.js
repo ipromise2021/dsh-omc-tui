@@ -1121,7 +1121,11 @@ class TuiApp {
     if (options.length > 0 && panel.selectedOptions.size === 0) panel.selectedOptions.add(panel.selected)
     const selected = [...panel.selectedOptions]
       .sort((a, b) => a - b)
-      .map((index) => String(options[index]?.label ?? ''))
+      .map((index) => {
+        const opt = options[index]
+        if (typeof opt === 'string') return opt
+        return String(opt?.label ?? opt?.value ?? opt?.text ?? '')
+      })
       .filter(Boolean)
     panel.answers.push({ id: String(question.id ?? `question-${panel.index + 1}`), selected })
     if (panel.index + 1 < panel.questions.length) {
@@ -1138,6 +1142,7 @@ class TuiApp {
     const panel = this.questionPanel
     const question = this.currentQuestion()
     if (!panel || !question) return
+    const options = Array.isArray(question.options) ? question.options : []
     if (value === '\x1b' || value === '\x03') {
       this.finishQuestion(new Error('user cancelled the question'))
       this.active = false
@@ -1155,12 +1160,39 @@ class TuiApp {
       this.scheduleRender()
       return
     }
-    if (value === '\r' || value === '\t') {
+    if (value === '\r') {
       this.answerQuestion()
+      return
+    }
+    if (value === '\t') {
+      if (panel.questions.length > 1) {
+        panel.index = (panel.index + 1) % panel.questions.length
+        panel.selected = 0
+        this.scheduleRender()
+      } else {
+        this.answerQuestion()
+      }
       return
     }
     if (value === ' ') {
       this.toggleQuestionOption(panel.selected)
+      return
+    }
+    if (value === 'j' && options.length > 0) {
+      panel.selected = (panel.selected + 1) % options.length
+      this.scheduleRender()
+      return
+    }
+    if (value === 'k' && options.length > 0) {
+      panel.selected = (panel.selected - 1 + options.length) % options.length
+      this.scheduleRender()
+      return
+    }
+    if ((value === 'h' || value === 'l') && panel.questions.length > 1) {
+      const delta = value === 'h' ? -1 : 1
+      panel.index = (panel.index + delta + panel.questions.length) % panel.questions.length
+      panel.selected = 0
+      this.scheduleRender()
       return
     }
     if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) {

@@ -54,11 +54,11 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
     lines.push(`  ${ANSI.dim}… ${options.length - shown.length} more options${ANSI.reset}`)
   }
   lines.push('')
-  const numberHint = options.length > 0 ? ` · 1-${Math.min(9, options.length)} quick select` : ''
-  const switchHint = panel.questions.length > 1 ? '   ←→ switch' : '   ←→ select'
+  const numberHint = options.length > 0 ? ` · 1-${Math.min(9, options.length)} quick toggle` : ''
+  const switchHint = panel.questions.length > 1 ? ' · ⇆ tab switch' : ''
   const hint = isMulti
-    ? `  ${ANSI.muted}⇆ tab${switchHint}   ↑↓ select   enter toggle   esc dismiss${numberHint}${ANSI.reset}`
-    : `  ${ANSI.muted}⇆ tab${switchHint}   ↑↓ select   enter select   esc dismiss${numberHint}${ANSI.reset}`
+    ? `  ${ANSI.muted}space/1-9 toggle · ↑↓/jk navigate · enter confirm · esc dismiss${switchHint}${ANSI.reset}`
+    : `  ${ANSI.muted}1-${Math.min(9, options.length)} select · ↑↓/jk navigate · enter confirm · esc dismiss${switchHint}${ANSI.reset}`
   lines.push(hint)
   return lines
 }
