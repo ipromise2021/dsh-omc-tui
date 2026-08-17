@@ -151,9 +151,6 @@ export function formatEvents(events, columns, options = {}) {
         if (event.data.source?.kind !== 'user') break
         const contentBlocks = event.data.content ?? []
         const isBashCmd = contentBlocks.some((b) => b.type === 'text' && b.text?.startsWith('!') && !b.text?.startsWith('!!'))
-        if (!isBashCmd) {
-          push(ANSI.blue, `${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
-        }
         for (const block of contentBlocks) {
           if (block.type === 'image') {
             const ref = block.attachment
@@ -175,15 +172,11 @@ export function formatEvents(events, columns, options = {}) {
               }
             } else {
               const displayText = compactExpandedFileReferences(rawText)
-              const blockWidth = Math.max(24, contentWidth)
-              const innerWidth = blockWidth - 2
-              const wrapped = wrap(displayText, innerWidth - 2)
-              push('', `  ${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
+              const wrapped = wrap(displayText, Math.max(20, contentWidth - 4))
               for (const line of wrapped) {
-                const padding = ' '.repeat(Math.max(0, innerWidth - 2 - widthOf(line)))
-                push('', `  ${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
+                push('', `  ${ANSI.ink}${ANSI.bold}${line}${ANSI.reset}`)
               }
-              push('', `  ${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
+              push(ANSI.dim, `  ${formatTime(event.time)}`)
             }
           }
         }
