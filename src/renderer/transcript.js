@@ -43,14 +43,14 @@ export function formatEvents(events, columns, options = {}) {
         return count > 1 ? `${name} ×${count}` : name
       }).join(' · ')
       const isExpanded = expandedKeys.has(key)
-      push(ANSI.detail, `⚙ TOOLS · ${calls.length} · ${names} ${ANSI.dim}(ctrl+o to ${isExpanded ? 'collapse' : 'expand'})${ANSI.reset}`)
+      push(ANSI.detail, `  ⚙ TOOLS · ${calls.length} · ${names} ${ANSI.dim}(ctrl+o to ${isExpanded ? 'collapse' : 'expand'})${ANSI.reset}`)
       if (!isExpanded) {
         rows.push('')
         return
       }
     }
 
-    const indent = isMultiple ? '  ' : ''
+    const indent = isMultiple ? '    ' : '  '
     for (const event of group) {
       if (event.type === 'tool/call') {
         const args = parseToolArgs(event.data.arguments)
@@ -84,34 +84,34 @@ export function formatEvents(events, columns, options = {}) {
           push(ANSI.ink, `${indent}● ${name}(${safe(shorten(String(target), Math.max(20, contentWidth - name.length - 8)))})`)
         }
       } else if (event.type === 'approval/asked') {
-        push(ANSI.coral, `${indent}! approval needed · ${event.data.toolName}`)
+        push(ANSI.coral, `${indent}  ! approval needed · ${event.data.toolName}`)
       } else if (event.type === 'approval/decided') {
-        push(ANSI.dim, `${indent}└ decision: ${event.data.outcome}`)
+        push(ANSI.dim, `${indent}  └ decision: ${event.data.outcome}`)
       } else if (event.type === 'hook/invoked') {
-        push(ANSI.dim, `${indent}ϟ hook · ${event.data.point} · ${event.data.dialect}${event.data.matcher ? ` · ${event.data.matcher}` : ''}`)
+        push(ANSI.dim, `${indent}  ϟ hook · ${event.data.point} · ${event.data.dialect}${event.data.matcher ? ` · ${event.data.matcher}` : ''}`)
       } else if (event.type === 'hook/result') {
         const data = event.data
         const ok = data.decision === 'allow' || data.decision === 'pass'
         const decision = ok ? `${ANSI.blue}${data.decision}${ANSI.reset}` : `${ANSI.coral}${data.decision}${ANSI.reset}`
         const duration = data.durationMs !== undefined ? ` · ${(data.durationMs / 1000).toFixed(1)}s` : ''
-        push(ANSI.dim, `${indent}└ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}`)
+        push(ANSI.dim, `${indent}  └ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}`)
       } else {
         const resultText = textOf(event.data.message?.content)
         if (event.data.error) {
           const detail = event.data.error.message ?? resultText
-          push(ANSI.coral, `${indent}└ ✗ ${event.data.error.code ?? 'error'} · ${shorten(detail, Math.max(20, contentWidth - 24))}`)
+          push(ANSI.coral, `${indent}  └ ✗ ${event.data.error.code ?? 'error'} · ${shorten(detail, Math.max(20, contentWidth - 24))}`)
         } else if (/^diff |\n(---|\+\+\+)/.test(`\n${resultText}`) && /^[+-]/.test(resultText.split('\n').find((l) => l.startsWith('+') || l.startsWith('-')) ?? '')) {
           const diffLines = renderDiffLines(resultText, contentWidth, ANSI)
           for (const line of diffLines) rows.push(line)
         } else if (resultText) {
           const resultLines = safe(resultText).split(/\r?\n/).filter((l) => l.trim().length > 0)
           if (resultLines.length > 0) {
-            push(ANSI.dim, `${indent}└ ${shorten(resultLines[0], Math.max(20, contentWidth - 10))}`)
+            push(ANSI.dim, `${indent}  └ ${shorten(resultLines[0], Math.max(20, contentWidth - 10))}`)
             for (let idx = 1; idx < Math.min(4, resultLines.length); idx++) {
-              push(ANSI.dim, `${indent}  ${shorten(resultLines[idx], Math.max(20, contentWidth - 10))}`)
+              push(ANSI.dim, `${indent}    ${shorten(resultLines[idx], Math.max(20, contentWidth - 10))}`)
             }
             if (resultLines.length > 4) {
-              push(ANSI.dim, `${indent}  … ${resultLines.length - 4} more lines`)
+              push(ANSI.dim, `${indent}    … ${resultLines.length - 4} more lines`)
             }
           }
         }
@@ -213,12 +213,12 @@ export function formatEvents(events, columns, options = {}) {
         if (block) {
           const msStr = block.ms !== undefined ? `${(block.ms / 1000).toFixed(0)}s` : `${block.lines} lines`
           if (expandedKeys.has(block.key)) {
-            push(ANSI.detail, `⚛ Thought for ${msStr} (ctrl+o to collapse)`)
+            push(ANSI.detail, `  ⚛ Thought for ${msStr} (ctrl+o to collapse)`)
             for (const line of wrap(block.text, contentWidth - 4)) {
-              push(ANSI.detail, `  ${line}`)
+              push(ANSI.detail, `    ${line}`)
             }
           } else {
-            push(ANSI.detail, `⚛ Thought for ${msStr} (ctrl+o to expand)`)
+            push(ANSI.detail, `  ⚛ Thought for ${msStr} (ctrl+o to expand)`)
           }
         }
 
@@ -252,10 +252,10 @@ export function formatEvents(events, columns, options = {}) {
       }
       case 'turn/end': {
         turnHeaderPrinted = false
-        if (event.data.reason?.kind === 'aborted') push(ANSI.dim, `∅ interrupted`)
+        if (event.data.reason?.kind === 'aborted') push(ANSI.dim, `  ∅ interrupted`)
         else if (event.data.reason?.kind === 'error') {
           const error = event.data.reason.error
-          push(ANSI.coral, `✗ ${error?.code ?? 'error'}: ${shorten(error?.message ?? '', contentWidth - 20)}`)
+          push(ANSI.coral, `  ✗ ${error?.code ?? 'error'}: ${shorten(error?.message ?? '', contentWidth - 20)}`)
         } else if (event.data.reason?.kind === 'completed') {
           let startIndex = -1
           for (let cursor = allSessionEvents.length - 1; cursor >= 0; cursor -= 1) {
@@ -269,7 +269,7 @@ export function formatEvents(events, columns, options = {}) {
             if (Number.isFinite(durationMs) && durationMs >= 0) {
               const tools = allSessionEvents.slice(startIndex).filter((e) => e.type === 'tool/call').length
               const toolsText = tools > 0 ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : ''
-              push(ANSI.dim, `✻ finished in ${formatDurationMs(durationMs)}${toolsText}`)
+              push(ANSI.dim, `  ✻ finished in ${formatDurationMs(durationMs)}${toolsText}`)
             }
           }
         }
