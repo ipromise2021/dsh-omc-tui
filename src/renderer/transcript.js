@@ -220,6 +220,7 @@ export function formatEvents(events, columns, options = {}) {
           } else {
             push(ANSI.detail, `  ⚛ Thought for ${msStr} (ctrl+o to expand)`)
           }
+          rows.push('')
         }
 
         // Check if this message is an intermediate transition before tool calls
@@ -237,6 +238,7 @@ export function formatEvents(events, columns, options = {}) {
             const cleanLead = shorten(answerText.trim().replace(/\s+/g, ' '), Math.max(20, contentWidth - 4))
             if (cleanLead) {
               push(ANSI.dim, `  ${cleanLead}`)
+              rows.push('')
             }
           } else {
             rows.push('')
