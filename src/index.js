@@ -592,9 +592,17 @@ class TuiApp {
       if (clearScreen) {
         process.stdout.write('\x1b[2J\x1b[H')
       }
+      // Replay session events
       const allRows = [...welcome, ...pastRows]
       if (allRows.length > 0) {
         process.stdout.write(allRows.join('\n') + '\n')
+      }
+      // Replay local log (bash output, command results) that happened in this view
+      const localRows = this.localLog
+        .filter((e) => e.seq >= (this.viewClearedSeq ?? 0))
+        .flatMap((e) => this.formatLogEntry(e))
+      if (localRows.length > 0) {
+        process.stdout.write(localRows.join('\n') + '\n')
       }
       if (this.agent?.session?.events?.length) {
         this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? this.lastCommittedSeq
@@ -1055,7 +1063,6 @@ class TuiApp {
   formatLogEntry(entry) {
     const lines = []
     if (entry.command) {
-      const isBash = entry.command === '!' || entry.command === 'exit 0' || /^exit /.test(entry.command)
       const isExitLine = /^exit /.test(entry.command)
       if (isExitLine) {
         // Output block: render command output cleanly
@@ -1074,12 +1081,15 @@ class TuiApp {
         }
         lines.push('')
       } else {
-        // Command header: Claude Code style — highlighted command bar
+        // Command header: "! <cmd>" on a single line, Claude Code style
         lines.push('')
-        const cmdDisplay = entry.command === '!' ? '' : entry.command
-        const bar = `${ANSI.bash}${ANSI.bold}! ${cmdDisplay}${ANSI.reset}`
-        lines.push(bar)
-        if (entry.text) {
+        // entry.command === '!' means entry.text holds "$ <cmd>" — merge them
+        const cmdLine = entry.command === '!'
+          ? String(entry.text ?? '').replace(/^\$\s*/, '')
+          : entry.command
+        lines.push(`${ANSI.bash}${ANSI.bold}! ${cmdLine}${ANSI.reset}`)
+        // Only show extra text lines for non-! entries (e.g. error/usage messages)
+        if (entry.command !== '!' && entry.text) {
           for (const line of String(entry.text).split('\n')) {
             lines.push(`${ANSI.dim}  ${line}${ANSI.reset}`)
           }
