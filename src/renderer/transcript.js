@@ -47,31 +47,32 @@ export function formatEvents(events, columns, options = {}) {
     for (const event of group) {
       if (event.type === 'tool/call') {
         const args = parseToolArgs(event.data.arguments)
-        const isBash = /bash|shell|terminal|exec/i.test(event.data.name)
-        const isSkill = /^skill$/i.test(event.data.name)
-        const isMysql = /mysql/i.test(event.data.name)
+        const name = event.data.name || 'tool'
+        const isBash = /bash|shell|terminal|exec/i.test(name)
+        const isSkill = /^skill$/i.test(name)
+        const isEdit = /edit|write|replace|patch/i.test(name)
+        const isRead = /read|view|cat|grep|list/i.test(name)
+
         if (isBash) {
-          const command = args.command ?? args.cmd ?? args.script
-          push(ANSI.ink, `  • Running command...`)
-          if (command) push(ANSI.dim, `    └ $ ${ANSI.amber}${safe(shorten(String(command), Math.max(20, contentWidth - 10)))}${ANSI.reset}`)
+          const command = args.command ?? args.cmd ?? args.script ?? ''
+          push(ANSI.amber, `● Bash(${safe(shorten(String(command), Math.max(20, contentWidth - 12)))})`)
         } else if (isSkill) {
-          const skillName = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'loading instructions'
-          push(ANSI.ink, `  • Activating skill...`)
-          push(ANSI.blueSoft, `    └ ✦ ${safe(shorten(String(skillName), Math.max(20, contentWidth - 10)))}`)
-        } else if (isMysql) {
-          const query = args.query ?? args.sql ?? args.statement
-          push(ANSI.ink, `  • Querying MySQL database...`)
-          if (query) push(ANSI.dim, `    └ 🔍 ${safe(shorten(String(query), Math.max(20, contentWidth - 10)))}`)
-          else push(ANSI.dim, `    └ ⚙ ${event.data.name}`)
+          const skillName = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'instructions'
+          push(ANSI.blueSoft, `● Skill(${safe(shorten(String(skillName), Math.max(20, contentWidth - 12)))})`)
+        } else if (isEdit) {
+          const file = args.file_path ?? args.path ?? args.targetFile ?? ''
+          push(ANSI.blueSoft, `● Edit(${safe(shorten(String(file), Math.max(20, contentWidth - 12)))})`)
+        } else if (isRead) {
+          const file = args.file_path ?? args.path ?? args.targetFile ?? args.searchPath ?? ''
+          push(ANSI.blueSoft, `● Read(${safe(shorten(String(file), Math.max(20, contentWidth - 12)))})`)
         } else {
-          const file = args.file_path ?? args.path
-          push(ANSI.ink, `  • Executing ${event.data.name}...`)
-          if (file) push(ANSI.dim, `    └ 📄 ${safe(shorten(String(file), Math.max(20, contentWidth - 10)))}`)
+          const target = args.file_path ?? args.path ?? args.query ?? ''
+          push(ANSI.ink, `● ${name}(${safe(shorten(String(target), Math.max(20, contentWidth - name.length - 6)))})`)
         }
       } else if (event.type === 'approval/asked') {
         push(ANSI.coral, `  ! approval needed · ${event.data.toolName}`)
       } else if (event.type === 'approval/decided') {
-        push(ANSI.dim, `    ↳ ${event.data.outcome}`)
+        push(ANSI.dim, `  └ decision: ${event.data.outcome}`)
       } else if (event.type === 'hook/invoked') {
         push(ANSI.dim, `  ϟ hook · ${event.data.point} · ${event.data.dialect}${event.data.matcher ? ` · ${event.data.matcher}` : ''}`)
       } else if (event.type === 'hook/result') {
@@ -79,20 +80,25 @@ export function formatEvents(events, columns, options = {}) {
         const ok = data.decision === 'allow' || data.decision === 'pass'
         const decision = ok ? `${ANSI.blue}${data.decision}${ANSI.reset}` : `${ANSI.coral}${data.decision}${ANSI.reset}`
         const duration = data.durationMs !== undefined ? ` · ${(data.durationMs / 1000).toFixed(1)}s` : ''
-        push(ANSI.dim, `    ↳ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}`)
+        push(ANSI.dim, `  └ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}`)
       } else {
-        const resultText = textOf(event.data.message.content)
+        const resultText = textOf(event.data.message?.content)
         if (event.data.error) {
           const detail = event.data.error.message ?? resultText
-          push(ANSI.coral, `    ✗ ${event.data.error.code ?? 'error'} · ${shorten(detail, Math.max(20, contentWidth - 22))}`)
+          push(ANSI.coral, `  └ ✗ ${event.data.error.code ?? 'error'} · ${shorten(detail, Math.max(20, contentWidth - 22))}`)
         } else if (/^diff |\n(---|\+\+\+)/.test(`\n${resultText}`) && /^[+-]/.test(resultText.split('\n').find((l) => l.startsWith('+') || l.startsWith('-')) ?? '')) {
           const diffLines = renderDiffLines(resultText, contentWidth, ANSI)
           for (const line of diffLines) rows.push(line)
         } else if (resultText) {
-          const resultLines = safe(resultText).split(/\r?\n/)
-          push(ANSI.dim, `    └ ✓ ${shorten(resultLines[0], Math.max(20, contentWidth - 10))}`)
-          if (resultLines.length > 1) {
-            push(ANSI.dim, `      ↳ ${resultLines.length - 1} more output line${resultLines.length === 2 ? '' : 's'}`)
+          const resultLines = safe(resultText).split(/\r?\n/).filter((l) => l.trim().length > 0)
+          if (resultLines.length > 0) {
+            push(ANSI.dim, `  └ ${shorten(resultLines[0], Math.max(20, contentWidth - 8))}`)
+            for (let idx = 1; idx < Math.min(4, resultLines.length); idx++) {
+              push(ANSI.dim, `    ${shorten(resultLines[idx], Math.max(20, contentWidth - 8))}`)
+            }
+            if (resultLines.length > 4) {
+              push(ANSI.dim, `    … ${resultLines.length - 4} more lines`)
+            }
           }
         }
       }
@@ -154,16 +160,10 @@ export function formatEvents(events, columns, options = {}) {
                 }
               }
             } else {
-              const blockWidth = Math.max(24, contentWidth)
-              const innerWidth = blockWidth - 2
-              const displayText = compactExpandedFileReferences(block.text)
-              const wrapped = wrap(displayText, innerWidth - 2)
-              push('', `${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
-              for (const line of wrapped) {
-                const padding = ' '.repeat(Math.max(0, innerWidth - 2 - widthOf(line)))
-                push('', `${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
+              const displayText = compactExpandedFileReferences(rawText)
+              for (const line of wrap(displayText, contentWidth - 4)) {
+                push(ANSI.ink, `  ${line}`)
               }
-              push('', `${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
             }
           }
         }
@@ -191,14 +191,14 @@ export function formatEvents(events, columns, options = {}) {
           rows.push('')
         }
         if (block) {
-          const ms = block.ms !== undefined ? ` · ${(block.ms / 1000).toFixed(1)}s` : ''
+          const msStr = block.ms !== undefined ? `${(block.ms / 1000).toFixed(0)}s` : `${block.lines} lines`
           if (expandedKeys.has(block.key)) {
-            push(ANSI.dim, `  ⚛ thinking · ${block.lines} lines${ms}`)
+            push(ANSI.dim, `  ● Thought for ${msStr} (ctrl+o to collapse)`)
             for (const line of wrap(block.text, contentWidth - 4)) {
               push(ANSI.detail, `    ${line}`)
             }
           } else {
-            push(ANSI.dim, `  ⚛ thinking · ${block.lines} lines${ms}`)
+            push(ANSI.dim, `  ● Thought for ${msStr} (ctrl+o to expand)`)
           }
           rows.push('')
         }

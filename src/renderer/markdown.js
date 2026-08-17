@@ -26,7 +26,7 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
     // 1. Fenced Code Blocks (```lang ... ```)
     const codeMatch = line.match(/^\s*```([A-Za-z0-9_+.-]*)\s*$/)
     if (codeMatch) {
-      const lang = codeMatch[1] || 'code'
+      const lang = codeMatch[1] || ''
       const codeLines = []
       i++
       while (i < rawLines.length && !rawLines[i].match(/^\s*```\s*$/)) {
@@ -35,21 +35,14 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
       }
       if (i < rawLines.length) i++ // consume closing ```
 
-      const boxWidth = Math.max(32, Math.min(contentWidth - 4, 100))
-      const langTag = ` ${lang} `
-      const ruleAfter = Math.max(2, boxWidth - 4 - widthOf(langTag))
-      
       rows.push(null)
-      push(ANSI.dim, `  ╭─${ANSI.amber}${ANSI.bold}${langTag}${ANSI.reset}${ANSI.dim}${'─'.repeat(ruleAfter)}╮${ANSI.reset}`)
-      
+      push(ANSI.dim, `  \`\`\`${lang}`)
       for (const cl of codeLines) {
-        for (const wrapped of wrap(cl, boxWidth - 4)) {
-          const pad = ' '.repeat(Math.max(0, boxWidth - 4 - widthOf(wrapped)))
-          push(ANSI.ink, `  ${ANSI.dim}│${ANSI.reset} ${wrapped}${pad} ${ANSI.dim}│${ANSI.reset}`)
+        for (const wrapped of wrap(cl, contentWidth - 4)) {
+          push(ANSI.ink, `  ${wrapped}`)
         }
       }
-      
-      push(ANSI.dim, `  ╰${'─'.repeat(boxWidth - 2)}╯${ANSI.reset}`)
+      push(ANSI.dim, `  \`\`\``)
       rows.push(null)
       continue
     }

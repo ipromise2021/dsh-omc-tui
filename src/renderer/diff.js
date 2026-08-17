@@ -44,30 +44,29 @@ export function approvalDiffLines(request, argsOrColumns, columnsOrAnsi, ANSI = 
     }
   }
   args = args ?? {}
-  const command = args.command
+  const command = args.command ?? args.cmd ?? args.script
   const lines = []
   if (command) {
-    lines.push(`${ansiTheme.bold}${ansiTheme.ink}Command:${ansiTheme.reset} ${ansiTheme.amber || ansiTheme.accent}$ ${safe(truncateWidth(command, Math.max(20, columns - 12)))}${ansiTheme.reset}`)
+    lines.push(`  ${ansiTheme.amber || ansiTheme.accent}$ ${safe(truncateWidth(command, Math.max(20, columns - 6)))}${ansiTheme.reset}`)
     return lines
   }
-  const file = args.file_path ?? args.path
-  if (file) {
-    lines.push(`${ansiTheme.bold}${ansiTheme.ink}Target:${ansiTheme.reset} 📄 ${ansiTheme.accent || ansiTheme.blue}${safe(truncateWidth(file, Math.max(20, columns - 12)))}${ansiTheme.reset}`)
-  }
-  const oldLines = String(args.old_str ?? '').split('\n').slice(0, 6)
-  const newLines = String(args.new_str ?? '').split('\n').slice(0, 6)
-  const hasDiff = (args.old_str !== undefined && args.old_str !== '') || (args.new_str !== undefined && args.new_str !== '')
+
+  const startLine = Number.parseInt(args.start_line ?? args.startLine ?? args.line ?? '1', 10) || 1
+  const oldLines = String(args.old_str ?? args.oldContent ?? args.targetContent ?? '').split('\n').filter((l, idx, arr) => idx < arr.length - 1 || l.length > 0)
+  const newLines = String(args.new_str ?? args.newContent ?? args.replacementContent ?? '').split('\n').filter((l, idx, arr) => idx < arr.length - 1 || l.length > 0)
+  const hasDiff = (args.old_str !== undefined || args.oldContent !== undefined || args.targetContent !== undefined || args.new_str !== undefined || args.newContent !== undefined || args.replacementContent !== undefined)
+
   if (hasDiff) {
-    const count = Math.max(oldLines.length, newLines.length)
-    for (let i = 0; i < count; i++) {
-      const oldLine = oldLines[i]
-      const newLine = newLines[i]
-      if (oldLine !== undefined && oldLine === newLine) {
-        lines.push(`  ${ansiTheme.muted}${truncateWidth(safe(oldLine), Math.max(20, columns - 6))}${ansiTheme.reset}`)
-      } else {
-        if (oldLine !== undefined) lines.push(`${ansiTheme.coral}- ${truncateWidth(safe(oldLine), Math.max(20, columns - 6))}${ansiTheme.reset}`)
-        if (newLine !== undefined) lines.push(`${ansiTheme.blue || ansiTheme.ok}+ ${truncateWidth(safe(newLine), Math.max(20, columns - 6))}${ansiTheme.reset}`)
-      }
+    let curLine = startLine
+    for (const oldLine of oldLines.slice(0, 8)) {
+      const numStr = String(curLine).padStart(4, ' ')
+      lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${ansiTheme.coral}- ${truncateWidth(safe(oldLine), Math.max(20, columns - 10))}${ansiTheme.reset}`)
+      curLine++
+    }
+    for (const newLine of newLines.slice(0, 8)) {
+      const numStr = String(curLine).padStart(4, ' ')
+      lines.push(`${ansiTheme.dim}${numStr}${ansiTheme.reset} ${ansiTheme.blue || ansiTheme.ok}+ ${truncateWidth(safe(newLine), Math.max(20, columns - 10))}${ansiTheme.reset}`)
+      curLine++
     }
   }
   return lines
