@@ -649,6 +649,107 @@ class TuiApp {
     this.reasoningAt = undefined
   }
 
+  flushStreamBuffer(forceAll = false) {
+    if (!this.streamBuffer) return
+    const columns = Math.max(60, process.stdout.columns || 100)
+    const contentWidth = Math.max(24, columns - 2)
+
+    if (forceAll) {
+      const textToRender = this.streamBuffer
+      this.streamBuffer = ''
+      const md = this.renderMarkdownRows(textToRender, contentWidth, ANSI.answer)
+      const formattedRows = []
+      for (const r of md) {
+        if (r === null) formattedRows.push('')
+        else formattedRows.push(r[0] + r[1])
+      }
+      if (formattedRows.length > 0) {
+        this.commitToScrollback(formattedRows)
+      }
+      return
+    }
+
+    if (!this.streamBuffer.includes('\n')) return
+
+    const allLines = this.streamBuffer.split('\n')
+    const trailingPartial = allLines.pop()
+
+    let commitLines = []
+    let inCodeBlock = false
+    let inTable = false
+    let tableStartIdx = -1
+
+    for (let i = 0; i < allLines.length; i++) {
+      const line = allLines[i]
+      const isCodeFence = /^\s*```/.test(line)
+      const isTableRow = /^\s*\|.*\|\s*$/.test(line)
+
+      if (isCodeFence) {
+        inCodeBlock = !inCodeBlock
+        commitLines.push(line)
+        continue
+      }
+
+      if (inCodeBlock) {
+        commitLines.push(line)
+        continue
+      }
+
+      if (isTableRow) {
+        if (!inTable) {
+          inTable = true
+          tableStartIdx = commitLines.length
+        }
+        commitLines.push(line)
+        continue
+      }
+
+      if (inTable && !isTableRow) {
+        inTable = false
+        tableStartIdx = -1
+        commitLines.push(line)
+        continue
+      }
+
+      commitLines.push(line)
+    }
+
+    let remainingLines = []
+    if (inCodeBlock) {
+      let fenceIdx = -1
+      for (let j = commitLines.length - 1; j >= 0; j--) {
+        if (/^\s*```/.test(commitLines[j])) {
+          fenceIdx = j
+          break
+        }
+      }
+      if (fenceIdx !== -1) {
+        remainingLines = commitLines.slice(fenceIdx)
+        commitLines = commitLines.slice(0, fenceIdx)
+      }
+    } else if (inTable && tableStartIdx !== -1) {
+      remainingLines = commitLines.slice(tableStartIdx)
+      commitLines = commitLines.slice(0, tableStartIdx)
+    }
+
+    const bufferParts = [...remainingLines]
+    if (trailingPartial !== undefined) bufferParts.push(trailingPartial)
+    this.streamBuffer = bufferParts.join('\n')
+
+    if (commitLines.length > 0) {
+      const textToRender = commitLines.join('\n')
+      const md = this.renderMarkdownRows(textToRender, contentWidth, ANSI.answer)
+      const formattedRows = []
+      for (const r of md) {
+        if (r === null) formattedRows.push('')
+        else formattedRows.push(r[0] + r[1])
+      }
+      if (formattedRows.length > 0) {
+        this.commitToScrollback(formattedRows)
+      }
+    }
+  }
+
   onSessionEvent(session, event) {
     if (session !== this.agent?.session) return
     switch (event.type) {
@@ -669,23 +770,7 @@ class TuiApp {
             this.commitToScrollback(headerLines)
           }
           this.streamBuffer += chunk.text
-          if (this.streamBuffer.includes('\n')) {
-            const parts = this.streamBuffer.split('\n')
-            this.streamBuffer = parts.pop()
-            const columns = Math.max(60, process.stdout.columns || 100)
-            const contentWidth = Math.max(24, columns - 2)
-            const formattedRows = []
-            for (const line of parts) {
-              const md = this.renderMarkdownRows(line, contentWidth, ANSI.answer)
-              for (const r of md) {
-                if (r === null) formattedRows.push('')
-                else formattedRows.push(r[0] + r[1])
-              }
-            }
-            if (formattedRows.length > 0) {
-              this.commitToScrollback(formattedRows)
-            }
-          }
+          this.flushStreamBuffer(false)
         }
         else if (chunk.type === 'reasoning-delta') {
           if (this.streaming.reasoning === '') this.reasoningAt = Date.now()
@@ -708,20 +793,7 @@ class TuiApp {
       }
       case 'assistant/message': {
         this.flushThinking(event.seq)
-        if (this.streamBuffer) {
-          const columns = Math.max(60, process.stdout.columns || 100)
-          const contentWidth = Math.max(24, columns - 2)
-          const md = this.renderMarkdownRows(this.streamBuffer, contentWidth, ANSI.answer)
-          const formattedRows = []
-          for (const r of md) {
-            if (r === null) formattedRows.push('')
-            else formattedRows.push(r[0] + r[1])
-          }
-          if (formattedRows.length > 0) {
-            this.commitToScrollback(formattedRows)
-          }
-          this.streamBuffer = ''
-        }
+        this.flushStreamBuffer(true)
         this.streamHeaderCommitted = false
         this.streaming.text = ''
         this.streaming.reasoning = ''
