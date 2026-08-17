@@ -203,7 +203,7 @@ class TuiApp {
       clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         if (!this.terminalOpen) return
-        this.clearFooter()
+        this.clearFooter(true)
         this.render()
       }, 40)
     }
@@ -3513,9 +3513,15 @@ class TuiApp {
     return out
   }
 
-  clearFooter() {
+  clearFooter(isResize = false) {
     if (this.lastFooterHeight > 0) {
-      const up = this.lastCursorRowInFooter ?? 0
+      let up = this.lastCursorRowInFooter ?? 0
+      if (isResize) {
+        const currentCols = Math.max(10, process.stdout.columns || 80)
+        const lastCols = this.lastColumns || currentCols
+        const scale = Math.max(1, lastCols / currentCols)
+        up = Math.max(up, Math.ceil(this.lastFooterHeight * scale) + 2)
+      }
       if (up > 0) {
         process.stdout.write(`\x1b[?25l\r\x1b[${up}A\x1b[J`)
       } else {
@@ -3677,6 +3683,7 @@ class TuiApp {
       }
     }
     this.lastFooterHeight = footerLines.length
+    this.lastColumns = columns
 
     let cursorMove = ''
     const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.skillsPanel
