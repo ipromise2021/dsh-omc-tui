@@ -830,7 +830,6 @@ class TuiApp {
         this.flushStreamBuffer(true)
         this.commitUnprintedEvents()
         this.onTurnEnd(event.data.reason)
-        this.refresh(false)
         break
       default:
         break

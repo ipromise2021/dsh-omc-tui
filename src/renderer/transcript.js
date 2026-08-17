@@ -172,15 +172,11 @@ export function formatEvents(events, columns, options = {}) {
               }
             } else {
               const displayText = compactExpandedFileReferences(rawText)
-              const wrapped = wrap(displayText, Math.max(20, contentWidth - 8))
-              const maxLineWidth = Math.max(4, ...wrapped.map((l) => widthOf(l)))
-              const bg = ANSI.userBg || '\x1b[48;5;237m'
-              const fg = ANSI.ink || '\x1b[38;5;255m'
-              for (const line of wrapped) {
-                const pad = ' '.repeat(Math.max(0, maxLineWidth - widthOf(line)))
-                push('', `  ${bg}  ${fg}${ANSI.bold}${line}${pad}  ${ANSI.reset}`)
+              const wrapped = wrap(displayText, Math.max(20, contentWidth - 4))
+              for (const [idx, line] of wrapped.entries()) {
+                const prefix = idx === 0 ? `${(ANSI.cyan ?? ANSI.blueSoft)}${ANSI.bold}>${ANSI.reset} ` : `  `
+                push('', `${prefix}${ANSI.ink}${ANSI.bold}${line}${ANSI.reset}`)
               }
-              push(ANSI.dim, `  ${formatTime(event.time)}`)
             }
           }
         }
