@@ -3447,11 +3447,6 @@ class TuiApp {
       const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
       const elapsedSec = this.reasoningAt ? Math.max(1, Math.floor((Date.now() - this.reasoningAt) / 1000)) : 1
 
-      if (this.streamBuffer) {
-        const preview = shorten(this.streamBuffer.trim().replace(/\s+/g, ' '), Math.max(20, columns - 10))
-        if (preview) lines.push(`  ${ANSI.answer}${preview}${ANSI.blue}▋${ANSI.reset}`)
-      }
-
       if (this.streaming.reasoning) {
         const rawLines = this.streaming.reasoning.split('\n').filter((l) => l.trim().length > 0)
         const charCount = this.streaming.reasoning.length
@@ -3475,10 +3470,6 @@ class TuiApp {
           lines.push(`    ${ANSI.dim}└ $ ${preview}${ANSI.reset}`)
         }
       } else if (this.streaming.text || this.streamBuffer) {
-        if (this.streamBuffer) {
-          const preview = shorten(this.streamBuffer.trim().replace(/\s+/g, ' '), Math.max(20, columns - 10))
-          if (preview) lines.push(`  ${ANSI.answer}${preview}${ANSI.blue}▋${ANSI.reset}`)
-        }
         lines.push(`  ${ANSI.blue}${frame} Generating response${dots} (${elapsedSec}s)${ANSI.reset}`)
       } else {
         lines.push(`  ${ANSI.blue}${ANSI.bold}${frame} ${this.activityPhrase()}${dots} (${elapsedSec}s)${ANSI.reset}`)
