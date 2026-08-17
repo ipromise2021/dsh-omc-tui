@@ -3835,10 +3835,7 @@ class TuiApp {
       : (hasApproval ? inlineRows : (panelRows.length > 0 ? panelRows : this.statusRows(columns)))
     
     this.inputMaxRows = Math.max(3, Math.min(10, rows - 10))
-    const inputLines = this.inputFrame(columns)
-    const isStreaming = Boolean(this.streaming.reasoning || this.streaming.tool || this.streamBuffer || this.streaming.text)
-
-    if (this.active && (isStreaming || this.reasoningAt) && !this.questionPanel && !this.pendingApproval) {
+    if (this.active && !this.questionPanel && !this.pendingApproval) {
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]
       const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
@@ -3905,6 +3902,7 @@ class TuiApp {
       }
     }
 
+    const inputLines = this.inputFrame(columns)
     lines.push(`${this.ruleStyle()}${'─'.repeat(Math.max(10, columns - 1))}${ANSI.reset}`)
     this.inputTopInFooter = lines.length
     lines.push(...inputLines)
