@@ -115,6 +115,9 @@ class TuiApp {
     this.settingsScope = undefined
     this.preferences = { theme: defaultTheme, showWelcome: true, persistHistory: true }
     this.presetPicker = undefined // { entries, selected }
+    this.presetConfirm = undefined
+    this.localBackgroundJobs = []
+    this.localJobsCount = 0
     this.jobPanel = undefined // { entries, selected, outputJobId, output, outputBusy, outputError }
     this.picker = undefined // { sessions, selected, loaded }
     this.filePicker = undefined // { baseDir, entries, selected }
@@ -2430,9 +2433,11 @@ class TuiApp {
     this.log('ok', `$ ${command}`, '!')
     this.message = 'running command… · Ctrl+B background'
     this.scheduleRender()
-    const child = spawn('/bin/bash', ['-c', command], { cwd, env: process.env })
+    const shell = process.env.SHELL || (process.platform === 'win32' ? (process.env.COMSPEC || 'cmd.exe') : '/bin/bash')
+    const shellArgs = process.platform === 'win32' && !process.env.SHELL ? ['/d', '/s', '/c', command] : ['-c', command]
+    const child = spawn(shell, shellArgs, { cwd, env: process.env })
     const active = {
-      id: `job-${(this.localJobsCount = (this.localJobsCount || 0) + 1)}`,
+      id: `job-${(this.localJobsCount = this.localJobsCount + 1)}`,
       command,
       child,
       status: 'running',
