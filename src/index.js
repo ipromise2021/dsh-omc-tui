@@ -893,9 +893,8 @@ class TuiApp {
         }
 
         const lines = []
-        if (finishLine) lines.push(finishLine)
-        while (lines.length < heightDiff) {
-          lines.push('')
+        if (finishLine) {
+          lines.push(finishLine, '')
         }
         if (lines.length > 0) {
           this.commitToScrollback(lines)
