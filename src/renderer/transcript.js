@@ -220,15 +220,33 @@ export function formatEvents(events, columns, options = {}) {
           } else {
             push(ANSI.detail, `⚛ Thought for ${msStr} (ctrl+o to expand)`)
           }
-          rows.push('')
         }
-        if (answerText) {
-          const mdRows = renderMarkdownRows(answerText, contentWidth, ANSI.answer, ANSI)
-          for (const r of mdRows) {
-            if (r === null) rows.push('')
-            else push('', r[0] + r[1])
+
+        // Check if this message is an intermediate transition before tool calls
+        let isIntermediate = false
+        for (let n = eventIndex + 1; n < events.length; n++) {
+          if (events[n].type === 'user/message' || events[n].type === 'turn/end') break
+          if (events[n].type === 'tool/call') {
+            isIntermediate = true
+            break
           }
-          rows.push('')
+        }
+
+        if (answerText) {
+          if (isIntermediate) {
+            const cleanLead = shorten(answerText.trim().replace(/\s+/g, ' '), Math.max(20, contentWidth - 4))
+            if (cleanLead) {
+              push(ANSI.dim, `  ${cleanLead}`)
+            }
+          } else {
+            rows.push('')
+            const mdRows = renderMarkdownRows(answerText, contentWidth, ANSI.answer, ANSI)
+            for (const r of mdRows) {
+              if (r === null) rows.push('')
+              else push('', r[0] + r[1])
+            }
+            rows.push('')
+          }
         }
         break
       }

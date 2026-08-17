@@ -12,6 +12,8 @@
 
 [设计亮点与功能详解](PRODUCT_SHOWCASE.md) · [Harness 兼容性记录](HARNESS_COMPATIBILITY.md)
 
+**💬 个人维护的 pre-release 项目：功能边用边完善，如遇 Bug 或想提建议，欢迎 [提交 Issue](https://github.com/ipromise2021/dsh-omc-tui/issues) 或 PR——你的每一条反馈都很宝贵！**
+
 </div>
 
 ---
@@ -29,6 +31,8 @@
 - [🔌 MCP 与 Hooks 集成](#mcp-与-hooks-集成-integrations)
 - [🧑‍💻 开发者专区](#开发者专区-for-developers)
 - [⚠️ 已知限制](#已知限制-known-limitations)
+- [🗺️ Roadmap（规划中）](#roadmap规划中-roadmap)
+- [🤝 反馈与贡献](#反馈与贡献-feedback-and-contributions)
 - [📄 开源许可证](#开源许可证-license)
 
 ---
@@ -296,10 +300,46 @@ npm publish --access public # 发布至 npm / DSH 插件体系
 
 - **兼容性**：已在 VS Code / iTerm2 终端中验证，个别终端 / OS 组合可能存在渲染差异；Windows 及真实 provider 下的技能发送、长任务生产者仍待独立 E2E 验证；
 - **未适配能力**：`/plugins`（插件市场）暂未适配——规划中仅做市场发现，安装 / 移除委托给官方 `dsh plugin` CLI；`/fork`、`/rewind`、会话内全文检索需等待 Harness 提供稳定的 session/checkpoint 合约，不能通过截断 durable log 模拟；
-- **反馈渠道**：欢迎通过 GitHub Issue 或 PR 反馈问题、一起改进；
+- **反馈渠道**：欢迎通过 [GitHub Issue](https://github.com/ipromise2021/dsh-omc-tui/issues)（建议使用 [Bug 反馈模板](.github/ISSUE_TEMPLATE/bug_report.md)）或 PR 反馈问题、一起改进，详见下方「[🤝 反馈与贡献](#反馈与贡献-feedback-and-contributions)」；
 - **引擎依赖**：本包只提供 TUI 界面，模型、持久化、工具与 sandbox 能力均由底层 `dsh-base` bundle 提供，请确保 profile 挂载顺序正确。
 
 > 更完整的适配边界与发布前检查清单见 [HARNESS_COMPATIBILITY.md](HARNESS_COMPATIBILITY.md)。
+
+---
+
+## 🗺️ Roadmap（规划中） (Roadmap)
+
+个人项目按使用中的真实痛点逐步推进，以下能力已在规划或等待 Harness 上游契约：
+
+- **`/plugins` 插件市场**：规划中仅做市场发现，安装 / 移除委托官方 `dsh plugin` CLI；
+- **`/fork` / `/rewind` / 会话内全文检索**：等待 Harness 提供稳定的 session/checkpoint 合约，不能通过截断 durable log 模拟；
+- **Windows / 真实 provider 场景**：技能发送与长任务生产者的独立 E2E 验证；
+- **社区驱动**：你的 Issue / PR 就是路线图的一部分——欢迎提出你最想要的能力。
+
+> 完整的适配边界与待验证项见 [HARNESS_COMPATIBILITY.md](HARNESS_COMPATIBILITY.md)。
+
+---
+
+## 🤝 反馈与贡献 (Feedback & Contributing)
+
+本项目由作者**一人业余时间维护**，功能边用边完善，难免存在 Bug 或体验不周之处——**你的每一条反馈，都是它变好的方式** 💛
+
+### 🐛 反馈 Bug / 提建议
+
+- 请先搜索 [Issues](https://github.com/ipromise2021/dsh-omc-tui/issues) 是否已有相同反馈；
+- 提 Issue 时尽量附上：**DSH / TUI 版本、Node.js 版本、操作系统与终端、复现步骤、截图或日志**——信息越全，定位越快；
+- 使用 [Bug 反馈模板](.github/ISSUE_TEMPLATE/bug_report.md) 与 [功能建议模板](.github/ISSUE_TEMPLATE/feature_request.md) 可一键生成规范描述。
+
+### 🚀 贡献代码
+
+1. Fork 仓库并创建特性分支；
+2. 改动后运行 `npm run verify` 与 `npm test` 确认无回归；
+3. 提交信息遵循 [Conventional Commits](AGENTS.md)（`feat` / `fix` / `style` / `refactor` / `docs`）；
+4. 提交 PR 时描述改动动机与验证方式，小步提交更易 review。
+
+### 💬 一句鼓励
+
+觉得好用、或在 Issue / PR 里说一声「感谢」，都是作者持续维护的最大动力。
 
 ---
 

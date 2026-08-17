@@ -3801,10 +3801,13 @@ class TuiApp {
         const rawLines = this.streaming.reasoning.split('\n').filter((l) => l.trim().length > 0)
         const charCount = this.streaming.reasoning.length
         lines.push(`  ${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ${charCount} chars)${ANSI.reset}`)
-        const lastLine = rawLines.length > 0 ? rawLines[rawLines.length - 1] : ''
-        if (lastLine) {
-          const preview = shorten(lastLine.trim(), Math.max(20, columns - 12))
-          lines.push(`    ${ANSI.dim}│ ${preview}${ANSI.blue}▋${ANSI.reset}`)
+        const capacity = Math.max(2, Math.min(3, Math.floor((rows - 16) / 4)))
+        const recent = rawLines.slice(-capacity)
+        for (let i = 0; i < recent.length; i++) {
+          const isLast = i === recent.length - 1
+          const preview = shorten(recent[i].trim(), Math.max(20, columns - 12))
+          const cursor = isLast ? `${ANSI.blue}▋${ANSI.reset}` : ''
+          lines.push(`    ${ANSI.dim}│ ${preview}${cursor}${ANSI.reset}`)
         }
       } else if (this.streaming.tool) {
         const toolName = this.streaming.tool.name || 'tool'
