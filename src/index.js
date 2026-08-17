@@ -371,7 +371,7 @@ class TuiApp {
       if (isResumed) {
         const pastRows = this.formatEvents(this.agent.session.events, columns)
         if (pastRows.length > 0) {
-          process.stdout.write(pastRows.join('\n') + '\n')
+          this.commitToScrollback(pastRows)
         }
         this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
       } else {
