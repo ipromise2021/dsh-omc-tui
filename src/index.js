@@ -288,19 +288,39 @@ class TuiApp {
           await this.ctx.agentPresets.mount(agentCtx, resumeRecord?.header.agentPreset ?? requestedPreset)
         }
       }
-      const { agent, dispose } = resumeRecord
-        ? await this.ctx.agents.resume({ resumeSessionId: resumeRecord.header.id, agentOptions: createOptions.agentOptions, setup: createOptions.setup })
-        : await this.ctx.agents.create(createOptions)
+      let agent, dispose, isResumed = false
+      if (resumeRecord) {
+        try {
+          const res = await this.ctx.agents.resume({
+            resumeSessionId: resumeRecord.header.id,
+            agentOptions: createOptions.agentOptions,
+            setup: createOptions.setup
+          })
+          agent = res.agent
+          dispose = res.dispose
+          isResumed = true
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err)
+          this.log('error', `failed to resume session ${resumeRecord.header.id.slice(0, 8)} (${reason}), fallback to fresh session`, 'init')
+          const res = await this.ctx.agents.create(createOptions)
+          agent = res.agent
+          dispose = res.dispose
+        }
+      } else {
+        const res = await this.ctx.agents.create(createOptions)
+        agent = res.agent
+        dispose = res.dispose
+      }
 
       this.handle = { agent, dispose }
       this.agent = agent
-      this.presetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? resumeRecord?.header.agentPreset ?? requestedPreset
+      this.presetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? (isResumed ? resumeRecord?.header.agentPreset : requestedPreset)
       this.reasoningEffort = selection.reasoningEffort
       this.attachRequestOverride(agent)
       this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
       this.usage = foldUsage(agent.session.events)
-      this.viewClearedSeq = resumeRecord ? 0 : agent.session.seq
-      if (resumeRecord) {
+      this.viewClearedSeq = isResumed ? 0 : agent.session.seq
+      if (isResumed) {
         this.reasoningBlocks = []
         this.streaming = { text: '', reasoning: '', tool: undefined }
         this.reasoningAt = undefined
@@ -335,7 +355,7 @@ class TuiApp {
         }))
       }
 
-      if (resumeRecord) {
+      if (isResumed) {
         const pastRows = this.formatEvents(this.agent.session.events, columns)
         if (pastRows.length > 0) await this.commitToScrollbackChunked(pastRows)
         this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
