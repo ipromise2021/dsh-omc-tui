@@ -1,7 +1,7 @@
 import { safe, shorten, truncateWidth, formatTokens } from '../renderer/ansi.js'
 import { welcomeCardRows } from '../renderer/welcome.js'
 import { userMessage } from '../core/events.js'
-import { handleAsk } from './ask.js'
+import { handleBtw } from './btw.js'
 import { handleCompact } from './compact.js'
 import { handleRecap } from './recap.js'
 import { handleStatus } from './status.js'
@@ -69,9 +69,8 @@ export function handleLocalCommand(app, commandName, line = '') {
       void handleCompact(app, line)
       break
     }
-    case 'ask':
     case 'btw': {
-      void handleAsk(app, line)
+      void handleBtw(app, line)
       break
     }
     case 'help':
