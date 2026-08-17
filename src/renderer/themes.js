@@ -21,7 +21,9 @@ export const THEMES = {
     bash: '\x1b[1;38;5;214m',     // Warm golden amber #ffaf00 (bold)
     bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds #626262
     barFill: '\x1b[38;5;108m',    // Deeper sage green meter fill
-    userBg: '\x1b[48;5;237m'
+    userBg: '\x1b[48;5;237m',
+    diffRemoveBg: '\x1b[48;5;52m',
+    diffAddBg: '\x1b[48;5;236m'
   },
   deepseek: {
     terracotta: '\x1b[38;5;209m',
@@ -42,7 +44,9 @@ export const THEMES = {
     bash: '\x1b[1;38;5;220m',     // Lighter golden amber (bold)
     bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds
     barFill: '\x1b[38;5;80m',     // Lighter blue fill
-    userBg: '\x1b[48;5;236m'      // Slightly lighter bg
+    userBg: '\x1b[48;5;236m',     // Slightly lighter bg
+    diffRemoveBg: '\x1b[48;5;52m',
+    diffAddBg: '\x1b[48;5;236m'
   },
   mono: {
     terracotta: '\x1b[1;37m',
@@ -62,7 +66,9 @@ export const THEMES = {
     bash: '\x1b[1;38;5;214m',     // Warm golden amber (bold)
     bar: '\x1b[38;5;238m',
     barFill: '\x1b[38;5;249m',
-    userBg: '\x1b[48;5;238m'
+    userBg: '\x1b[48;5;238m',
+    diffRemoveBg: '\x1b[48;5;238m',
+    diffAddBg: '\x1b[48;5;236m'
   },
   light: {
     terracotta: '\x1b[38;5;166m',
@@ -82,7 +88,9 @@ export const THEMES = {
     bash: '\x1b[1;38;5;172m',     // Warm rich amber for light bg
     bar: '\x1b[38;5;250m',
     barFill: '\x1b[38;5;28m',
-    userBg: '\x1b[48;5;252m'
+    userBg: '\x1b[48;5;252m',
+    diffRemoveBg: '\x1b[48;5;224m',
+    diffAddBg: '\x1b[48;5;253m'
   }
 }
 
