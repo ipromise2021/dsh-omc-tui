@@ -20,7 +20,7 @@
 
 <div align="center">
 
-![DSH OMC 终端运行主界面](assets/welcome-screen.png)
+![DSH OMC 终端运行主界面](assets/welcome.png)
 *DSH OMC 终端启动截图：欢迎卡片、4 行 Statusline 状态指示器与护眼调色板*
 
 </div>

@@ -9,7 +9,7 @@
 <div align="center">
 
 ### 1. 启动与状态栏 (Welcome & 4-Row Statusline)
-![DSH OMC 真实终端启动与运行界面](assets/welcome-screen.png)
+![DSH OMC 真实终端启动与运行界面](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/welcome.png)
 *图 1：实际运行终端截图 · 欢迎卡片、4 行 Statusline 指示器与护眼调色板*
 
 ---
@@ -33,7 +33,7 @@
 ---
 
 ### 5. `/status` 全局看板 (System Diagnostic Dashboard)
-![/status 诊断看板](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/status-pane-output.png)
+![/status 诊断看板](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/status.png)
 *图 5：`/status` 全局体检看板 · 模型配置、Token 消耗分布、扩展组件与会话健康度综合分析*
 
 </div>

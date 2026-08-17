@@ -2715,8 +2715,8 @@ class TuiApp {
         this.pendingApproval.settle(this.approvalChoice === 'allow' ? 'allowed-once' : 'rejected')
         return
       }
-      if (value === '\x1b[C') { this.approvalChoice = 'deny'; this.scheduleRender(); return }
-      if (value === '\x1b[D') { this.approvalChoice = 'allow'; this.scheduleRender(); return }
+      if (value === '\x1b[C' || value === '\t') { this.approvalChoice = 'deny'; this.scheduleRender(); return }
+      if (value === '\x1b[D' || value === '\x1b[Z') { this.approvalChoice = 'allow'; this.scheduleRender(); return }
       if (value === '\x1b' ) { this.pendingApproval.settle('rejected'); return }
       const answer = value.trim().toLowerCase()
       if (answer === 'y') this.pendingApproval.settle('allowed-once')
@@ -3620,10 +3620,13 @@ class TuiApp {
       }
     }
 
-    lines.push(`${this.ruleStyle()}${'─'.repeat(columns)}${ANSI.reset}`)
-    this.inputTopInFooter = lines.length
-    lines.push(...inputLines)
-    lines.push(...inlineRows)
+    if (inlineRows.length > 0) {
+      lines.push(...inlineRows)
+    } else {
+      lines.push(`${this.ruleStyle()}${'─'.repeat(columns)}${ANSI.reset}`)
+      this.inputTopInFooter = lines.length
+      lines.push(...inputLines)
+    }
     lines.push(`${this.ruleStyle()}${'─'.repeat(columns)}${ANSI.reset}`)
     lines.push(...statusRows)
 

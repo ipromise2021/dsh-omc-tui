@@ -47,22 +47,27 @@ export function approvalDiffLines(request, argsOrColumns, columnsOrAnsi, ANSI = 
   const command = args.command
   const lines = []
   if (command) {
-    lines.push(`${ansiTheme.coral}│${ansiTheme.reset} ${ansiTheme.ink}$${ansiTheme.reset} ${safe(truncateWidth(command, Math.max(20, columns - 8)))}`)
+    lines.push(`${ansiTheme.bold}${ansiTheme.ink}Command:${ansiTheme.reset} ${ansiTheme.amber || ansiTheme.accent}$ ${safe(truncateWidth(command, Math.max(20, columns - 12)))}${ansiTheme.reset}`)
     return lines
   }
   const file = args.file_path ?? args.path
-  if (file) lines.push(`${ansiTheme.coral}│${ansiTheme.reset} ${ansiTheme.dim}file${ansiTheme.reset} ${safe(truncateWidth(file, Math.max(20, columns - 12)))}`)
+  if (file) {
+    lines.push(`${ansiTheme.bold}${ansiTheme.ink}Target:${ansiTheme.reset} 📄 ${ansiTheme.accent || ansiTheme.blue}${safe(truncateWidth(file, Math.max(20, columns - 12)))}${ansiTheme.reset}`)
+  }
   const oldLines = String(args.old_str ?? '').split('\n').slice(0, 6)
   const newLines = String(args.new_str ?? '').split('\n').slice(0, 6)
-  const count = Math.max(oldLines.length, newLines.length)
-  for (let i = 0; i < count; i++) {
-    const oldLine = oldLines[i]
-    const newLine = newLines[i]
-    if (oldLine !== undefined && oldLine === newLine) {
-      lines.push(`${ansiTheme.coral}│${ansiTheme.reset}  ${ansiTheme.muted}${truncateWidth(safe(oldLine), Math.max(20, columns - 8))}${ansiTheme.reset}`)
-    } else {
-      if (oldLine !== undefined) lines.push(`${ansiTheme.coral}│${ansiTheme.reset}${ansiTheme.coral}- ${truncateWidth(safe(oldLine), Math.max(20, columns - 8))}${ansiTheme.reset}`)
-      if (newLine !== undefined) lines.push(`${ansiTheme.coral}│${ansiTheme.reset}${ansiTheme.blue}+ ${truncateWidth(safe(newLine), Math.max(20, columns - 8))}${ansiTheme.reset}`)
+  const hasDiff = (args.old_str !== undefined && args.old_str !== '') || (args.new_str !== undefined && args.new_str !== '')
+  if (hasDiff) {
+    const count = Math.max(oldLines.length, newLines.length)
+    for (let i = 0; i < count; i++) {
+      const oldLine = oldLines[i]
+      const newLine = newLines[i]
+      if (oldLine !== undefined && oldLine === newLine) {
+        lines.push(`  ${ansiTheme.muted}${truncateWidth(safe(oldLine), Math.max(20, columns - 6))}${ansiTheme.reset}`)
+      } else {
+        if (oldLine !== undefined) lines.push(`${ansiTheme.coral}- ${truncateWidth(safe(oldLine), Math.max(20, columns - 6))}${ansiTheme.reset}`)
+        if (newLine !== undefined) lines.push(`${ansiTheme.blue || ansiTheme.ok}+ ${truncateWidth(safe(newLine), Math.max(20, columns - 6))}${ansiTheme.reset}`)
+      }
     }
   }
   return lines
