@@ -20,7 +20,7 @@
   "files": [
     "src",
     ".agents",
-    "assets/welcome-screen.png",
+    "assets/welcome.png",
     "cordis.patch.yml",
     "README.md",
     "PRODUCT_SHOWCASE.md",
