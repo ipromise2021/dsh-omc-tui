@@ -14,7 +14,7 @@ export function welcomeCardRows(columns, workspace, model, effort, ANSI = defaul
   }
   return [
     `${ANSI.rule}╭${'─'.repeat(outerWidth - 2)}╮${ANSI.reset}`,
-    row(`${ANSI.blue}✻${ANSI.reset} ${ANSI.bold}DSH TUI${ANSI.reset} ${ANSI.muted}DeepSeek Harness · keyboard-first terminal${ANSI.reset}`),
+    row(`${ANSI.blue}✻${ANSI.reset} ${ANSI.bold}DSH OMC${ANSI.reset} ${ANSI.muted}Oh-My-Claude · keyboard-first terminal${ANSI.reset}`),
     row(),
     row(`${ANSI.muted}model     ${ANSI.reset}${ANSI.blueSoft}${modelValue}${ANSI.reset} ${ANSI.blue}${effort}${ANSI.reset}`),
     row(`${ANSI.muted}directory ${ANSI.reset}${ANSI.ink}${workspaceValue}${ANSI.reset}`),

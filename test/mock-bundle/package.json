@@ -2,7 +2,7 @@
   "name": "@dsh-demo/mock-provider",
   "version": "0.1.0",
   "private": true,
-  "description": "Local mock LLM adapter and approval-gated tool for testing the dsh-tui profile without credentials",
+  "description": "Local mock LLM adapter and approval-gated tool for testing the dsh-omc-tui profile without credentials",
   "type": "module",
   "main": "src/index.js",
   "exports": {

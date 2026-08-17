@@ -1,26 +1,11 @@
-# DSH TUI
+# DSH OMC (Oh-My-Claude TUI)
 
-一个基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) profile/bundle 的原生 ANSI 终端 coding-agent 界面。不 Fork OpenCode、不依赖 Web UI：直接创建 Harness Agent、订阅 durable Session 事件，接管审批与权限预设。
-
-视觉依据：[dsh-tui-coding-style.html](../dsh-tui-coding-style.html)（DeepSeek 浅蓝主题、四行 statusline、输入区两条细线、用户消息左侧竖线）。
-
-## Harness 兼容性约束
-
-本项目是 Harness 的 UI bundle，不是独立 Agent。所有会影响或呈现 Agent 状态的能力必须优先对接官方服务与 durable session event：会话与流式事件、模型、权限、命令、技能、附件、问卷、jobs，以及后续的 settings；不得在 TUI 内复制一套会话、权限或任务的真相源。
-
-- TUI 只负责 ANSI 渲染、键盘/鼠标输入、局部视图状态和可逆的交互编排。
-- Agent 行为必须经 Harness 的 `ctx.*` 服务、已注册 command 或 session event 实现；服务不存在时应明确降级或提示，不能假装成功。
-- 上游目前仍处于 developer preview，发布或升级前须在目标 `@deepseek-ai/dsh` 版本上重新执行 profile 安装、`--dump-config` 与 PTY 回归。
-- `link:` 安装时依赖从源码目录解析，因此本包不静态 import `@deepseek-ai/*`；以 Cordis 注入和官方事件契约保持 bundle 可安装性。
-
-当前本地包已可作为 `dsh.bundle` 安装验证，但尚非可公开发布包：`private: true`、无 LICENSE、无公开 GitHub 仓库与版本兼容声明。发布前要求见 [ROADMAP.md](ROADMAP.md)。
-
-完整的功能—服务—事件映射见 [HARNESS_COMPATIBILITY.md](HARNESS_COMPATIBILITY.md)。
+`dsh-omc-tui` 是一个为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 打造的、致敬并对标 Claude Code 终端体验的原生 ANSI coding-agent 交互界面。不 Fork OpenCode、不依赖 Web UI：直接创建 Harness Agent、订阅 durable Session 事件，接管审批、权限预设、多任务与多面板交互。
 
 ## 安装
 
 ```sh
-npx --yes @deepseek-ai/dsh@latest plugin --profile tui add /absolute/path/to/dsh-tui
+npx --yes @deepseek-ai/dsh@latest plugin --profile tui add /absolute/path/to/dsh-omc-tui
 npx --yes @deepseek-ai/dsh@latest --profile tui
 ```
 
@@ -45,7 +30,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 - 问卷交互：模型调用 `ask_user_question` 时在输入区上方打开原生问卷面板；支持数字键单选、空格/数字多选、上下键移动、Tab/Enter 提交、Esc 取消，并识别 `plan-review` 意图。
 - Hook 事件：`⚡ hook · <point> · <dialect>` 调用与结果（`↳ allow · 12ms`）在对话流中展示。
 - `Shift+Tab` 通过 `permissionPresets.set` 持久化切换权限预设（显示值来自 durable `permission/preset` 事件，无 `custom` 闪烁）；命令菜单打开时 `Tab` 只将选中项补全到输入框，`Enter` 才执行命令。
-- 输入编辑：光标移动（←→/Home/End/`Ctrl+A` 行首/`Ctrl+E` 行尾/`Alt+←→` 按词）、退格/Delete、`Ctrl+J` 换行、`↑↓` 历史（仅光标在行首/行尾时切换；中段按 ↑↓ 移动光标行）、粘贴（bracketed paste，超长内容输入框内部滚动跟随光标）、`Ctrl+U` 清空、`Ctrl+F` 历史搜索面板、`Ctrl+G` 用 `$EDITOR` 编辑、`Ctrl+P` 命令面板；输入历史持久化到 `$DSH_HOME/dsh-tui/history.jsonl`。
+- 输入编辑：光标移动（←→/Home/End/`Ctrl+A` 行首/`Ctrl+E` 行尾/`Alt+←→` 按词）、退格/Delete、`Ctrl+J` 换行、`↑↓` 历史（仅光标在行首/行尾时切换；中段按 ↑↓ 移动光标行）、粘贴（bracketed paste，超长内容输入框内部滚动跟随光标）、`Ctrl+U` 清空、`Ctrl+F` 历史搜索面板、`Ctrl+G` 用 `$EDITOR` 编辑、`Ctrl+P` 命令面板；输入历史持久化到 `$DSH_HOME/dsh-omc-tui/history.jsonl`。
 - `!` bash 模式（参考 Claude Code）：输入 `!` 时输入框与上下两条规则线变为绿色，`Enter` 在本地 shell 直接执行命令，输出与退出码以操作日志形式回显（多行输出逐行渲染，60s 超时，最多回显 12 行）。
 - CLI 使用普通终端缓冲区，不进入备用屏幕。文本拖拽、复制和滚轮由终端模拟器原生处理；启动时会显式关闭常见鼠标报告模式，避免 VS Code 等终端把滚轮伪装为 `↑/↓` 而切换输入历史；非多行输入时 `↑/↓` 切换历史提示词，多行输入时 `↑/↓` 移动光标；`Ctrl+O` 负责展开/收起区域。
 - 所有面板（命令菜单/模型选择/会话选择/历史搜索/命令面板/effort/问卷/帮助/审批/预设/设置）统一显示在输入框下方，输入框始终可见。
@@ -100,7 +85,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 
 ### VS Code 滚轮诊断
 
-若 VS Code 集成终端的滚轮仍改变输入历史，可仅运行一次：`DSH_TUI_DEBUG_INPUT=1 npx --yes @deepseek-ai/dsh@0.1.0-rc.6 --profile tui`。滚动一次后退出，控制序列会记录到 `$DSH_HOME/dsh-tui/input-debug.log`；该开关只记录完整控制序列，不记录普通输入或粘贴内容。
+若 VS Code 集成终端的滚轮仍改变输入历史，可仅运行一次：`DSH_TUI_DEBUG_INPUT=1 npx --yes @deepseek-ai/dsh@0.1.0-rc.6 --profile tui`。滚动一次后退出，控制序列会记录到 `$DSH_HOME/dsh-omc-tui/input-debug.log`；该开关只记录完整控制序列，不记录普通输入或粘贴内容。
 
 ## MCP 服务器
 
@@ -147,8 +132,8 @@ dsh 提供 Claude Code / Codex 风格的 shell hook 桥接：在 profile 补丁�
 ```sh
 export PATH="$HOME/.npm/_npx/<缓存>/node_modules/.bin:$PATH"   # 或安装 dsh 到 PATH
 export DSH_HOME=/private/tmp/<name>
-dsh plugin --profile tui add /absolute/path/to/dsh-tui
-dsh plugin --profile tui add /absolute/path/to/dsh-tui/test/mock-bundle
+dsh plugin --profile tui add /absolute/path/to/dsh-omc-tui
+dsh plugin --profile tui add /absolute/path/to/dsh-omc-tui/test/mock-bundle
 dsh --profile tui --dump-config   # 确认 mock-provider / tui-runner 已加载
 ```
 

@@ -75,4 +75,4 @@
       name: '@deepseek-ai/dsh-tool-ask-user'
 
     - id: tui-runner
-      name: '@dsh-demo/dsh-tui'
+      name: '@dsh-demo/dsh-omc-tui'
