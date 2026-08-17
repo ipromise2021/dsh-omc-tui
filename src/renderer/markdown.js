@@ -8,10 +8,11 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
     let styled = safe(value)
     styled = styled.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => `${ANSI.blueSoft}${label}${ANSI.reset}${ANSI.dim} (${url})${ANSI.reset}${base}`)
     styled = styled.replace(/`([^`]+)`/g, (_match, code) => `${ANSI.amber}${code}${ANSI.reset}${base}`)
-    styled = styled.replace(/\*\*([^*]+)\*\*/g, (_match, value) => `${ANSI.bold}${value}${ANSI.reset}${base}`)
-    styled = styled.replace(/__([^_]+)__/g, (_match, value) => `${ANSI.bold}${value}${ANSI.reset}${base}`)
-    styled = styled.replace(/\*([^*\n]+)\*/g, (_match, value) => `${ANSI.dim}${value}${ANSI.reset}${base}`)
-    styled = styled.replace(/_([^_\n]+)_/g, (_match, value) => `${ANSI.dim}${value}${ANSI.reset}${base}`)
+    // Use non-greedy match to allow single asterisks/underscores inside bold
+    styled = styled.replace(/\*\*(.+?)\*\*/g, (_match, value) => `${ANSI.bold}${value}${ANSI.reset}${base}`)
+    styled = styled.replace(/__(.+?)__/g, (_match, value) => `${ANSI.bold}${value}${ANSI.reset}${base}`)
+    styled = styled.replace(/\*([^\n]+?)\*/g, (_match, value) => `${ANSI.dim}${value}${ANSI.reset}${base}`)
+    styled = styled.replace(/_([^\n]+?)_/g, (_match, value) => `${ANSI.dim}${value}${ANSI.reset}${base}`)
     return styled
   }
   let fenced = false
@@ -23,21 +24,27 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
     if (opening) {
       if (fenced) {
         fenced = false
+        // Bottom border of code block
+        const ruleLen = Math.min(36, Math.max(16, contentWidth - 8))
+        push(ANSI.dim, `    ╰${'─'.repeat(ruleLen)}${ANSI.reset}`)
         fencedLang = ''
         rows.push(null)
       } else {
         fenced = true
         fencedLang = opening[1] || 'code'
         rows.push(null)
-        push(ANSI.dim, `    · ${fencedLang}${ANSI.reset}`)
+        // Top border of code block with language badge
+        const langBadge = `${ANSI.amber}${ANSI.bold} ${fencedLang} ${ANSI.reset}${ANSI.dim}`
+        const rightRule = '─'.repeat(Math.max(6, Math.min(28, contentWidth - 16 - fencedLang.length)))
+        push(ANSI.dim, `    ╭─${langBadge}${rightRule}${ANSI.reset}`)
       }
       prevWasHeading = false
       continue
     }
     const normalized = !fenced && /^\s*```/.test(source) ? source.replace(/^\s*```\s*/, '') : source
     if (fenced) {
-      for (const line of wrap(source, Math.max(20, contentWidth - 6))) {
-        push(ANSI.detail, `    ${line}${ANSI.reset}`)
+      for (const line of wrap(source, Math.max(20, contentWidth - 8))) {
+        push(ANSI.detail, `    ${ANSI.dim}│${ANSI.reset} ${line}${ANSI.reset}`)
       }
       prevWasHeading = false
       continue
@@ -79,14 +86,15 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
       prefix = '  '
     } else {
       const bullet = content.match(/^([-*+])\s+(.*)$/)
-      const ordered = content.match(/^(\d+)[.)]\s+(.*)$/)
+      // Support optional bold markers around ordered numbers like **1.** or 1.
+      const ordered = content.match(/^(\*{0,2})(\d+)[.)]\1\s+(.*)$/)
       const quote = content.match(/^>\s?(.*)$/)
       if (bullet) {
-        prefix = `  ${ANSI.dim}·${ANSI.reset} `
+        prefix = `  ${ANSI.blueSoft}•${ANSI.reset} `
         content = bullet[2]
       } else if (ordered) {
-        prefix = `  ${ordered[1]}. `
-        content = ordered[2]
+        prefix = `  ${ANSI.blueSoft}${ordered[2]}.${ANSI.reset} `
+        content = ordered[3]
       } else if (quote) {
         prefix = `  ${ANSI.dim}│${ANSI.reset} `
         content = quote[1]
@@ -102,7 +110,12 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
     }
     prevWasHeading = false
   }
-  if (fenced) rows.push(null)
+  if (fenced) {
+    const ruleLen = Math.min(36, Math.max(16, contentWidth - 8))
+    push(ANSI.dim, `    ╰${'─'.repeat(ruleLen)}${ANSI.reset}`)
+    rows.push(null)
+  }
 
   return rows
 }
+
