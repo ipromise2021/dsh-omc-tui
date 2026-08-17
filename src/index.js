@@ -203,9 +203,8 @@ class TuiApp {
       clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         if (!this.terminalOpen) return
-        this.clearFooter(true)
         this.render()
-      }, 40)
+      }, 50)
     }
     this.disposers.push(() => clearTimeout(resizeTimer))
   }
@@ -3513,15 +3512,9 @@ class TuiApp {
     return out
   }
 
-  clearFooter(isResize = false) {
+  clearFooter() {
     if (this.lastFooterHeight > 0) {
-      let up = this.lastCursorRowInFooter ?? 0
-      if (isResize) {
-        const currentCols = Math.max(10, process.stdout.columns || 80)
-        const lastCols = this.lastColumns || currentCols
-        const scale = Math.max(1, lastCols / currentCols)
-        up = Math.max(up, Math.ceil(this.lastFooterHeight * scale) + 2)
-      }
+      const up = this.lastCursorRowInFooter ?? 0
       if (up > 0) {
         process.stdout.write(`\x1b[?25l\r\x1b[${up}A\x1b[J`)
       } else {
@@ -3675,7 +3668,11 @@ class TuiApp {
 
     let erase = ''
     if (this.lastFooterHeight > 0) {
-      const up = this.lastCursorRowInFooter ?? 0
+      let up = this.lastCursorRowInFooter ?? 0
+      if (this.lastColumns && this.lastColumns > columns) {
+        const scale = this.lastColumns / columns
+        up = Math.max(up, Math.ceil(this.lastFooterHeight * scale) + 1)
+      }
       if (up > 0) {
         erase = `\x1b[?25l\r\x1b[${up}A\x1b[J`
       } else {
