@@ -14,13 +14,11 @@
   },
   "files": [
     "src",
-    "assets",
+    "assets/welcome-screen.png",
     "cordis.patch.yml",
     "README.md",
     "PRODUCT_SHOWCASE.md",
     "HARNESS_COMPATIBILITY.md",
-    "ROADMAP.md",
-    "TUI_ENGINEERING.md",
     "LICENSE"
   ],
   "license": "MIT",

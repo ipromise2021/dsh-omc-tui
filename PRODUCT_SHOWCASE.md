@@ -1,4 +1,4 @@
-# DSH OMC (Oh-My-Claude TUI) · 个人设计心得与功能记录
+# DSH OMC (Oh-My-Claude TUI) · 设计亮点与功能详解
 
 > **项目初心**：这是一个个人开发者在学习和探索 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 时开发的轻量终端 TUI 插件。因为平时很喜欢 **Claude Code CLI** 的极简风格与交互手感，所以在终端里尝试做一套符合自己使用习惯的界面，方便顺手调用 DSH 底层封装的 Agent、工具与会话能力。
 
@@ -15,31 +15,28 @@
 ---
 
 ### 2. 流式思维链与行级 Diff 高亮 (Stream, Thinking & Diff View)
-![流式回答与 Diff 高亮](assets/stream-and-diff.png)
+![流式回答与 Diff 高亮](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/stream-and-diff.png)
 *图 2：真实对话流式渲染 · 折叠式 Thinking 思维链（`Ctrl+O` 穿透）、Markdown 语法渲染与行级红绿 Diff 高亮*
 
 ---
 
 ### 3. `@` 工作区路径逐级补全 (Path Autocomplete Picker)
-![@ 文件补全面板](assets/file-picker.png)
+![@ 文件补全面板](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/file-picker.png)
 *图 3：`@` 交互式文件树补全面板 · 实时字符过滤、子目录钻取与文件大小感知*
 
 ---
 
 ### 4. 行内安全审批卡片 (Interactive Security Approval Card)
-![行内安全审批卡片](assets/approval-card.png)
+![行内安全审批卡片](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/approval-card.png)
 *图 4：行内安全审批卡片（Approval Needed）· 行级红绿 Diff 差异预览与单键快速审批*
 
 ---
 
 ### 5. `/status` 全局看板 (System Diagnostic Dashboard)
-![/status 诊断看板](assets/status-dashboard.png)
+![/status 诊断看板](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/status-dashboard.png)
 *图 5：`/status` 全局体检看板 · 模型配置、Token 消耗分布、扩展组件与会话健康度综合分析*
 
-</div>
-
-
----
+</div>---
 
 ## 💡 个人设计思考与 6 个核心交互细节 (Design Reflections)
 
@@ -94,8 +91,8 @@ diff --git a/src/renderer/diff.js b/src/renderer/diff.js
 
 ---
 
-### 4. 极致上下文效率：`@` 路径逐级下钻与双图形协议图片直贴
-- **`@` 路径逐级补全**：输入 `@` 即可唤起当前工作区目录树。支持实时过滤、`Enter` 选定或下钻子目录、`Esc`/`Backspace` 返回上级。提交时自动读取正文格式化为带语言高亮的代码块注入，而对话回显仅保留紧凑的 `@path`，彻底避免大文本刷屏。
+### 4. 上下文效率设计：`@` 路径逐级下钻与双图形协议图片直贴
+- **`@` 路径逐级补全**：输入 `@` 即可唤起当前工作区目录树。支持实时过滤、`Enter` 选定或下钻子目录、`Esc`/`Backspace` 返回上级。提交时自动读取正文格式化为带语言高亮的代码块注入，而对话回显仅保留紧凑的 `@path`，避免大文本刷屏。
 - **图片双协议原生解析**：支持在终端直接按 `Cmd/Ctrl+V` 粘贴图片，底层状态机自动解析 **iTerm2 OSC 1337** 与 **Kitty Graphics** 协议，通过 Harness 官方 attachment 服务落盘校验。对纯文本模型自动降级为文本占位符，防止 API 报错。
 
 ```text
@@ -160,7 +157,7 @@ diff --git a/src/renderer/diff.js b/src/renderer/diff.js
 
 ---
 
-## 🧭 全量功能矩阵与命令对照表 (Command & Feature Matrix)
+## 🧭 常用功能矩阵与快捷键速查 (Feature & Keybinding Matrix)
 
 | 命令 / 快捷键 | 功能类别 | 交互行为与产品价值 |
 | :--- | :--- | :--- |
@@ -209,4 +206,4 @@ graph TD
 
 1. **纯粹的 Cordis 依赖注入**：严禁静态 import `@deepseek-ai/*`，依赖解析与宿主环境完全解耦；
 2. **单一真相源（SSOT）**：会话历史、权限、Token 用量全部以 Harness durable event 为准，UI 本地只保留纯粹的渲染状态；
-3. **分层节流与 Memoization**：Token 流式批处理（56ms）与状态栏 Key 缓存，保证极高吞吐下的无卡顿、无闪烁体验。
+3. **分层节流与 Memoization**：Token 流式批处理（56ms）与状态栏 Key 缓存，保证长时间高密度输出下不卡顿、不闪烁。

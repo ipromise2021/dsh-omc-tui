@@ -1,3 +1,6 @@
 test/__pycache__/
 *.log
 .DS_Store
+
+# 内部规划与工程文档（不对外，不进 npm 包，也不进公开仓库）
+_internal/
