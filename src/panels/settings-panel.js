@@ -21,6 +21,6 @@ export function renderSettingsPicker(settingsPicker, preferences, ANSI = default
       return `${cursor}  ${ANSI.blueSoft}${label}${ANSI.reset} ${ANSI.dim}·${ANSI.reset}  ${ANSI.ink}${valStr}${ANSI.reset}  ${ANSI.dim}${desc}${ANSI.reset}`
     }),
     '',
-    `${ANSI.muted}↑↓ select  ·  ← → or Enter change  ·  Esc close${ANSI.reset}`
+    `${ANSI.muted}↑↓ select  ·  ← → or Enter / Space change  ·  Esc close${ANSI.reset}`
   ]
 }

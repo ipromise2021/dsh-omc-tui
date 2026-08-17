@@ -200,7 +200,7 @@ const sceneStreamAndDiff = [
 // Scene 2: Interactive Approval Card
 const sceneApprovalCard = [
   `${ANSI.coral}DSH${ANSI.reset}  ${ANSI.dim}deepseek-v4-flash · 14:35${ANSI.reset}`,
-  `  ${ANSI.dim}● Thought for 12s (ctrl+o to expand)${ANSI.reset}`,
+  `  ${ANSI.dim}⚛ Thought for 12s (ctrl+o to expand)${ANSI.reset}`,
   `  ${ANSI.blueSoft}● Edit(src/renderer/diff.js)${ANSI.reset}`,
   ``,
   `  ${ANSI.bold}${ANSI.ink}Edit file${ANSI.reset}`,
