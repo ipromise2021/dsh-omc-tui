@@ -101,19 +101,19 @@ export const STATUSLINE_MODES = ['detailed', 'compact', 'minimal']
 
 export function tuiSettingsSchema(value) {
   if (value !== undefined && (typeof value !== 'object' || value === null || Array.isArray(value))) {
-    throw new TypeError('dsh-tui settings must be an object')
+    throw new TypeError('dsh-omc-tui settings must be an object')
   }
   const source = value ?? {}
   const theme = source.theme ?? defaultTheme
   if (!Object.hasOwn(THEMES, theme)) {
-    throw new TypeError(`dsh-tui.settings.theme must be one of: ${Object.keys(THEMES).join(', ')}`)
+    throw new TypeError(`dsh-omc-tui.settings.theme must be one of: ${Object.keys(THEMES).join(', ')}`)
   }
   const statusline = source.statusline ?? 'detailed'
   if (!STATUSLINE_MODES.includes(statusline)) {
-    throw new TypeError(`dsh-tui.settings.statusline must be one of: ${STATUSLINE_MODES.join(', ')}`)
+    throw new TypeError(`dsh-omc-tui.settings.statusline must be one of: ${STATUSLINE_MODES.join(', ')}`)
   }
   if (source.persistHistory !== undefined && typeof source.persistHistory !== 'boolean') {
-    throw new TypeError('dsh-tui.settings.persistHistory must be boolean')
+    throw new TypeError('dsh-omc-tui.settings.persistHistory must be boolean')
   }
   return { theme, statusline, persistHistory: source.persistHistory ?? true }
 }

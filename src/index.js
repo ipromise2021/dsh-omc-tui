@@ -36,7 +36,7 @@ import {
   formatEvents
 } from './renderer/index.js'
 
-export const name = 'dsh-tui-runner'
+export const name = 'dsh-omc-tui'
 export const inject = ['agentDefaultModel', 'agentPresets', 'agents', 'permissionPresets', 'commands', 'sessionQuery', 'settings']
 
 import {
@@ -243,7 +243,7 @@ class TuiApp {
 
   async start() {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      throw new Error('dsh-tui requires an interactive terminal (stdin and stdout must be TTYs)')
+      throw new Error('dsh-omc-tui requires an interactive terminal (stdin and stdout must be TTYs)')
     }
     this.probeRequiredServices()
 
@@ -386,7 +386,7 @@ class TuiApp {
 
   stateDir() {
     const home = process.env.DSH_HOME || join(homedir(), '.dsh')
-    return join(home, 'dsh-tui')
+    return join(home, 'dsh-omc-tui')
   }
 
   async loadHistory() {
@@ -398,7 +398,7 @@ class TuiApp {
   }
 
   installSettings() {
-    const scope = this.ctx.settings.register('dsh-tui', tuiSettingsSchema, { applies: 'live' })
+    const scope = this.ctx.settings.register('dsh-omc-tui', tuiSettingsSchema, { applies: 'live' })
     this.settingsScope = scope
     this.applySettings(scope.get())
     this.disposers.push(scope.watch((next) => this.applySettings(next)))
@@ -1507,7 +1507,7 @@ class TuiApp {
   }
 
   async openExternalEditor() {
-    const tmp = join(tmpdir(), `dsh-tui-input-${randomUUID()}.txt`)
+    const tmp = join(tmpdir(), `dsh-omc-tui-input-${randomUUID()}.txt`)
     try {
       await writeFile(tmp, this.input)
     } catch (error) {
@@ -3477,7 +3477,7 @@ export function apply(ctx) {
   const app = new TuiApp(ctx)
   void app.start().catch(async (error) => {
     await app.stop()
-    process.stderr.write(`dsh-tui: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.stderr.write(`dsh-omc-tui: ${error instanceof Error ? error.message : String(error)}\n`)
     ctx.get('appExit')?.(1)
   })
   return () => app.stop()

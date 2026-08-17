@@ -79,7 +79,7 @@ try:
     send("y")
     assert wait_for("clean turn end", 15), "turn did not finish"
     snapshot("turn-complete")
-    assert "DSH TUI" in buf.decode('utf-8', 'replace'), "welcome summary missing from scrollback"
+    assert "DSH OMC" in buf.decode('utf-8', 'replace'), "welcome summary missing from scrollback"
     assert "finished in" in buf.decode('utf-8', 'replace'), "response timing summary did not render"
 
     # 2. ask_user_question panel: single select, then multi-select

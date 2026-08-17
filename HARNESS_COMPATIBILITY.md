@@ -24,7 +24,7 @@
 | 图片附件 | `ctx.attachments` | `saveImage` 生成官方 attachment ref，再随消息提交 |
 | 问卷 | `ctx.userQuestions` + `dsh-tool-ask-user` | TUI 注册 provider，回答交由官方工具回合继续处理 |
 | 后台任务 | `ctx.jobs` | list/read/kill/onJobsChanged；不自行制造百分比进度 |
-| TUI 设置 | `ctx.settings` / settings-file | `dsh-tui` namespace，主题与输入历史偏好持久化到 `$DSH_HOME/settings.yaml` |
+| TUI 设置 | `ctx.settings` / settings-file | `dsh-omc-tui` namespace，主题与输入历史偏好持久化到 `$DSH_HOME/settings.yaml` |
 
 ## 允许保留在 TUI 本地的内容
 

@@ -1,8 +1,8 @@
 {
-  "name": "@dsh-demo/dsh-tui",
+  "name": "@dsh-demo/dsh-omc-tui",
   "version": "0.1.0",
   "private": true,
-  "description": "Keyboard-first ANSI TUI profile for DeepSeek Harness",
+  "description": "Oh-My-Claude (OMC): Keyboard-first interactive ANSI terminal profile for DeepSeek Harness",
   "type": "module",
   "main": "src/index.js",
   "exports": {
