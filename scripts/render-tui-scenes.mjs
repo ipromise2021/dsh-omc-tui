@@ -200,24 +200,22 @@ const sceneStreamAndDiff = [
 // Scene 2: Interactive Approval Card
 const sceneApprovalCard = [
   `${ANSI.coral}DSH${ANSI.reset}  ${ANSI.dim}deepseek-v4-flash · 14:35${ANSI.reset}`,
-  `  ${ANSI.dim}• Executing edit on \`src/renderer/diff.js\`...${ANSI.reset}`,
+  `  ${ANSI.dim}● Thought for 12s (ctrl+o to expand)${ANSI.reset}`,
+  `  ${ANSI.blueSoft}● Edit(src/renderer/diff.js)${ANSI.reset}`,
   ``,
-  `${ANSI.accent}╭─ 🛡️  Approval Required · edit ────────────────────────────────────────────────────────╮${ANSI.reset}`,
-  `${ANSI.accent}│${ANSI.reset}  ${ANSI.bold}${ANSI.ink}Action:${ANSI.reset} ${ANSI.dim}escalate sandbox to workspace-write for source code modifications${ANSI.reset}`,
-  `${ANSI.accent}│${ANSI.reset}  ${ANSI.bold}${ANSI.ink}Target:${ANSI.reset} 📄 ${ANSI.blue}src/renderer/diff.js${ANSI.reset}`,
-  `${ANSI.accent}│${ANSI.reset}  ${ANSI.coral}- export function approvalDiffLines(request, args, columns, ANSI = defaultAnsi) {${ANSI.reset}`,
-  `${ANSI.accent}│${ANSI.reset}  ${ANSI.blue}+ export function approvalDiffLines(request, argsOrColumns, columnsOrAnsi, ANSI = defaultAnsi) {${ANSI.reset}`,
-  `${ANSI.accent}│${ANSI.reset}  ${ANSI.blue}+   let args = typeof argsOrColumns === 'object' && argsOrColumns !== null ? argsOrColumns : undefined${ANSI.reset}`,
-  `${ANSI.accent}│${ANSI.reset}  ${ANSI.blue}+   let columns = typeof argsOrColumns === 'number' ? argsOrColumns : (typeof columnsOrAnsi === 'number' ? columnsOrAnsi : 80)${ANSI.reset}`,
-  `${ANSI.accent}│${ANSI.reset}`,
-  `${ANSI.accent}│${ANSI.reset}  ${ANSI.accent}\x1b[7m  ❯ Y · Allow once  \x1b[27m${ANSI.reset}     ${ANSI.dim}N · Deny${ANSI.reset}     ${ANSI.dim}Esc · Deny${ANSI.reset}`,
-  `${ANSI.accent}│${ANSI.reset}  ${ANSI.dim}←→ / Tab choose  ·  Enter confirm  ·  y / n quick key${ANSI.reset}`,
-  `${ANSI.accent}╰────────────────────────────────────────────────────────────────────────────────────────╯${ANSI.reset}`,
+  `  ${ANSI.bold}${ANSI.ink}Edit file${ANSI.reset}`,
+  `  ${ANSI.dim}src/renderer/diff.js${ANSI.reset}`,
   `${ANSI.rule}──────────────────────────────────────────────────────────────────────────────────────────${ANSI.reset}`,
-  `${ANSI.dim}BUILD | [deepseek-v4-flash] | dsh-omc-tui | new session                       preset standard · effort DEFAULT${ANSI.reset}`,
-  `${ANSI.dim}Context ░░░░░░░░░░░░░░ awaiting response · 0% | in 0 · out 0 · cache 0%${ANSI.reset}`,
-  `${ANSI.dim}prompt system · 11 skills · 5 MCPs · 0 hooks · tools — · jobs 0${ANSI.reset}`,
-  `${ANSI.coral}▶▶${ANSI.reset} ${ANSI.dim}permission ${ANSI.coral}read-only${ANSI.reset} ${ANSI.dim}· Shift+Tab${ANSI.reset}`
+  `  ${ANSI.dim} 31${ANSI.reset} ${ANSI.coral}- export function approvalDiffLines(request, args, columns, ANSI = defaultAnsi) {${ANSI.reset}`,
+  `  ${ANSI.dim} 32${ANSI.reset} ${ANSI.blue}+ export function approvalDiffLines(request, argsOrColumns, columnsOrAnsi, ANSI = defaultAnsi) {${ANSI.reset}`,
+  `  ${ANSI.dim} 33${ANSI.reset} ${ANSI.blue}+   let args = typeof argsOrColumns === 'object' && argsOrColumns !== null ? argsOrColumns : undefined${ANSI.reset}`,
+  `  ${ANSI.dim} 34${ANSI.reset} ${ANSI.blue}+   let columns = typeof argsOrColumns === 'number' ? argsOrColumns : 80${ANSI.reset}`,
+  `${ANSI.rule}──────────────────────────────────────────────────────────────────────────────────────────${ANSI.reset}`,
+  `  ${ANSI.ink}${ANSI.bold}Do you want to make this edit to src/renderer/diff.js?${ANSI.reset}`,
+  `  ${ANSI.blue}❯ 1. Yes (Y)${ANSI.reset}`,
+  `    ${ANSI.dim}2. No (N)${ANSI.reset}`,
+  ``,
+  `  ${ANSI.muted}Esc to cancel · Tab / ↑↓ to navigate · Enter to confirm · y / n quick keys${ANSI.reset}`
 ];
 
 // Scene 3: @ File Tree Autocomplete Picker

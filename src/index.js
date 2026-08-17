@@ -619,7 +619,7 @@ class TuiApp {
     if (!this.streaming.reasoning) return
     const rlines = this.streaming.reasoning.split('\n').length
     const ms = this.reasoningAt ? Date.now() - this.reasoningAt : undefined
-    const msStr = ms !== undefined ? ` · ${(ms / 1000).toFixed(1)}s` : ''
+    const msStr = ms !== undefined ? `${Math.max(1, Math.round(ms / 1000))}s` : `${rlines} lines`
 
     if (!this.turnHeaderCommitted) {
       this.turnHeaderCommitted = true
@@ -629,11 +629,11 @@ class TuiApp {
       const headerLines = [
         `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`,
         '',
-        `  ${ANSI.dim}⚛ thinking · ${rlines} lines${msStr}${ANSI.reset}`
+        `  ${ANSI.dim}● Thought for ${msStr} (ctrl+o to expand)${ANSI.reset}`
       ]
       this.commitToScrollback(headerLines)
     } else {
-      this.commitToScrollback([`  ${ANSI.dim}⚛ thinking · ${rlines} lines${msStr}${ANSI.reset}`])
+      this.commitToScrollback([`  ${ANSI.dim}● Thought for ${msStr} (ctrl+o to expand)${ANSI.reset}`])
     }
 
     const blockKey = `reason-${seq || Date.now()}`

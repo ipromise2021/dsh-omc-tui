@@ -1,60 +1,78 @@
-import { safe, shorten, truncateWidth, widthOf } from '../renderer/ansi.js'
+import { safe, shorten, truncateWidth } from '../renderer/ansi.js'
 import { ANSI as defaultAnsi } from '../renderer/themes.js'
 
 export function renderInlineApproval(pendingApproval, approvalChoice, approvalDiffLines, columns, ANSI = defaultAnsi) {
   if (!pendingApproval) return []
   const request = pendingApproval.request || {}
   const choice = approvalChoice === 'deny' ? 'deny' : 'allow'
+  const isAllow = choice === 'allow'
+  const border = ANSI.rule || ANSI.dim || '\x1b[38;5;238m'
+  const rule = `${border}${'─'.repeat(columns)}${ANSI.reset}`
 
-  const boxWidth = Math.max(40, Math.min(columns, 96))
-  const innerWidth = boxWidth - 4
-  const border = ANSI.amber || ANSI.coral || '\x1b[38;5;214m'
-  const reset = ANSI.reset
+  const raw = request.args ?? request.input ?? request.arguments
+  let args = {}
+  if (raw) {
+    if (typeof raw === 'string') {
+      try { args = JSON.parse(raw) } catch { args = {} }
+    } else if (typeof raw === 'object') {
+      args = raw
+    }
+  }
+
+  const toolName = request.toolName || 'tool'
+  const file = args.file_path ?? args.path ?? ''
+  const command = args.command ?? args.cmd ?? args.script ?? ''
+  const isEdit = /edit|write|replace|file/i.test(toolName) || Boolean(file)
 
   const lines = []
 
-  // 1. Header with shield icon
-  const toolName = request.toolName || 'action'
-  const headerTitle = ` 🛡️  Approval Required · ${toolName} `
-  const topPad = Math.max(0, boxWidth - 2 - widthOf(headerTitle) - 2)
-  lines.push(`${border}╭─${headerTitle}${'─'.repeat(topPad)}╮${reset}`)
-
-  // 2. Reason / Description
-  if (request.reason) {
-    const reasonText = request.reason.trim()
-    lines.push(`${border}│${reset}  ${ANSI.bold}${ANSI.ink}Action:${reset} ${ANSI.dim}${shorten(reasonText, innerWidth - 9)}${reset}`)
+  // 1. Header (Edit file / Run command)
+  if (isEdit) {
+    lines.push(`  ${ANSI.bold}${ANSI.ink}Edit file${ANSI.reset}`)
+    if (file) lines.push(`  ${ANSI.dim}${safe(file)}${ANSI.reset}`)
+  } else if (command) {
+    lines.push(`  ${ANSI.bold}${ANSI.ink}Run command${ANSI.reset}`)
+  } else {
+    lines.push(`  ${ANSI.bold}${ANSI.ink}Action requested · ${safe(toolName)}${ANSI.reset}`)
   }
 
-  // 3. Diff payload / Target info
+  // 2. Upper divider rule
+  lines.push(rule)
+
+  // 3. Diff payload or Command payload
   const diffItems = typeof approvalDiffLines === 'function'
-    ? approvalDiffLines(request, innerWidth)
+    ? approvalDiffLines(request, columns - 4)
     : (Array.isArray(approvalDiffLines) ? approvalDiffLines : [])
 
   if (diffItems.length > 0) {
     for (const item of diffItems) {
-      lines.push(`${border}│${reset}  ${item}`)
+      lines.push(`  ${item}`)
     }
+  } else if (request.reason) {
+    lines.push(`  ${ANSI.dim}${safe(request.reason)}${ANSI.reset}`)
   }
 
-  // Blank spacer
-  lines.push(`${border}│${reset}`)
+  // 4. Lower divider rule
+  lines.push(rule)
 
-  // 4. Interactive Action Chips
-  const allowBtn = choice === 'allow'
-    ? `${ANSI.amber}\x1b[7m  ❯ Y · Allow once  \x1b[27m${reset}`
-    : `${ANSI.dim}    Y · Allow once  ${reset}`
+  // 5. Question prompt (e.g. "Do you want to make this edit to README.md?")
+  const promptText = isEdit && file
+    ? `Do you want to make this edit to ${safe(file)}?`
+    : (command ? `Do you want to run this command?` : (request.reason ? safe(request.reason) : `Allow ${safe(toolName)}?`))
+  lines.push(`  ${ANSI.ink}${ANSI.bold}${promptText}${ANSI.reset}`)
 
-  const denyBtn = choice === 'deny'
-    ? `${ANSI.coral}\x1b[7m  ❯ N · Deny  \x1b[27m${reset}`
-    : `${ANSI.dim}    N · Deny  ${reset}`
+  // 6. Numbered option list (like Claude Code and question panel)
+  if (isAllow) {
+    lines.push(`  ${ANSI.blue}❯ 1. Yes (Y)${ANSI.reset}`)
+    lines.push(`    ${ANSI.dim}2. No (N)${ANSI.reset}`)
+  } else {
+    lines.push(`    ${ANSI.dim}1. Yes (Y)${ANSI.reset}`)
+    lines.push(`  ${ANSI.coral}❯ 2. No (N)${ANSI.reset}`)
+  }
 
-  const escHint = `${ANSI.muted}Esc · Deny${reset}`
-
-  lines.push(`${border}│${reset}  ${allowBtn}   ${denyBtn}   ${escHint}`)
-  lines.push(`${border}│${reset}  ${ANSI.muted}←→ / Tab choose  ·  Enter confirm  ·  y / n quick key${reset}`)
-
-  // 5. Closed bottom border
-  lines.push(`${border}╰${'─'.repeat(boxWidth - 2)}╯${reset}`)
+  // 7. Footer hint
+  lines.push('')
+  lines.push(`  ${ANSI.muted}Esc to cancel · Tab / ↑↓ to navigate · Enter to confirm · y / n quick keys${ANSI.reset}`)
 
   return lines
 }
