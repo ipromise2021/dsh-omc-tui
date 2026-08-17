@@ -3363,10 +3363,14 @@ class TuiApp {
       return [`${prompt}${ANSI.muted}type a message, or / for commands${ANSI.reset}`]
     }
 
+    // In bash mode, the prompt prefix already shows "!", so strip the leading "!" from display
+    const displayInput = bashMode && this.input.startsWith('!') ? this.input.slice(1) : this.input
+    const displayCursor = bashMode && this.cursor > 0 ? Math.max(0, this.cursor - 1) : this.cursor
+
     const firstLineWidth = Math.max(12, draftWidth - imageTagWidth)
-    const beforeLines = this.input.slice(0, this.cursor).split('\n')
+    const beforeLines = displayInput.slice(0, displayCursor).split('\n')
     const caretLine = beforeLines.pop() ?? ''
-    const rendered = this.input.split('\n').map((line, idx) => wrap(line, idx === 0 ? firstLineWidth : draftWidth))
+    const rendered = displayInput.split('\n').map((line, idx) => wrap(line, idx === 0 ? firstLineWidth : draftWidth))
     const block = []
     const offsets = []
     let blockOffset = 0
@@ -3383,7 +3387,7 @@ class TuiApp {
     const caretWrapped = wrap(caretLine, beforeLines.length === 0 ? firstLineWidth : draftWidth)
     caretRow += caretWrapped.length - 1
 
-    const slashName = this.input.match(/^\/([^\s]*)/)?.[1]
+    const slashName = displayInput.match(/^\/([^\s]*)/)?.[1]
     const slashItem = slashName ? this.commandItems().find((item) => item.name === slashName) : undefined
     const slashPrefix = slashName !== undefined ? `/${slashName}` : undefined
     const slashColor = bashMode ? ANSI.bash : slashItem?.kind === 'skill' ? `${ANSI.blue}${ANSI.bold}` : `${ANSI.blueSoft}${ANSI.bold}`
