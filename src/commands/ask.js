@@ -4,17 +4,19 @@ import { userMessage } from '../core/events.js'
 import { ANSI } from '../renderer/themes.js'
 
 export async function handleAsk(app, line) {
-  const query = line.replace(/^\/ask\s*/i, '').trim()
+  const isBtw = /^\/btw\b/i.test(line)
+  const tag = isBtw ? 'btw' : 'ask'
+  const query = line.replace(/^\/(?:ask|btw)\s*/i, '').trim()
   if (!query) {
-    app.log('error', 'usage: /ask <question...>', '/ask')
+    app.log('error', `usage: /${tag} <question...>`, `/${tag}`)
     return
   }
-  app.message = 'asking side query…'
-  app.log('ok', `${ANSI.bold}${query}${ANSI.reset}`, 'YOU (ask)')
+  app.message = `asking side query (${tag})…`
+  app.log('ok', `${ANSI.bold}${query}${ANSI.reset}`, `YOU (${tag})`)
   app.scheduleRender()
   try {
     const selection = app.ctx.agentDefaultModel.currentSelection()
-    const tempSessionId = `side-ask-${randomUUID()}`
+    const tempSessionId = `side-${tag}-${randomUUID()}`
     const { agent: tempAgent, dispose } = await app.ctx.agents.create({
       sessionId: tempSessionId,
       meta: { cwd: process.cwd(), ephemeral: true },
@@ -39,12 +41,12 @@ export async function handleAsk(app, line) {
     cleanupEvent()
     try { dispose() } catch {}
     if (fullResponse) {
-      app.log('ok', fullResponse, `DSH (ask) · ${selection.model}`)
+      app.log('ok', fullResponse, `DSH (${tag}) · ${selection.model}`)
     } else {
-      app.log('error', 'No response received for side query', '/ask')
+      app.log('error', `No response received for side query`, `/${tag}`)
     }
   } catch (err) {
-    app.log('error', err instanceof Error ? err.message : String(err), '/ask')
+    app.log('error', err instanceof Error ? err.message : String(err), `/${tag}`)
   } finally {
     app.message = ''
     app.scheduleRender()
