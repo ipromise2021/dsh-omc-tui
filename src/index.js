@@ -3591,6 +3591,19 @@ class TuiApp {
       }
     }
 
+    if (this.compactState) {
+      lines.push('')
+      const percent = this.compactState.percent ?? 0
+      const meterWidth = Math.min(30, Math.max(16, columns - 24))
+      const filled = Math.min(meterWidth, Math.max(0, Math.floor((percent / 100) * meterWidth)))
+      const bar = `${ANSI.blue}${'■'.repeat(filled)}${ANSI.dim}${'□'.repeat(meterWidth - filled)}${ANSI.reset}`
+      lines.push(`  ${ANSI.blueSoft}✻${ANSI.reset} ${ANSI.bold}Compacting conversation...${ANSI.reset}`)
+      lines.push(`    ${bar} ${ANSI.dim}${percent}%${ANSI.reset}`)
+      if (this.compactState.tip) {
+        lines.push(`    ${ANSI.dim}└ ${this.compactState.tip}${ANSI.reset}`)
+      }
+    }
+
     lines.push(`${this.ruleStyle()}${'─'.repeat(columns)}${ANSI.reset}`)
     this.inputTopInFooter = lines.length
     lines.push(...inputLines)
