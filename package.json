@@ -11,8 +11,10 @@
   },
   "files": [
     "src",
+    "assets",
     "cordis.patch.yml",
     "README.md",
+    "PRODUCT_SHOWCASE.md",
     "LICENSE"
   ],
   "license": "MIT",
