@@ -57,8 +57,8 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
   const numberHint = options.length > 0 ? ` · 1-${Math.min(9, options.length)} quick toggle` : ''
   const switchHint = panel.questions.length > 1 ? ' · ⇆ tab switch' : ''
   const hint = isMulti
-    ? `  ${ANSI.muted}space/1-9 toggle · ↑↓/jk navigate · enter confirm · esc dismiss${switchHint}${ANSI.reset}`
-    : `  ${ANSI.muted}1-${Math.min(9, options.length)} select · ↑↓/jk navigate · enter confirm · esc dismiss${switchHint}${ANSI.reset}`
+    ? `  ${ANSI.muted}Space/1-9 toggle · ↑↓ navigate · Enter confirm · Esc dismiss${switchHint}${ANSI.reset}`
+    : `  ${ANSI.muted}Space/Enter confirm · 1-${Math.min(9, options.length)} select · ↑↓ navigate · Esc dismiss${switchHint}${ANSI.reset}`
   lines.push(hint)
   return lines
 }

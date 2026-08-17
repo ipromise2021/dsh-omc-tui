@@ -65,6 +65,9 @@ export function formatEvents(events, columns, options = {}) {
         } else if (isRead) {
           const file = args.file_path ?? args.path ?? args.targetFile ?? args.searchPath ?? ''
           push(ANSI.blueSoft, `● Read(${safe(shorten(String(file), Math.max(20, contentWidth - 12)))})`)
+        } else if (/ask_user_question|ask_question|question|interview/i.test(name)) {
+          const qText = args.questions?.[0]?.question ?? args.question ?? args.prompt ?? args.header ?? '向用户发起交互确认'
+          push(ANSI.peach, `● AskUserQuestion(${safe(shorten(String(qText), Math.max(20, contentWidth - 24)))})`)
         } else {
           const target = args.file_path ?? args.path ?? args.query ?? ''
           push(ANSI.ink, `● ${name}(${safe(shorten(String(target), Math.max(20, contentWidth - name.length - 6)))})`)
@@ -193,12 +196,12 @@ export function formatEvents(events, columns, options = {}) {
         if (block) {
           const msStr = block.ms !== undefined ? `${(block.ms / 1000).toFixed(0)}s` : `${block.lines} lines`
           if (expandedKeys.has(block.key)) {
-            push(ANSI.dim, `  ● Thought for ${msStr} (ctrl+o to collapse)`)
+            push(ANSI.dim, `  ⚛ Thought for ${msStr} (ctrl+o to collapse)`)
             for (const line of wrap(block.text, contentWidth - 4)) {
               push(ANSI.detail, `    ${line}`)
             }
           } else {
-            push(ANSI.dim, `  ● Thought for ${msStr} (ctrl+o to expand)`)
+            push(ANSI.dim, `  ⚛ Thought for ${msStr} (ctrl+o to expand)`)
           }
           rows.push('')
         }

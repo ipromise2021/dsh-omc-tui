@@ -19,18 +19,24 @@ export function renderInlineApproval(pendingApproval, approvalChoice, approvalDi
     }
   }
 
-  const toolName = request.toolName || 'tool'
+  const toolName = request.toolName || 'action'
+  const reason = (request.reason ?? '').trim()
+  const isEscalate = /escalat|permission|workspace-write|sandbox/i.test(toolName) || /escalat|workspace-write/i.test(reason)
   const file = args.file_path ?? args.path ?? ''
   const command = args.command ?? args.cmd ?? args.script ?? ''
-  const isEdit = /edit|write|replace|file/i.test(toolName) || Boolean(file)
+  const isEdit = !isEscalate && (/edit|write|replace|file/i.test(toolName) || Boolean(file))
+  const isCmd = !isEscalate && (/bash|terminal|exec|shell/i.test(toolName) || Boolean(command))
 
   const lines = []
 
-  // 1. Header (Edit file / Run command)
-  if (isEdit) {
+  // 1. Header & Context
+  if (isEscalate) {
+    lines.push(`  ${ANSI.bold}${ANSI.amber}🔒 权限提升审批 (Permission Escalation)${ANSI.reset}`)
+    lines.push(`  ${ANSI.dim}模型请求将当前权限临时提升至 ${ANSI.bold}workspace-write${ANSI.reset}${ANSI.dim} 以执行工作区文件修改${ANSI.reset}`)
+  } else if (isEdit) {
     lines.push(`  ${ANSI.bold}${ANSI.ink}Edit file${ANSI.reset}`)
     if (file) lines.push(`  ${ANSI.dim}${safe(file)}${ANSI.reset}`)
-  } else if (command) {
+  } else if (isCmd) {
     lines.push(`  ${ANSI.bold}${ANSI.ink}Run command${ANSI.reset}`)
   } else {
     lines.push(`  ${ANSI.bold}${ANSI.ink}Action requested · ${safe(toolName)}${ANSI.reset}`)
@@ -39,7 +45,7 @@ export function renderInlineApproval(pendingApproval, approvalChoice, approvalDi
   // 2. Upper divider rule
   lines.push(rule)
 
-  // 3. Diff payload or Command payload
+  // 3. Diff payload or details
   const diffItems = typeof approvalDiffLines === 'function'
     ? approvalDiffLines(request, columns - 4)
     : (Array.isArray(approvalDiffLines) ? approvalDiffLines : [])
@@ -48,31 +54,40 @@ export function renderInlineApproval(pendingApproval, approvalChoice, approvalDi
     for (const item of diffItems) {
       lines.push(`  ${item}`)
     }
-  } else if (request.reason) {
-    lines.push(`  ${ANSI.dim}${safe(request.reason)}${ANSI.reset}`)
+  } else if (reason) {
+    lines.push(`  ${ANSI.ink}• 原因: ${ANSI.dim}${safe(reason)}${ANSI.reset}`)
+  } else {
+    lines.push(`  ${ANSI.dim}• 允许本次操作执行一次 (Allow action once)${ANSI.reset}`)
   }
 
   // 4. Lower divider rule
   lines.push(rule)
 
-  // 5. Question prompt (e.g. "Do you want to make this edit to README.md?")
-  const promptText = isEdit && file
-    ? `Do you want to make this edit to ${safe(file)}?`
-    : (command ? `Do you want to run this command?` : (request.reason ? safe(request.reason) : `Allow ${safe(toolName)}?`))
+  // 5. Question prompt
+  let promptText = ''
+  if (isEscalate) {
+    promptText = '是否同意将权限提升为 workspace-write 并继续执行？'
+  } else if (isEdit && file) {
+    promptText = `是否同意对 ${safe(file)} 进行上述修改？`
+  } else if (isCmd && command) {
+    promptText = '是否同意在终端中执行此命令？'
+  } else {
+    promptText = `是否同意执行 ${safe(toolName)}？`
+  }
   lines.push(`  ${ANSI.ink}${ANSI.bold}${promptText}${ANSI.reset}`)
 
-  // 6. Numbered option list (like Claude Code and question panel)
+  // 6. Numbered option list
   if (isAllow) {
-    lines.push(`  ${ANSI.blue}❯ 1. Yes (Y)${ANSI.reset}`)
-    lines.push(`    ${ANSI.dim}2. No (N)${ANSI.reset}`)
+    lines.push(`  ${ANSI.blue}❯ 1. 同意 (Yes · Y)${ANSI.reset}`)
+    lines.push(`    ${ANSI.dim}2. 拒绝 (No · N)${ANSI.reset}`)
   } else {
-    lines.push(`    ${ANSI.dim}1. Yes (Y)${ANSI.reset}`)
-    lines.push(`  ${ANSI.coral}❯ 2. No (N)${ANSI.reset}`)
+    lines.push(`    ${ANSI.dim}1. 同意 (Yes · Y)${ANSI.reset}`)
+    lines.push(`  ${ANSI.coral}❯ 2. 拒绝 (No · N)${ANSI.reset}`)
   }
 
-  // 7. Footer hint
+  // 7. Footer hint with space/enter/y/n/esc
   lines.push('')
-  lines.push(`  ${ANSI.muted}Esc to cancel · Tab / ↑↓ to navigate · Enter to confirm · y / n quick keys${ANSI.reset}`)
+  lines.push(`  ${ANSI.muted}Esc 取消 · Tab / ↑↓ 切换 · Enter / Space 确认 · y / n 快速键${ANSI.reset}`)
 
   return lines
 }
