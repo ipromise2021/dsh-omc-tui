@@ -25,8 +25,8 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
       if (fenced) {
         fenced = false
         // Bottom border of code block
-        const ruleLen = Math.min(36, Math.max(16, contentWidth - 8))
-        push(ANSI.dim, `    ╰${'─'.repeat(ruleLen)}${ANSI.reset}`)
+        const ruleLen = Math.min(48, Math.max(20, contentWidth - 6))
+        push(ANSI.dim, `  ╰${'─'.repeat(ruleLen)}${ANSI.reset}`)
         fencedLang = ''
         rows.push(null)
       } else {
@@ -35,16 +35,16 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
         rows.push(null)
         // Top border of code block with language badge
         const langBadge = `${ANSI.amber}${ANSI.bold} ${fencedLang} ${ANSI.reset}${ANSI.dim}`
-        const rightRule = '─'.repeat(Math.max(6, Math.min(28, contentWidth - 16 - fencedLang.length)))
-        push(ANSI.dim, `    ╭─${langBadge}${rightRule}${ANSI.reset}`)
+        const rightRule = '─'.repeat(Math.max(8, Math.min(40, contentWidth - 12 - fencedLang.length)))
+        push(ANSI.dim, `  ╭─${langBadge}${rightRule}${ANSI.reset}`)
       }
       prevWasHeading = false
       continue
     }
     const normalized = !fenced && /^\s*```/.test(source) ? source.replace(/^\s*```\s*/, '') : source
     if (fenced) {
-      for (const line of wrap(source, Math.max(20, contentWidth - 8))) {
-        push(ANSI.detail, `    ${ANSI.dim}│${ANSI.reset} ${line}${ANSI.reset}`)
+      for (const line of wrap(source, Math.max(20, contentWidth - 6))) {
+        push(ANSI.ink, `  ${ANSI.dim}│${ANSI.reset} ${line}${ANSI.reset}`)
       }
       prevWasHeading = false
       continue

@@ -129,28 +129,46 @@ export function formatEvents(events, columns, options = {}) {
       case 'user/message': {
         turnHeaderPrinted = false
         if (event.data.source?.kind !== 'user') break
-        push(ANSI.blue, `${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
-        for (const block of event.data.content ?? []) {
+        const contentBlocks = event.data.content ?? []
+        const isBashCmd = contentBlocks.some((b) => b.type === 'text' && b.text?.startsWith('!') && !b.text?.startsWith('!!'))
+        if (!isBashCmd) {
+          push(ANSI.blue, `${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
+        }
+        for (const block of contentBlocks) {
           if (block.type === 'image') {
             const ref = block.attachment
             const size = formatImageBytes(ref?.bytes ?? 0)
             const dimensions = ref?.width && ref?.height ? ` · ${ref.width}×${ref.height}` : ''
             push(ANSI.dim, `  ◱ image · ${size}${dimensions}`)
           } else if (block.type === 'text') {
-            const blockWidth = Math.max(24, contentWidth)
-            const innerWidth = blockWidth - 2
-            const displayText = compactExpandedFileReferences(block.text)
-            const wrapped = wrap(displayText, innerWidth - 2)
-            push('', `${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
-            for (const line of wrapped) {
-              const padding = ' '.repeat(Math.max(0, innerWidth - 2 - widthOf(line)))
-              push('', `${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
+            const rawText = block.text ?? ''
+            if (rawText.startsWith('!') && !rawText.startsWith('!!')) {
+              const [firstLine, ...restLines] = rawText.split('\n')
+              const cmdName = firstLine.slice(1).trim()
+              push('', `${ANSI.bash}${ANSI.bold}! ${cmdName}${ANSI.reset}`)
+              if (restLines.length > 0) {
+                const textLines = restLines.join('\n').trimEnd().split('\n').slice(0, 30)
+                for (const [i, line] of textLines.entries()) {
+                  const prefix = i === 0 ? `  ${ANSI.dim}└${ANSI.reset} ` : `    `
+                  push('', `${prefix}${ANSI.answer}${line}${ANSI.reset}`)
+                }
+              }
+            } else {
+              const blockWidth = Math.max(24, contentWidth)
+              const innerWidth = blockWidth - 2
+              const displayText = compactExpandedFileReferences(block.text)
+              const wrapped = wrap(displayText, innerWidth - 2)
+              push('', `${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
+              for (const line of wrapped) {
+                const padding = ' '.repeat(Math.max(0, innerWidth - 2 - widthOf(line)))
+                push('', `${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
+              }
+              push('', `${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
             }
-            push('', `${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
           }
         }
         const skillCount = skills.length || 0
-        if (skillCount > 0) {
+        if (skillCount > 0 && !isBashCmd) {
           push(ANSI.dim, `  ◫ 上下文注入 · skill-catalog (${skillCount} skills)`)
         }
         rows.push('')

@@ -2628,21 +2628,25 @@ class TuiApp {
 
   finishBash(code, output) {
     this.message = ''
+    const cmd = this.lastBashCommand ?? '?'
+    this.lastBashCommand = undefined
+    this.pendingBashContext = undefined
+
     const lines = output.trimEnd().split('\n').slice(-30)
     const preview = lines.map((line) => shorten(line, 200)).join('\n')
-    const label = code === null ? 'spawn failed' : `exit ${code}`
-    if (preview) this.log(code === 0 ? 'ok' : 'error', preview, label)
-    else this.log('ok', '(no output)', label)
-    // Auto-inject command result into the next user message
-    if (this.agent) {
-      const cmdCtx = preview || '(no output)'
-      this.pendingBashContext = [
-        ...(this.pendingBashContext ?? []),
-        { command: this.lastBashCommand ?? '?', output: cmdCtx, exitCode: code }
-      ]
+
+    // Automatically trigger model thinking and answering on bash output (Claude Code style)
+    if (this.agent && typeof this.agent.followup === 'function') {
+      const prompt = `! ${cmd}\n${preview || '(no output)'}`
+      this.message = 'queued'
+      this.scheduleRender()
+      void this.submitUserMessage(prompt, [], [])
+    } else {
+      const label = code === null ? 'spawn failed' : `exit ${code}`
+      if (preview) this.log(code === 0 ? 'ok' : 'error', preview, label)
+      else this.log('ok', '(no output)', label)
+      this.scheduleRender()
     }
-    this.lastBashCommand = undefined
-    this.scheduleRender()
   }
 
   moveCursorLine(delta) {
