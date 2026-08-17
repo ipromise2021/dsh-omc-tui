@@ -3424,7 +3424,8 @@ class TuiApp {
         const rawLines = this.streaming.reasoning.split('\n').filter((l) => l.trim().length > 0)
         const charCount = this.streaming.reasoning.length
         lines.push(`  ${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ${charCount} chars)${ANSI.reset}`)
-        const recent = rawLines.slice(-3)
+        const capacity = Math.max(3, Math.min(5, Math.floor((rows - 14) / 3)))
+        const recent = rawLines.slice(-capacity)
         for (let i = 0; i < recent.length; i++) {
           const isLast = i === recent.length - 1
           const preview = shorten(recent[i].trim(), Math.max(20, columns - 12))
