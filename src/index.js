@@ -597,9 +597,9 @@ class TuiApp {
       if (allRows.length > 0) {
         process.stdout.write(allRows.join('\n') + '\n')
       }
-      // Replay local log (bash output, command results) that happened in this view
+      // Replay local log (commands/diagnostics not in session events)
       const localRows = this.localLog
-        .filter((e) => e.seq >= (this.viewClearedSeq ?? 0))
+        .filter((e) => e.seq >= (this.viewClearedSeq ?? 0) && e.command !== '!' && !/^exit /.test(e.command ?? ''))
         .flatMap((e) => this.formatLogEntry(e))
       if (localRows.length > 0) {
         process.stdout.write(localRows.join('\n') + '\n')
@@ -2565,7 +2565,6 @@ class TuiApp {
       this.scheduleRender()
       return
     }
-    this.log('ok', `$ ${command}`, '!')
     this.message = 'running command… · Ctrl+B background'
     this.scheduleRender()
     const shell = process.env.SHELL || (process.platform === 'win32' ? (process.env.COMSPEC || 'cmd.exe') : '/bin/bash')
