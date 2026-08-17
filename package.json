@@ -1,7 +1,6 @@
 {
-  "name": "@dsh-demo/dsh-omc-tui",
+  "name": "dsh-omc-tui",
   "version": "0.1.0",
-  "private": true,
   "description": "Oh-My-Claude (OMC): Keyboard-first interactive ANSI terminal profile for DeepSeek Harness",
   "type": "module",
   "main": "src/index.js",
@@ -13,7 +12,27 @@
   "files": [
     "src",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ipromise2021/dsh-omc-tui.git"
+  },
+  "homepage": "https://github.com/ipromise2021/dsh-omc-tui#readme",
+  "bugs": {
+    "url": "https://github.com/ipromise2021/dsh-omc-tui/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "tui",
+    "claude-code",
+    "terminal",
+    "agent"
   ],
   "dsh": {
     "bundle": {

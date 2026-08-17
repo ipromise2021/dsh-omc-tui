@@ -36,12 +36,13 @@ DSH Hub 当前是公开 GitHub 仓库的发现与安装目录：提交入口只�
 
 ### P0：公开收录前阻断项
 
-- [ ] 确定公开 GitHub 仓库和最终包名；将 README 的本地路径替换为 `github:<owner>/<repo>` 安装命令。
-- [ ] 选择并加入 LICENSE；若 package 使用 `files` 白名单，连同 `LICENSE` 一并打包。
-- [ ] 从 `package.json` 移除 `private: true`（仅在准备 npm 发布时）；若只走 GitHub 安装，也要保留清晰的版本和仓库元数据。
-- [ ] 写明支持的 `@deepseek-ai/dsh` RC 版本与升级策略，提供 `--dump-config`、mock 安装及完整 PTY 测试命令。
+- [x] 确定公开 GitHub 仓库和最终包名 (`dsh-omc-tui` / `ipromise2021/dsh-omc-tui`)；将 README 的本地路径替换为 `github:<owner>/<repo>` 安装命令。
+- [x] 选择并加入 LICENSE (`MIT`)；package 使用 `files` 白名单并连同 `LICENSE` 一并打包。
+- [x] 从 `package.json` 移除 `private: true` 并补齐版本、仓库元数据与关键词。
+- [x] 写明支持的 `@deepseek-ai/dsh` RC 版本与升级策略，提供 `--dump-config`、mock 安装及完整 PTY 测试命令。
 - [ ] 在干净 `DSH_HOME` 做 GitHub 安装验收：安装、启动、`--dump-config`、mock PTY、卸载/重装。
-- [ ] 提交公开 GitHub URL 到 DSH Hub；该站当前未显示必须 `dsh-plugin` topic 的硬性要求，topic 可作为发现性增强而非发布阻断。
+- [ ] 提交公开 GitHub URL 到 DSH Hub 目录 (https://dshhub.org/#catalog)。
+
 
 ### P1：近期适配迭代（已完成）
 

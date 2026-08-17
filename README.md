@@ -5,9 +5,16 @@
 ## 安装
 
 ```sh
+# 公开 GitHub 仓库安装 (推荐)
+npx --yes @deepseek-ai/dsh@latest plugin --profile tui add github:ipromise2021/dsh-omc-tui
+
+# 或本地开发路径安装
 npx --yes @deepseek-ai/dsh@latest plugin --profile tui add /absolute/path/to/dsh-omc-tui
+
+# 启动 tui profile
 npx --yes @deepseek-ai/dsh@latest --profile tui
 ```
+
 
 `dsh plugin` 创建 `$DSH_HOME/profiles/tui`，并把含 `dsh.bundle` 声明的本包追加到 profile bundle 栈；`dsh-base` 继续提供模型、持久化、工具、审批与 sandbox。
 
