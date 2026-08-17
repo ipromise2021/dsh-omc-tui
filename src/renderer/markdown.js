@@ -62,6 +62,16 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
         i++
       }
 
+      const stripMarkdownSyntax = (t) => {
+        return safe(t)
+          .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+          .replace(/`([^`]+)`/g, '$1')
+          .replace(/\*\*(.+?)\*\*/g, '$1')
+          .replace(/__(.+?)__/g, '$1')
+          .replace(/\*([^\n]+?)\*/g, '$1')
+          .replace(/_([^\n]+?)_/g, '$1')
+      }
+
       const parsedRows = []
       for (const tl of tableLines) {
         if (/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(tl)) continue // skip separator
@@ -71,12 +81,12 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
 
       if (parsedRows.length > 0) {
         const numCols = Math.max(...parsedRows.map((r) => r.length))
-        // Calculate natural column widths
+        // Calculate natural column widths based on true plain text width
         const colWidths = new Array(numCols).fill(4)
         for (const r of parsedRows) {
           for (let c = 0; c < numCols; c++) {
             const cellText = r[c] ?? ''
-            const w = widthOf(cellText) + 2 // 1 space padding on each side
+            const w = widthOf(stripMarkdownSyntax(cellText)) + 2 // 1 space padding on each side
             if (w > colWidths[c]) colWidths[c] = w
           }
         }
@@ -94,37 +104,33 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
         }
 
         const formatCell = (text, width, isHeader = false) => {
-          const raw = safe(text)
-          const textW = widthOf(raw)
-          let cellText = text
-          if (textW > width - 2) {
-            cellText = truncateWidth(raw, width - 3) + '…'
-          }
-          const styled = styleInlineMarkdown(cellText)
-          const finalW = widthOf(safe(cellText))
+          const plain = stripMarkdownSyntax(text)
+          const styled = styleInlineMarkdown(text)
+          const plainW = widthOf(plain)
           if (isHeader) {
-            const leftPad = Math.max(1, Math.floor((width - finalW) / 2))
-            const rightPad = Math.max(1, width - finalW - leftPad)
-            return `${' '.repeat(leftPad)}${ANSI.bold}${styled}${ANSI.reset}${' '.repeat(rightPad)}`
+            const leftPad = Math.max(1, Math.floor((width - plainW) / 2))
+            const rightPad = Math.max(1, width - plainW - leftPad)
+            return `${' '.repeat(leftPad)}${ANSI.bold}${ANSI.ink}${styled}${ANSI.reset}${' '.repeat(rightPad)}`
           }
-          const rightPad = Math.max(1, width - finalW - 1)
+          const rightPad = Math.max(1, width - plainW - 1)
           return ` ${styled}${' '.repeat(rightPad)}`
         }
 
+        const border = ANSI.rule || ANSI.dim || '\x1b[38;5;238m'
         // Top border: ┌───┬───┐
-        const top = `  ${ANSI.dim}┌${colWidths.map((w) => '─'.repeat(w)).join('┬')}┐${ANSI.reset}`
+        const top = `  ${border}┌${colWidths.map((w) => '─'.repeat(w)).join('┬')}┐${ANSI.reset}`
         // Divider: ├───┼───┤
-        const mid = `  ${ANSI.dim}├${colWidths.map((w) => '─'.repeat(w)).join('┼')}┤${ANSI.reset}`
+        const mid = `  ${border}├${colWidths.map((w) => '─'.repeat(w)).join('┼')}┤${ANSI.reset}`
         // Bottom border: └───┴───┘
-        const bot = `  ${ANSI.dim}└${colWidths.map((w) => '─'.repeat(w)).join('┴')}┘${ANSI.reset}`
+        const bot = `  ${border}└${colWidths.map((w) => '─'.repeat(w)).join('┴')}┘${ANSI.reset}`
 
         rows.push(null)
         push('', top)
-        for (const [rIdx, r] of parsedRows.entries()) {
+        for (let rIdx = 0; rIdx < parsedRows.length; rIdx++) {
           const isHeader = rIdx === 0
-          const cellsStr = colWidths.map((w, c) => formatCell(r[c] ?? '', w, isHeader)).join(`${ANSI.dim}│${ANSI.reset}`)
-          push('', `  ${ANSI.dim}│${ANSI.reset}${cellsStr}${ANSI.dim}│${ANSI.reset}`)
-          if (isHeader && parsedRows.length > 1) {
+          const cellsStr = colWidths.map((w, c) => formatCell(parsedRows[rIdx][c] ?? '', w, isHeader)).join(`${border}│${ANSI.reset}`)
+          push('', `  ${border}│${ANSI.reset}${cellsStr}${border}│${ANSI.reset}`)
+          if (rIdx < parsedRows.length - 1) {
             push('', mid)
           }
         }
