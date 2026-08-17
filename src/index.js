@@ -594,7 +594,7 @@ class TuiApp {
     
     const formatted = this.formatEvents(toolEventsOnly, columns)
     if (formatted.length > 0) {
-      this.commitToScrollback(formatted)
+      this.commitToScrollback([...formatted, ''])
     }
   }
 
@@ -695,7 +695,7 @@ class TuiApp {
         else formattedRows.push(r[0] + r[1])
       }
       if (formattedRows.length > 0) {
-        this.commitToScrollback(formattedRows)
+        this.commitToScrollback([...formattedRows, ''])
       }
       return
     }
@@ -812,6 +812,7 @@ class TuiApp {
         }
         else if (chunk.type === 'tool-call-delta') {
           this.flushThinking(event.seq)
+          this.flushStreamBuffer(true)
           const draft = this.streaming.tool ?? { name: '', args: '', startTime: Date.now() }
           if (chunk.name) draft.name = chunk.name
           draft.args += chunk.argumentsDelta ?? ''
@@ -840,6 +841,7 @@ class TuiApp {
       }
       case 'tool/call':
         this.flushThinking(event.seq)
+        this.flushStreamBuffer(true)
         this.streaming.tool = { name: event.data.name, args: event.data.args, startTime: Date.now() }
         this.message = `tool · ${event.data.name}`
         break
