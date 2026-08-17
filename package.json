@@ -38,13 +38,16 @@
   },
   "keywords": [
     "deepseek",
+    "deepseek-harness",
     "dsh",
     "dsh-plugin",
     "dsh-bundle",
     "tui",
+    "cli",
     "claude-code",
     "terminal",
-    "agent"
+    "agent",
+    "ai-coding"
   ],
   "dsh": {
     "bundle": {

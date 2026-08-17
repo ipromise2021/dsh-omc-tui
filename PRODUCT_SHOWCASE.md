@@ -33,7 +33,7 @@
 ---
 
 ### 5. `/status` 全局看板 (System Diagnostic Dashboard)
-![/status 诊断看板](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/status-dashboard.png)
+![/status 诊断看板](https://raw.githubusercontent.com/ipromise2021/dsh-omc-tui/main/assets/status-pane-output.png)
 *图 5：`/status` 全局体检看板 · 模型配置、Token 消耗分布、扩展组件与会话健康度综合分析*
 
 </div>
@@ -114,9 +114,9 @@ diff --git a/src/renderer/diff.js b/src/renderer/diff.js
 
 ---
 
-### 5. 零污染轻量级侧边提问：`/ask <query>`
-- **场景**：主任务编码中需要临时查询概念性问题（如 `"/ask JS 中的 Map 与 Object 遍历性能差异"`）。
-- **实现**：`/ask` 在后台创建独立的 `ephemeral` 会话，回答完立即销毁。**完全不污染主任务 Session 的上下文与 Token 预算**。
+### 5. 零污染轻量级侧边提问：`/btw <query>`
+- **场景**：主任务编码中需要临时查询概念性问题（如 `"/btw JS 中的 Map 与 Object 遍历性能差异"`）。
+- **实现**：`/btw` 在后台创建独立的 `ephemeral` 会话，回答完立即销毁。**完全不污染主任务 Session 的上下文与 Token 预算**。
 
 ---
 
@@ -179,7 +179,7 @@ diff --git a/src/renderer/diff.js b/src/renderer/diff.js
 | `!` + 命令 | 本地 Bash | 本地直接执行 Shell 命令并捕获回显 |
 | `@` | 文件引用 | 打开工作区文件与目录浏览补全面板 |
 | `?` | 帮助菜单 | 空输入时打开/关闭快捷键提示卡片 |
-| `/ask <问题>` | 辅助查询 | 隔离侧边提问，不污染主会话上下文与 Token 预算 |
+| `/btw <问题>` | 辅助查询 | 隔离侧边提问，不污染主会话上下文与 Token 预算 |
 | `/compact` | 上下文压缩 | 对齐 Claude Code 的平滑压缩，防重入锁与 Token 节省统计 |
 | `/steer` | 动态干预 | 运行时干预模型方向，或一键提拔已排队消息为实时指示 |
 | `/model` | 模型切换 | 两步式模型选择器（Provider → Model → 思考档位） |
