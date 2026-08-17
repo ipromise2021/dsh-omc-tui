@@ -10,7 +10,7 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
   const tabs = panel.questions.map((q, qIndex) => {
     const title = safe(q.header || q.title || q.id || ((q.multiSelect || q.multi_select) ? `多选设置 ${qIndex + 1}` : `单项选择 ${qIndex + 1}`))
     if (qIndex === panel.index) {
-      return `\x1b[48;5;37m\x1b[38;5;232m\x1b[1m ${title} \x1b[0m`
+      return `${ANSI.userBg ?? '\x1b[48;5;237m'}${ANSI.blue ?? ANSI.terracotta}${ANSI.bold} ${title} ${ANSI.reset}`
     }
     return `${ANSI.dim}${title}${ANSI.reset}`
   })
@@ -37,9 +37,11 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
     const num = `${optionIndex + 1}.`
     const labelText = safe(option?.label ?? (typeof option === 'string' ? option : ''))
     if (current) {
-      lines.push(`  ${ANSI.pink ?? '\x1b[38;5;213m'}${num} ${marker} \x1b[48;5;237m ${labelText} \x1b[0m${ANSI.reset}`)
+      const chosenColor = chosen ? (ANSI.bash ?? ANSI.blue) : ANSI.blue
+      lines.push(`  ${ANSI.blue}${num} ${chosenColor}${marker}${ANSI.reset} ${ANSI.userBg ?? '\x1b[48;5;237m'}${ANSI.ink}${ANSI.bold} ${labelText} ${ANSI.reset}`)
     } else {
-      lines.push(`  ${ANSI.dim}${num} ${chosen ? (ANSI.blue + marker) : marker}${ANSI.reset} ${ANSI.ink}${labelText}${ANSI.reset}`)
+      const markerColor = chosen ? (ANSI.bash ?? ANSI.blue) : ANSI.dim
+      lines.push(`  ${ANSI.dim}${num} ${markerColor}${marker}${ANSI.reset} ${ANSI.answer}${labelText}${ANSI.reset}`)
     }
     if (option?.description) {
       const descWrapped = wrap(safe(option.description), Math.max(20, columns - 10)).slice(0, 2)
