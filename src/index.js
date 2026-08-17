@@ -858,13 +858,33 @@ class TuiApp {
       case 'agent-preset/selected':
         this.presetName = event.data.agentPreset
         break
-      case 'turn/end':
+      case 'turn/end': {
         this.commitUnprintedEvents()
         this.flushThinking(event.seq)
         this.flushStreamBuffer(true)
         this.commitUnprintedEvents()
         this.onTurnEnd(event.data.reason)
+        if (event.data.reason?.kind === 'completed') {
+          let startIndex = -1
+          const allEvents = this.agent?.session?.events ?? []
+          for (let cursor = allEvents.length - 1; cursor >= 0; cursor -= 1) {
+            if (allEvents[cursor].type === 'turn/start') {
+              startIndex = cursor
+              break
+            }
+          }
+          if (startIndex >= 0) {
+            const durationMs = Number(event.time) - Number(allEvents[startIndex].time)
+            if (Number.isFinite(durationMs) && durationMs >= 0) {
+              const tools = allEvents.slice(startIndex).filter((e) => e.type === 'tool/call').length
+              const toolPart = tools > 0 ? ` · ${tools} tool${tools > 1 ? 's' : ''}` : ''
+              const finishLine = `  ${ANSI.dim}✻ finished in ${(durationMs / 1000).toFixed(1)}s${toolPart}${ANSI.reset}`
+              this.commitToScrollback([finishLine, ''])
+            }
+          }
+        }
         break
+      }
       default:
         break
     }
@@ -3797,17 +3817,40 @@ class TuiApp {
   }
 
   commitToScrollback(lines) {
-    if (!lines || lines.length === 0) return
-    const wasOpen = this.terminalOpen
-    if (!wasOpen) return
-    this.isCommittingScrollback = true
-    try {
-      this.clearFooter()
-      process.stdout.write(lines.join('\n') + '\n')
-    } finally {
-      this.isCommittingScrollback = false
+    if (!lines || lines.length === 0 || !this.terminalOpen) return
+    const columns = Math.max(60, process.stdout.columns || 100)
+    const rows = Math.max(16, process.stdout.rows || 30)
+
+    let erase = ''
+    if (this.lastFooterHeight > 0) {
+      const up = this.lastCursorRowInFooter ?? 0
+      erase = up > 0 ? `\x1b[?25l\r\x1b[${up}A\x1b[J` : `\x1b[?25l\r\x1b[J`
     }
-    this.render()
+    this.lastFooterHeight = 0
+    this.lastCursorRowInFooter = 0
+
+    const content = lines.join('\n') + '\n'
+
+    const footerLines = this.buildFooter(columns, rows)
+    const footerText = footerLines.map((line) => `${truncateAnsi(line, columns - 1)}\x1b[K`).join('\n')
+    this.lastFooterHeight = footerLines.length
+    this.lastColumns = columns
+
+    let cursorMove = ''
+    const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.skillsPanel
+    if (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasOverlay) {
+      const rowInFooter = this.inputTopInFooter + (this.caretRow - (this.inputWindowStart ?? 0))
+      const upLines = (footerLines.length - 1) - rowInFooter
+      cursorMove = upLines > 0
+        ? `\r\x1b[${upLines}A\x1b[${Math.max(1, (this.caretCol ?? 0) + 1)}G\x1b[?25h`
+        : `\r\x1b[${Math.max(1, (this.caretCol ?? 0) + 1)}G\x1b[?25h`
+      this.lastCursorRowInFooter = rowInFooter
+    } else {
+      cursorMove = '\x1b[?25l'
+      this.lastCursorRowInFooter = footerLines.length - 1
+    }
+
+    process.stdout.write(`${erase}${content}${footerText}${cursorMove}`)
   }
 
   async commitToScrollbackChunked(lines) {
