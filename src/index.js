@@ -893,6 +893,9 @@ class TuiApp {
         }
 
         const lines = []
+        while (lines.length < Math.max(0, heightDiff - (finishLine ? 1 : 0))) {
+          lines.push('')
+        }
         if (finishLine) {
           lines.push(finishLine)
         }
