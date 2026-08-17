@@ -219,5 +219,11 @@ export function formatEvents(events, columns, options = {}) {
     }
   }
   flushGroup()
-  return rows
+  const cleaned = []
+  for (const r of rows) {
+    if (r === '' && cleaned.length > 0 && cleaned[cleaned.length - 1] === '') continue
+    cleaned.push(r)
+  }
+  while (cleaned.length > 0 && cleaned[cleaned.length - 1] === '') cleaned.pop()
+  return cleaned
 }

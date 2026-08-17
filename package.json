@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Oh-My-Claude (OMC): A personal exploratory Claude-Code-styled ANSI terminal profile for DeepSeek Harness",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
@@ -15,6 +18,9 @@
     "cordis.patch.yml",
     "README.md",
     "PRODUCT_SHOWCASE.md",
+    "HARNESS_COMPATIBILITY.md",
+    "ROADMAP.md",
+    "TUI_ENGINEERING.md",
     "LICENSE"
   ],
   "license": "MIT",

@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![DSH Plugin](https://img.shields.io/badge/DSH-Plugin%20Bundle-ff875f?style=flat-square)](https://dshhub.org/#catalog)
+[![GitHub](https://img.shields.io/badge/GitHub-ipromise2021%2Fdsh--omc--tui-181717?style=flat-square&logo=github)](https://github.com/ipromise2021/dsh-omc-tui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![DeepSeek Harness](https://img.shields.io/badge/Harness-^0.1.0--rc.6-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
 [![Node.js](https://img.shields.io/badge/Node.js-v20%2B%20%7C%20v22%2B-green?style=flat-square)](package.json)
@@ -27,6 +27,21 @@
 
 ---
 
+## ✨ 特性速览 (Features at a Glance)
+
+| 特性 | 一句话说明 |
+| :--- | :--- |
+| 🚀 **零备用屏幕** | 追加式普通缓冲区（Scrollback Stream），原生滚轮回看与划选复制 |
+| 📁 **`@` 文件补全** | 路径逐级下钻 + 代码块智能展开，单文件超 16KB 自动截断 |
+| 🛡️ **行内安全审批** | 红绿 Diff 预览 + `Y`/`N` 单键决策，支持审批队列串行处理 |
+| 📊 **四行 Statusline** | 身份 / Token / 生态 / 权限四行全景，`/status` 一键体检 |
+| 🎨 **护眼调色板** | 四阶柔和灰度 + `claude` / `deepseek` / `mono` / `light` 四款主题热切换 |
+| 🖼️ **图片粘贴** | iTerm2 OSC 1337 + Kitty Graphics，自动转官方 Attachment 管道 |
+| ⚡ **`/ask` 侧问** | 独立临时会话作答，不污染主任务 Context 与 Token 预算 |
+| 🐚 **`!` Bash / `/jobs`** | 本地 Shell 直执行，后台任务面板查看输出与取消 |
+
+---
+
 ## 📖 项目背景与初心 (Background)
 
 `dsh-omc-tui` (Oh-My-Claude) 是我作为一名开发者，在学习和探索 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 底层架构与封装能力时写的一个终端 TUI 插件。
@@ -36,6 +51,17 @@
 - **方便日常调用**：让自己可以在熟悉的纯终端环境里，顺手调用 DSH 封装的各类 Agent、会话、工具与审批能力；
 - **实现喜欢的交互**：尝试在终端中做出自己用着最舒服的体验（比如坚持不进备用屏幕以保留终端原生滚轮、调教柔和四阶灰度消除白光刺眼感、实现 `@` 文件逐层补全与 Thinking 折叠等）；
 - **学习与探索**：纯粹出于个人技术探索与日常顺手使用的目的，代码和功能都在边用边完善中。也非常欢迎喜欢终端 Coding 的朋友一起交流探讨。
+
+---
+
+## ✅ 环境要求 (Requirements)
+
+| 依赖 | 版本 / 说明 |
+| :--- | :--- |
+| Node.js | `v20+` / `v22+`（以 `package.json` engines 为准） |
+| DeepSeek Harness | `^0.1.0-rc.6`（以 `peerDependencies` 为准） |
+| 终端 | 支持 ANSI 256 色即可（VS Code / iTerm2 / 原生 Terminal 等） |
+| 图片粘贴（可选） | iTerm2（OSC 1337）或支持 Kitty Graphics 的终端 |
 
 ---
 
@@ -99,18 +125,18 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 ---
 
 ### 5. 🎨 护眼四阶灰度与 Claude 暖色调体系
-- **消除眩光感**：采用经过精细光学计算的四阶柔和灰度：
+- **消除眩光感**：经过反复目视调校的四阶柔和灰度：
   - **正文回答**：`250` 雅致浅灰（柔和高可读性）；
   - **标签/高亮**：`251` 亮白微光；
   - **代码/边界**：`245` 中灰；
   - **Thinking 思维链**：`241` 深石板灰。
-- **四款调色板**：内置 `claude`（暖赤陶/琥珀金）、`deepseek`（经典科技蓝）、`mono`（纯黑白极简）、`light`（明亮浅色），支持通过 `/settings` 实时热切换并持久化至 `~/.dsh/settings.yaml`。
+- **四款调色板**：内置 `claude`（暖赤陶/琥珀金）、`deepseek`（经典科技蓝）、`mono`（纯黑白极简）、`light`（明亮浅色），支持通过 `/settings` 实时热切换并持久化至 `$DSH_HOME/settings.yaml`（默认 `~/.dsh/settings.yaml`）。
 
 ---
 
 ### 6. 🖼️ 双图形协议终端图片粘贴
 - **iTerm2 OSC 1337 + Kitty Graphics**：支持通过 `Cmd/Ctrl+V` 将剪贴板中的图片直接粘贴至终端。
-- **官方 Attachment 管道**：底层状态机自动捕获图像二进制并转存为官方 Attachment Ref，随消息提交。对纯文本模型自动降级为友好占位符，杜绝接口 400 异常。
+- **官方 Attachment 管道**：底层状态机自动捕获图像二进制并转存为官方 Attachment Ref，随消息提交。对纯文本模型自动降级为友好占位符，避免接口 400 异常。
 
 ---
 
@@ -214,7 +240,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 
 ---
 
-## 🧪 严密的自动化测试套件 (Test Suite)
+## 🧪 自动化测试套件 (Test Suite)
 
 本项目包含全套无凭据 Mock 环境与 PTY 端到端自动化回归测试：
 
@@ -234,7 +260,17 @@ python3 test/pty-interaction.py /tmp/interaction.log # 菜单/快捷键/多行�
 
 1. **纯粹的 Cordis 依赖注入**：严禁静态 import `@deepseek-ai/*`，依赖解析与宿主环境完全解耦；
 2. **单一真相源（Single Source of Truth）**：会话历史、权限、Token 用量全部以 Harness Durable Event 为准，UI 本地只保留纯粹的渲染状态；
-3. **分层节流与 Memoization**：Token 流式批处理（56ms）与状态行 Key 缓存，保证极高吞吐下的无卡顿、无闪烁体验。
+3. **分层节流与 Memoization**：Token 流式批处理（56ms）与状态行 Key 缓存，保证长时间高密度输出下不卡顿、不闪烁。
+
+---
+
+## ⚠️ 已知限制与预期管理 (Known Limitations)
+
+本项目是个人开发、业余时间维护，仍在边用边完善中：
+
+- **兼容性**：已在 VS Code / iTerm2 终端中验证，个别终端 / OS 组合可能存在渲染差异，Harness 各版本的适配情况见 [HARNESS_COMPATIBILITY.md](HARNESS_COMPATIBILITY.md)；
+- **缺陷清单**：已知问题与开发路线见 [ROADMAP.md](ROADMAP.md)，欢迎提交 Issue 或 PR 一起改进；
+- **引擎依赖**：本包只提供 TUI 界面，模型、持久化、工具与 sandbox 能力均由底层 `dsh-base` bundle 提供，请确保 profile 挂载顺序正确。
 
 ---
 

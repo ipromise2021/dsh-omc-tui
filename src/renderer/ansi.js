@@ -38,6 +38,39 @@ export function truncateWidth(text, max) {
   return out
 }
 
+export function truncateAnsi(text, max) {
+  let out = ''
+  let width = 0
+  let inEscape = false
+  let escapeSeq = ''
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === '\x1b') {
+      inEscape = true
+      escapeSeq = ch
+      continue
+    }
+    if (inEscape) {
+      escapeSeq += ch
+      if (/[@-~]/.test(ch)) {
+        inEscape = false
+        out += escapeSeq
+        escapeSeq = ''
+      }
+      continue
+    }
+    const w = widthOf(ch)
+    if (width + w > max) {
+      out += '\x1b[0m'
+      break
+    }
+    out += ch
+    width += w
+  }
+  if (inEscape) out += escapeSeq
+  return out
+}
+
 export function visibleOf(text) {
   return String(text).replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
 }
@@ -50,7 +83,13 @@ export function sessionTitle(events) {
 export function padWidth(text, max) {
   const visible = visibleOf(text)
   const width = widthOf(visible)
-  if (width >= max) return text
+  if (width === max) return text
+  if (width > max) {
+    const truncated = truncateAnsi(text, max)
+    const tWidth = widthOf(visibleOf(truncated))
+    if (tWidth < max) return `${truncated}${' '.repeat(max - tWidth)}`
+    return truncated
+  }
   return `${text}${' '.repeat(max - width)}`
 }
 

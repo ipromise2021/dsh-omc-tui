@@ -202,9 +202,8 @@ class TuiApp {
       clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         if (!this.terminalOpen) return
-        this.clearFooter()
-        this.render()
-      }, 40)
+        this.repaint(true)
+      }, 50)
     }
     this.disposers.push(() => clearTimeout(resizeTimer))
   }
@@ -553,40 +552,91 @@ class TuiApp {
     }
   }
 
+  repaint(clearScreen = false) {
+    if (!this.terminalOpen) return
+    const columns = Math.max(60, process.stdout.columns || 100)
+    const contentWidth = Math.max(24, columns - 2)
+    const cwd = this.agent?.session?.header?.cwd ?? process.cwd()
+    const workspace = truncateWidth(safe(cwd), Math.max(24, contentWidth - 24))
+    const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek', model: 'v4-flash' }
+    const model = truncateWidth(`${selection.provider}/${selection.model}`, Math.max(20, contentWidth - 28))
+    const welcome = welcomeCardRows(columns, workspace, model, (this.currentEffort?.() ?? 'DEFAULT').toUpperCase())
+
+    const visibleEvents = this.agent?.session?.events?.filter((e) => e.seq >= this.viewClearedSeq) ?? []
+    const pastRows = this.formatEvents(visibleEvents, columns)
+
+    this.isCommittingScrollback = true
+    try {
+      this.clearFooter()
+      if (clearScreen) {
+        process.stdout.write('\x1b[2J\x1b[H')
+      }
+      const allRows = [...welcome, ...pastRows]
+      if (allRows.length > 0) {
+        process.stdout.write(allRows.join('\n') + '\n')
+      }
+      if (this.agent?.session?.events?.length) {
+        this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? this.lastCommittedSeq
+      }
+    } finally {
+      this.isCommittingScrollback = false
+    }
+    this.lastFooterHeight = 0
+    this.lastCursorRowInFooter = 0
+    this.render()
+  }
+
+  flushThinking(seq) {
+    if (!this.streaming.reasoning) return
+    const rlines = this.streaming.reasoning.split('\n').length
+    const ms = this.reasoningAt ? Date.now() - this.reasoningAt : undefined
+    const msStr = ms !== undefined ? ` · ${(ms / 1000).toFixed(1)}s` : ''
+
+    if (!this.turnHeaderCommitted) {
+      this.turnHeaderCommitted = true
+      this.streamHeaderCommitted = true
+      this.commitUnprintedEvents()
+      const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
+      const headerLines = [
+        `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`,
+        '',
+        `  ${ANSI.dim}⚛ thinking · ${rlines} lines${msStr}${ANSI.reset}`
+      ]
+      this.commitToScrollback(headerLines)
+    } else {
+      this.commitToScrollback([`  ${ANSI.dim}⚛ thinking · ${rlines} lines${msStr}${ANSI.reset}`])
+    }
+
+    const blockKey = `reason-${seq || Date.now()}`
+    this.reasoningBlocks.unshift({
+      key: blockKey,
+      seq: seq || Date.now(),
+      lines: rlines,
+      ms,
+      text: this.streaming.reasoning
+    })
+    if (this.reasoningBlocks.length > 10) this.reasoningBlocks.pop()
+    this.streaming.reasoning = ''
+    this.reasoningAt = undefined
+  }
+
   onSessionEvent(session, event) {
     if (session !== this.agent?.session) return
     switch (event.type) {
       case 'assistant/chunk': {
         const chunk = event.data.chunk
         if (chunk.type === 'text-delta') {
+          this.flushThinking(event.seq)
           this.streaming.text += chunk.text
           if (!this.turnHeaderCommitted) {
             this.turnHeaderCommitted = true
             this.streamHeaderCommitted = true
             this.commitUnprintedEvents()
-            const columns = Math.max(60, process.stdout.columns || 100)
             const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
             const headerLines = [
               `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`,
               ''
             ]
-            if (this.streaming.reasoning) {
-              const rlines = this.streaming.reasoning.split('\n').length
-              const ms = this.reasoningAt ? Date.now() - this.reasoningAt : undefined
-              const msStr = ms !== undefined ? ` · ${(ms / 1000).toFixed(1)}s` : ''
-              headerLines.push(`  ${ANSI.dim}⚛ thinking · ${rlines} lines${msStr}${ANSI.reset}`)
-              headerLines.push('')
-              const blockKey = `reason-${event.seq || Date.now()}`
-              this.reasoningBlocks.unshift({
-                key: blockKey,
-                seq: event.seq,
-                lines: rlines,
-                ms,
-                text: this.streaming.reasoning
-              })
-              if (this.reasoningBlocks.length > 10) this.reasoningBlocks.pop()
-              this.streaming.reasoning = ''
-            }
             this.commitToScrollback(headerLines)
           }
           this.streamBuffer += chunk.text
@@ -613,7 +663,8 @@ class TuiApp {
           this.streaming.reasoning += chunk.text
         }
         else if (chunk.type === 'tool-call-delta') {
-          const draft = this.streaming.tool ?? { name: '', args: '' }
+          this.flushThinking(event.seq)
+          const draft = this.streaming.tool ?? { name: '', args: '', startTime: Date.now() }
           if (chunk.name) draft.name = chunk.name
           draft.args += chunk.argumentsDelta ?? ''
           this.streaming.tool = draft
@@ -627,6 +678,7 @@ class TuiApp {
         break
       }
       case 'assistant/message': {
+        this.flushThinking(event.seq)
         if (this.streamHeaderCommitted) {
           if (this.streamBuffer) {
             const columns = Math.max(60, process.stdout.columns || 100)
@@ -642,7 +694,6 @@ class TuiApp {
             }
             this.streamBuffer = ''
           }
-          this.commitToScrollback([''])
           this.streamHeaderCommitted = false
           this.streaming.text = ''
           this.streaming.reasoning = ''
@@ -650,20 +701,6 @@ class TuiApp {
           this.message = ''
           this.lastCommittedSeq = event.seq
         } else {
-          if (this.streaming.reasoning) {
-            const lines = this.streaming.reasoning.split('\n').length
-            this.reasoningBlocks.unshift({
-              key: `reason-${event.seq}`,
-              seq: event.seq,
-              lines,
-              ms: this.reasoningAt ? Date.now() - this.reasoningAt : undefined,
-              text: this.streaming.reasoning
-            })
-            if (this.reasoningBlocks.length > 10) this.reasoningBlocks.pop()
-          } else if (this.reasoningBlocks.length > 0 && !this.reasoningBlocks[0].seq) {
-            this.reasoningBlocks[0].seq = event.seq
-            this.reasoningBlocks[0].key = `reason-${event.seq}`
-          }
           this.commitUnprintedEvents()
           this.streaming.text = ''
           this.streaming.reasoning = ''
@@ -674,11 +711,14 @@ class TuiApp {
         break
       }
       case 'tool/call':
-        this.streaming.tool = undefined
+        this.flushThinking(event.seq)
+        this.streaming.tool = { name: event.data.name, args: event.data.args, startTime: Date.now() }
         this.message = `tool · ${event.data.name}`
         break
       case 'tool/result':
+        this.streaming.tool = undefined
         this.message = event.data.error ? `tool error · ${event.data.error.code}` : 'tool complete'
+        this.commitUnprintedEvents()
         break
       case 'request/context':
         if (event.data.contextWindow) this.usage.contextWindow = event.data.contextWindow
@@ -710,9 +750,7 @@ class TuiApp {
       this.animationTimer = undefined
     }
     if (!reason) return
-    if (reason.kind === 'aborted') {
-      this.log('denied', 'interrupted')
-    } else if (reason.kind === 'error') {
+    if (reason.kind === 'error') {
       this.log('error', `${reason.error.code}: ${reason.error.message}`)
     }
   }
@@ -897,7 +935,7 @@ class TuiApp {
         let value = data.toString('utf8')
         if (value.length > MAX_REF_BYTES) value = `${value.slice(0, MAX_REF_BYTES)}\n… (truncated)`
         const lang = EXT_LANG[extname(ref.path).slice(1).toLowerCase()] ?? ''
-        parts.push(`@${ref.path}:\n\`\`\`${lang}\n${value}\n\`\`\``)
+        parts.push(`@${ref.path}:\n<!-- dsh:file_ref_start:${ref.path} -->\n\`\`\`${lang}\n${value}\n\`\`\`\n<!-- dsh:file_ref_end:${ref.path} -->`)
       } catch {
         missing.push(ref.path)
         parts.push(`@${ref.path}`)
@@ -3336,27 +3374,26 @@ class TuiApp {
     if (!lines || lines.length === 0) return
     const wasOpen = this.terminalOpen
     if (!wasOpen) return
-    this.clearFooter()
-    process.stdout.write(lines.join('\n') + '\n')
+    this.isCommittingScrollback = true
+    try {
+      this.clearFooter()
+      process.stdout.write(lines.join('\n') + '\n')
+    } finally {
+      this.isCommittingScrollback = false
+    }
     this.render()
   }
 
-  async commitToScrollbackChunked(lines, chunkSize = 120) {
+  async commitToScrollbackChunked(lines) {
     if (!lines || lines.length === 0) return
     const wasOpen = this.terminalOpen
     if (!wasOpen) return
-    this.clearFooter()
-    if (lines.length <= chunkSize) {
+    this.isCommittingScrollback = true
+    try {
+      this.clearFooter()
       process.stdout.write(lines.join('\n') + '\n')
-      this.render()
-      return
-    }
-    for (let i = 0; i < lines.length; i += chunkSize) {
-      const chunk = lines.slice(i, i + chunkSize)
-      process.stdout.write(chunk.join('\n') + '\n')
-      if (i + chunkSize < lines.length) {
-        await new Promise((resolve) => setImmediate(resolve))
-      }
+    } finally {
+      this.isCommittingScrollback = false
     }
     this.render()
   }
@@ -3379,20 +3416,36 @@ class TuiApp {
       const elapsedSec = this.reasoningAt ? Math.max(1, Math.floor((Date.now() - this.reasoningAt) / 1000)) : 1
 
       if (this.streamBuffer) {
-        lines.push(`  ${ANSI.answer}${this.streamBuffer}${ANSI.blue}▋${ANSI.reset}`)
-        lines.push('')
+        const preview = shorten(this.streamBuffer.trim().replace(/\s+/g, ' '), Math.max(20, columns - 10))
+        if (preview) lines.push(`  ${ANSI.answer}${preview}${ANSI.blue}▋${ANSI.reset}`)
       }
 
       if (this.streaming.reasoning) {
-        const snippet = this.streaming.reasoning.trim().replace(/\s+/g, ' ')
-        const text = snippet ? ` · ${shorten(snippet, Math.max(16, columns - 40))}` : ''
-        lines.push(`  ${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ↓ tokens)${text}${ANSI.reset}`)
-        lines.push(`    ${ANSI.dim}└ Tip: Ctrl+O to expand reasoning${ANSI.reset}`)
+        const rawLines = this.streaming.reasoning.split('\n').filter((l) => l.trim().length > 0)
+        const charCount = this.streaming.reasoning.length
+        lines.push(`  ${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ${charCount} chars)${ANSI.reset}`)
+        const recent = rawLines.slice(-3)
+        for (let i = 0; i < recent.length; i++) {
+          const isLast = i === recent.length - 1
+          const preview = shorten(recent[i].trim(), Math.max(20, columns - 12))
+          const cursor = isLast ? `${ANSI.blue}▋${ANSI.reset}` : ''
+          lines.push(`    ${ANSI.dim}│ ${preview}${cursor}${ANSI.reset}`)
+        }
       } else if (this.streaming.tool) {
         const toolName = this.streaming.tool.name || 'tool'
-        lines.push(`  ${ANSI.amber}${frame} Calling ${toolName}${dots} (${elapsedSec}s)${ANSI.reset}`)
-        lines.push(`    ${ANSI.dim}└ ⚙ ${toolName} · ${shorten(this.streaming.tool.args.trim().replace(/\s+/g, ' '), Math.max(20, columns - toolName.length - 14))}${ANSI.reset}`)
+        const rawArgs = typeof this.streaming.tool.args === 'string' ? this.streaming.tool.args : JSON.stringify(this.streaming.tool.args ?? '')
+        const cleanArgs = rawArgs.replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim()
+        const toolSec = this.streaming.tool.startTime ? Math.max(1, Math.floor((Date.now() - this.streaming.tool.startTime) / 1000)) : elapsedSec
+        lines.push(`  ${ANSI.amber}${frame} Calling ${toolName}${dots} (${toolSec}s)${ANSI.reset}`)
+        if (cleanArgs) {
+          const preview = shorten(cleanArgs, Math.max(20, columns - 12))
+          lines.push(`    ${ANSI.dim}└ $ ${preview}${ANSI.reset}`)
+        }
       } else if (this.streaming.text || this.streamBuffer) {
+        if (this.streamBuffer) {
+          const preview = shorten(this.streamBuffer.trim().replace(/\s+/g, ' '), Math.max(20, columns - 10))
+          if (preview) lines.push(`  ${ANSI.answer}${preview}${ANSI.blue}▋${ANSI.reset}`)
+        }
         lines.push(`  ${ANSI.blue}${frame} Generating response${dots} (${elapsedSec}s)${ANSI.reset}`)
       } else {
         lines.push(`  ${ANSI.blue}${ANSI.bold}${frame} ${this.activityPhrase()}${dots} (${elapsedSec}s)${ANSI.reset}`)
@@ -3439,7 +3492,7 @@ class TuiApp {
   }
 
   render() {
-    if (!this.terminalOpen) return
+    if (!this.terminalOpen || this.isCommittingScrollback) return
     const columns = Math.max(60, process.stdout.columns || 100)
     const rows = Math.max(16, process.stdout.rows || 30)
     const footerLines = this.buildFooter(columns, rows)

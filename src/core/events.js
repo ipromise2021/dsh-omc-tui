@@ -36,37 +36,21 @@ export function permissionFromEvents(events, fallback) {
 }
 
 export function compactExpandedFileReferences(text) {
-  const lines = String(text ?? '').replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '').split('\n')
-  const compact = []
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(/^(\s*)@([^\s@:]+):$/)
-    const opening = lines[index + 1]?.match(/^\s*```[A-Za-z0-9_+.-]*\s*$/)
-    if (!match || !opening) {
-      compact.push(lines[index])
-      continue
-    }
-    let closing = index + 2
-    let closingSuffix = ''
-    while (closing < lines.length) {
-      const end = lines[closing].match(/^\s*```\s*(.*)$/)
-      if (end) {
-        closingSuffix = end[1].trim()
-        break
-      }
-      closing += 1
-    }
-    if (closing >= lines.length) {
-      compact.push(lines[index])
-      continue
-    }
-    compact.push(`${match[1]}@${match[2]}`)
-    if (closingSuffix) compact.push(`${match[1]}${closingSuffix}`)
-    index = closing
-  }
-  return compact.join('\n')
+  let res = String(text ?? '')
+    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '')
+
+  // 1. Match structured markers: @path:\n<!-- dsh:file_ref_start:path --> ... <!-- dsh:file_ref_end:path -->
+  res = res.replace(/@([^\s@:]+):\s*\n?<!-- dsh:file_ref_start:[^\n>]+ -->[\s\S]*?<!-- dsh:file_ref_end:[^\n>]+ -->/g, '@$1')
+
+  // 2. Legacy fallback for code fence blocks without inner markdown
+  res = res.replace(/@([^\s@:]+):\s*\n```[A-Za-z0-9_+.-]*\n[\s\S]*?\n```/g, '@$1')
+
+  return res
 }
 
 export function compactFileReferenceTitle(text) {
   return compactExpandedFileReferences(text).replace(/@([^\s@:]+):\s*```.*$/g, '@$1')
 }
+
 
