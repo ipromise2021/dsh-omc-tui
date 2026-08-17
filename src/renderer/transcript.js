@@ -1,4 +1,4 @@
-import { widthOf, truncateWidth, safe, shorten, wrap, formatTime, formatDurationMs, textOf } from './ansi.js'
+import { widthOf, truncateWidth, safe, shorten, wrap, formatTime, formatDurationMs, textOf, reasoningOf } from './ansi.js'
 import { formatImageBytes } from '../image-protocol.js'
 import { ANSI as defaultAnsi } from './themes.js'
 import { renderMarkdownRows } from './markdown.js'
@@ -36,8 +36,8 @@ export function formatEvents(events, columns, options = {}) {
     const calls = group.filter((event) => event.type === 'tool/call')
     const key = `tools-${group[0].seq}`
     if (calls.length > 1 && !expandedKeys.has(key)) {
-      const names = [...new Set(calls.map((call) => call.data.name))].map((name) => {
-        const count = calls.filter((call) => call.data.name === name).length
+      const names = [...new Set(calls.map((call) => call.data.name || 'tool'))].map((name) => {
+        const count = calls.filter((call) => (call.data.name || 'tool') === name).length
         return count > 1 ? `${name} ×${count}` : name
       }).join(' · ')
       push(ANSI.dim, `  ⚙ TOOLS · ${calls.length} · ${names}`)
@@ -159,7 +159,13 @@ export function formatEvents(events, columns, options = {}) {
       case 'assistant/message': {
         const fullAnswerText = textOf(event.data.message.content)
         const answerText = fullAnswerText
-        const block = reasoningBlocks.find((entry) => entry.key === `reason-${event.seq}` || entry.seq === event.seq) || (reasoningBlocks.length === 1 ? reasoningBlocks[0] : undefined)
+        const reasoningText = reasoningOf(event.data.message.content)
+        const block = reasoningBlocks.find((entry) => entry.key === `reason-${event.seq}` || entry.seq === event.seq) || (reasoningText ? {
+          key: `reason-${event.seq}`,
+          seq: event.seq,
+          lines: reasoningText.split('\n').length,
+          text: reasoningText
+        } : (reasoningBlocks.length === 1 ? reasoningBlocks[0] : undefined))
         if (!answerText && !block) break
         if (!turnHeaderPrinted) {
           turnHeaderPrinted = true
