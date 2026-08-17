@@ -708,34 +708,26 @@ class TuiApp {
       }
       case 'assistant/message': {
         this.flushThinking(event.seq)
-        if (this.streamHeaderCommitted) {
-          if (this.streamBuffer) {
-            const columns = Math.max(60, process.stdout.columns || 100)
-            const contentWidth = Math.max(24, columns - 2)
-            const md = this.renderMarkdownRows(this.streamBuffer, contentWidth, ANSI.answer)
-            const formattedRows = []
-            for (const r of md) {
-              if (r === null) formattedRows.push('')
-              else formattedRows.push(r[0] + r[1])
-            }
-            if (formattedRows.length > 0) {
-              this.commitToScrollback(formattedRows)
-            }
-            this.streamBuffer = ''
+        if (this.streamBuffer) {
+          const columns = Math.max(60, process.stdout.columns || 100)
+          const contentWidth = Math.max(24, columns - 2)
+          const md = this.renderMarkdownRows(this.streamBuffer, contentWidth, ANSI.answer)
+          const formattedRows = []
+          for (const r of md) {
+            if (r === null) formattedRows.push('')
+            else formattedRows.push(r[0] + r[1])
           }
-          this.streamHeaderCommitted = false
-          this.streaming.text = ''
-          this.streaming.reasoning = ''
-          this.reasoningAt = undefined
-          this.message = ''
-          this.lastCommittedSeq = event.seq
-        } else {
-          this.commitUnprintedEvents()
-          this.streaming.text = ''
-          this.streaming.reasoning = ''
-          this.reasoningAt = undefined
-          this.message = ''
+          if (formattedRows.length > 0) {
+            this.commitToScrollback(formattedRows)
+          }
+          this.streamBuffer = ''
         }
+        this.streamHeaderCommitted = false
+        this.streaming.text = ''
+        this.streaming.reasoning = ''
+        this.reasoningAt = undefined
+        this.message = ''
+        this.lastCommittedSeq = event.seq
         if (event.data.usage) this.usage = foldUsage(this.agent.session.events)
         break
       }
@@ -3558,9 +3550,10 @@ class TuiApp {
     const bashMode = this.inBashMode()
     const panelRows = this.panelRows(columns, rows)
     const inlineRows = this.inlinePanelRows(columns, rows)
+    const hasApproval = inlineRows.length > 0
     const statusRows = bashMode
       ? [`  ${ANSI.bash}! for shell mode${ANSI.reset}`]
-      : (panelRows.length > 0 ? panelRows : this.statusRows(columns))
+      : (hasApproval ? inlineRows : (panelRows.length > 0 ? panelRows : this.statusRows(columns)))
     
     this.inputMaxRows = Math.max(3, Math.min(10, rows - 10))
     const inputLines = this.inputFrame(columns)
@@ -3620,13 +3613,9 @@ class TuiApp {
       }
     }
 
-    if (inlineRows.length > 0) {
-      lines.push(...inlineRows)
-    } else {
-      lines.push(`${this.ruleStyle()}${'─'.repeat(columns)}${ANSI.reset}`)
-      this.inputTopInFooter = lines.length
-      lines.push(...inputLines)
-    }
+    lines.push(`${this.ruleStyle()}${'─'.repeat(columns)}${ANSI.reset}`)
+    this.inputTopInFooter = lines.length
+    lines.push(...inputLines)
     lines.push(`${this.ruleStyle()}${'─'.repeat(columns)}${ANSI.reset}`)
     lines.push(...statusRows)
 
