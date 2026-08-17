@@ -203,8 +203,8 @@ class TuiApp {
       clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         if (!this.terminalOpen) return
-        this.render()
-      }, 50)
+        this.repaint(true)
+      }, 80)
     }
     this.disposers.push(() => clearTimeout(resizeTimer))
   }
@@ -579,7 +579,7 @@ class TuiApp {
     const contentWidth = Math.max(24, columns - 2)
     const cwd = this.agent?.session?.header?.cwd ?? process.cwd()
     const workspace = truncateWidth(safe(cwd), Math.max(24, contentWidth - 24))
-    const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek', model: 'v4-flash' }
+    const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
     const model = truncateWidth(`${selection.provider}/${selection.model}`, Math.max(20, contentWidth - 28))
     const welcome = welcomeCardRows(columns, workspace, model, (this.currentEffort?.() ?? 'DEFAULT').toUpperCase())
 
