@@ -200,22 +200,23 @@ const sceneStreamAndDiff = [
 // Scene 2: Interactive Approval Card
 const sceneApprovalCard = [
   `${ANSI.coral}DSH${ANSI.reset}  ${ANSI.dim}deepseek-v4-flash · 14:35${ANSI.reset}`,
-  `  ${ANSI.dim}⚛ Thought for 12s (ctrl+o to expand)${ANSI.reset}`,
+  `  ${ANSI.detail}⚛ Thought for 12s (ctrl+o to expand)${ANSI.reset}`,
   `  ${ANSI.blueSoft}● Edit(src/renderer/diff.js)${ANSI.reset}`,
   ``,
   `  ${ANSI.bold}${ANSI.ink}Edit file${ANSI.reset}`,
   `  ${ANSI.dim}src/renderer/diff.js${ANSI.reset}`,
-  `${ANSI.rule}──────────────────────────────────────────────────────────────────────────────────────────${ANSI.reset}`,
+  ``,
   `  ${ANSI.dim} 31${ANSI.reset} ${ANSI.coral}- export function approvalDiffLines(request, args, columns, ANSI = defaultAnsi) {${ANSI.reset}`,
   `  ${ANSI.dim} 32${ANSI.reset} ${ANSI.blue}+ export function approvalDiffLines(request, argsOrColumns, columnsOrAnsi, ANSI = defaultAnsi) {${ANSI.reset}`,
   `  ${ANSI.dim} 33${ANSI.reset} ${ANSI.blue}+   let args = typeof argsOrColumns === 'object' && argsOrColumns !== null ? argsOrColumns : undefined${ANSI.reset}`,
   `  ${ANSI.dim} 34${ANSI.reset} ${ANSI.blue}+   let columns = typeof argsOrColumns === 'number' ? argsOrColumns : 80${ANSI.reset}`,
-  `${ANSI.rule}──────────────────────────────────────────────────────────────────────────────────────────${ANSI.reset}`,
-  `  ${ANSI.ink}${ANSI.bold}Do you want to make this edit to src/renderer/diff.js?${ANSI.reset}`,
-  `  ${ANSI.blue}❯ 1. Yes (Y)${ANSI.reset}`,
-  `    ${ANSI.dim}2. No (N)${ANSI.reset}`,
   ``,
-  `  ${ANSI.muted}Esc to cancel · Tab / ↑↓ to navigate · Enter to confirm · y / n quick keys${ANSI.reset}`
+  `  ${ANSI.ink}${ANSI.bold}Do you want to make this edit to src/renderer/diff.js?${ANSI.reset}`,
+  `  ${ANSI.blue}❯ 1. Yes${ANSI.reset}`,
+  `    ${ANSI.dim}2. Yes, allow all edits during this session (shift+tab)${ANSI.reset}`,
+  `    ${ANSI.dim}3. No${ANSI.reset}`,
+  ``,
+  `  ${ANSI.muted}Esc to cancel · Tab / ↑↓ to navigate · Enter to confirm · 1/2/3 or y/n quick keys${ANSI.reset}`
 ];
 
 // Scene 3: @ File Tree Autocomplete Picker
