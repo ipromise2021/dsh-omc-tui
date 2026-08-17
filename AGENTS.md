@@ -16,7 +16,7 @@
 ## 🛠️ 技术栈与编码铁律
 
 1. **纯原生 ESM JavaScript**
-   * 运行环境：Node.js >= 18，使用标准 ES Modules（`import` / `export`）。
+   * 运行环境：Node.js >= 20（以 `package.json` engines 为准），使用标准 ES Modules（`import` / `export`）。
 2. **零重型外部 UI 库（Zero Dependencies for UI）**
    * 严禁引入 `chalk`、`blessed`、`ink`、`cli-boxes`、`strip-ansi` 等第三方终端库。
    * 所有 ANSI 256 色/TrueColor 颜色、光标控制、样式格式化均通过 `src/renderer/` 原生实现。

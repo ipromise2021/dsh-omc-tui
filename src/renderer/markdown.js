@@ -97,9 +97,15 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
         }
 
         const formatCell = (text, width, isHeader = false) => {
-          const plain = stripMarkdownSyntax(text)
-          const styled = styleInlineMarkdown(text)
-          const plainW = widthOf(plain)
+          let plain = stripMarkdownSyntax(text)
+          let styled = styleInlineMarkdown(text)
+          const cellInnerWidth = Math.max(2, width - 2)
+          let plainW = widthOf(plain)
+          if (plainW > cellInnerWidth) {
+            plain = truncateWidth(plain, Math.max(1, cellInnerWidth - 1)) + '…'
+            styled = plain
+            plainW = widthOf(plain)
+          }
           if (isHeader) {
             const leftPad = Math.max(1, Math.floor((width - plainW) / 2))
             const rightPad = Math.max(1, width - plainW - leftPad)

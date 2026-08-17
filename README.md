@@ -4,7 +4,7 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-ipromise2021%2Fdsh--omc--tui-181717?style=flat-square&logo=github)](https://github.com/ipromise2021/dsh-omc-tui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![DeepSeek Harness](https://img.shields.io/badge/Harness-^0.1.0--rc.6-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/Harness-%5E0.1.0--rc.6-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
 [![Node.js](https://img.shields.io/badge/Node.js-v20%2B%20%7C%20v22%2B-green?style=flat-square)](package.json)
 [![ANSI TUI](https://img.shields.io/badge/ANSI-Zero%20Alternate%20Screen-87af87?style=flat-square)](README.md)
 
@@ -79,6 +79,20 @@
 
 `dsh-omc-tui` (Oh-My-Claude) 是 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的原生终端 TUI 插件，属于 Harness 的 **projection layer**：只负责终端渲染、键盘交互与局部面板，不复制模型、会话、工具或持久化状态——真相源始终是 Harness 官方服务与 durable event。
 
+**一次会话的数据流**（完整架构图见 [PRODUCT_SHOWCASE.md](PRODUCT_SHOWCASE.md) 的「系统架构与设计契约」）：
+
+```text
+键盘输入 / 快捷键 ──▶ TUI 事件适配（src/index.js）
+                          │
+                          ▼
+           Harness Agent / 会话 / 工具服务  ◀── 唯一真相源
+                          │
+        durable event（session/event）回流
+                          │
+                          ▼
+    追加渲染进终端原生 Scrollback（零备用屏幕）
+```
+
 作者日常重度使用 **Claude Code CLI** 的键盘优先交互，在研究 DSH 后动手实现了这个纯终端界面：方便在熟悉的环境里直接调用 DSH 的 Agent / 会话 / 工具 / 审批能力，坚持不进备用屏幕以保留终端原生滚轮与划选复制，并持续打磨护眼配色与交互细节。这是一个个人维护的 pre-release 项目，功能随 Harness 契约与实际使用持续完善，欢迎交流与贡献。
 
 ---
@@ -100,6 +114,7 @@
 ### 1. 从 GitHub / npm 安装
 
 ```sh
+# 以下命令均使用同一 DSH CLI（npx --yes @deepseek-ai/dsh@latest）
 # 方式 A：从 GitHub 仓库安装
 npx --yes @deepseek-ai/dsh@latest plugin --profile tui add github:ipromise2021/dsh-omc-tui
 
@@ -195,6 +210,8 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `@` | **文件引用** | 打开工作区文件与目录浏览补全面板 |
 | `?` | **帮助菜单** | 空输入时打开/关闭快捷键提示卡片 |
 
+> 💡 **提示**：macOS 上部分组合键使用 `Cmd`（如粘贴图片为 `Cmd+V`），Windows / Linux 使用 `Ctrl`；`Alt+←/→` 在部分终端中可用 `Option+←/→` 代替。
+
 ---
 
 ## 🛠️ 命令参考 (Commands Reference)
@@ -219,7 +236,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `/steer` | 动态干预 | 运行时动态干预模型方向，或将已排队消息提升为实时指示 |
 | `/resume` | 会话管理 | 浏览并恢复历史会话 |
 | `/skills` | 扩展生态 | 浏览、搜索并执行已挂载的 Skill 技能列表 |
-| `/grill-me` | 架构技能 | 由内置 Skill 提供（非本地命令）：Matt Pocock 经典法则的架构深度拷问与决策对齐 |
+| `/grill-me` | 架构技能 | 由内置 Skill 提供（非本地命令，随 `.agents/skills` 挂载、可用 `/skills` 浏览）：Matt Pocock 经典法则的架构深度拷问与决策对齐 |
 | `/jobs` | 任务管理 | 监控后台异步长任务，支持输出查看与取消 |
 | `/paste` | 图片附件 | 从系统剪贴板读取图片并加入下一条消息 |
 | `/mcp` | 扩展生态 | 查看已配置的 MCP 服务器及其工具状态 |
@@ -277,9 +294,12 @@ npm publish --access public # 发布至 npm / DSH 插件体系
 
 本项目是个人开发、业余时间维护，仍在边用边完善中：
 
-- **兼容性**：已在 VS Code / iTerm2 终端中验证，个别终端 / OS 组合可能存在渲染差异，Harness 各版本的适配情况见 [HARNESS_COMPATIBILITY.md](HARNESS_COMPATIBILITY.md)；
+- **兼容性**：已在 VS Code / iTerm2 终端中验证，个别终端 / OS 组合可能存在渲染差异；Windows 及真实 provider 下的技能发送、长任务生产者仍待独立 E2E 验证；
+- **未适配能力**：`/plugins`（插件市场）暂未适配——规划中仅做市场发现，安装 / 移除委托给官方 `dsh plugin` CLI；`/fork`、`/rewind`、会话内全文检索需等待 Harness 提供稳定的 session/checkpoint 合约，不能通过截断 durable log 模拟；
 - **反馈渠道**：欢迎通过 GitHub Issue 或 PR 反馈问题、一起改进；
 - **引擎依赖**：本包只提供 TUI 界面，模型、持久化、工具与 sandbox 能力均由底层 `dsh-base` bundle 提供，请确保 profile 挂载顺序正确。
+
+> 更完整的适配边界与发布前检查清单见 [HARNESS_COMPATIBILITY.md](HARNESS_COMPATIBILITY.md)。
 
 ---
 

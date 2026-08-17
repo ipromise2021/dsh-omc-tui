@@ -3782,7 +3782,6 @@ class TuiApp {
     const isStreaming = Boolean(this.streaming.reasoning || this.streaming.tool || this.streamBuffer || this.streaming.text)
 
     if (this.active && (isStreaming || this.reasoningAt) && !this.questionPanel && !this.pendingApproval) {
-      lines.push('')
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]
       const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
@@ -3792,13 +3791,10 @@ class TuiApp {
         const rawLines = this.streaming.reasoning.split('\n').filter((l) => l.trim().length > 0)
         const charCount = this.streaming.reasoning.length
         lines.push(`  ${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ${charCount} chars)${ANSI.reset}`)
-        const capacity = Math.max(3, Math.min(5, Math.floor((rows - 14) / 3)))
-        const recent = rawLines.slice(-capacity)
-        for (let i = 0; i < recent.length; i++) {
-          const isLast = i === recent.length - 1
-          const preview = shorten(recent[i].trim(), Math.max(20, columns - 12))
-          const cursor = isLast ? `${ANSI.blue}▋${ANSI.reset}` : ''
-          lines.push(`    ${ANSI.dim}│ ${preview}${cursor}${ANSI.reset}`)
+        const lastLine = rawLines.length > 0 ? rawLines[rawLines.length - 1] : ''
+        if (lastLine) {
+          const preview = shorten(lastLine.trim(), Math.max(20, columns - 12))
+          lines.push(`    ${ANSI.dim}│ ${preview}${ANSI.blue}▋${ANSI.reset}`)
         }
       } else if (this.streaming.tool) {
         const toolName = this.streaming.tool.name || 'tool'
@@ -3818,7 +3814,6 @@ class TuiApp {
     }
 
     if (this.compactState) {
-      lines.push('')
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]
       const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
@@ -3835,10 +3830,10 @@ class TuiApp {
       }
     }
 
-    lines.push(`${this.ruleStyle()}${'─'.repeat(columns)}${ANSI.reset}`)
+    lines.push(`${this.ruleStyle()}${'─'.repeat(Math.max(10, columns - 1))}${ANSI.reset}`)
     this.inputTopInFooter = lines.length
     lines.push(...inputLines)
-    lines.push(`${this.ruleStyle()}${'─'.repeat(columns)}${ANSI.reset}`)
+    lines.push(`${this.ruleStyle()}${'─'.repeat(Math.max(10, columns - 1))}${ANSI.reset}`)
     lines.push(...statusRows)
 
     return lines
@@ -3878,7 +3873,7 @@ class TuiApp {
     const columns = Math.max(60, process.stdout.columns || 100)
     const rows = Math.max(16, process.stdout.rows || 30)
     const footerLines = this.buildFooter(columns, rows)
-    const footerText = footerLines.map((line) => padWidth(line, columns)).join('\n')
+    const footerText = footerLines.map((line) => `${truncateAnsi(line, columns - 1)}\x1b[K`).join('\n')
 
     let erase = ''
     if (this.lastFooterHeight > 0) {
