@@ -18,7 +18,7 @@ export const THEMES = {
     rule: '\x1b[38;5;238m',       // Subtle sleek dark divider line
     coral: '\x1b[38;5;203m',      // Warning coral
     pink: '\x1b[38;5;213m',       // Bright lavender pink for active option #ff87ff
-    bash: '\x1b[1;38;5;148m',     // Vivid chartreuse green #afd700 (bold)
+    bash: '\x1b[1;38;5;214m',     // Warm golden amber #ffaf00 (bold)
     bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds #626262
     barFill: '\x1b[38;5;108m',    // Deeper sage green meter fill
     userBg: '\x1b[48;5;237m'
@@ -39,7 +39,7 @@ export const THEMES = {
     rule: '\x1b[38;5;240m',       // Lighter divider
     coral: '\x1b[38;5;210m',      // Lighter warning coral
     pink: '\x1b[38;5;213m',       // Bright lavender pink
-    bash: '\x1b[1;38;5;148m',     // Vivid chartreuse green (bold)
+    bash: '\x1b[1;38;5;220m',     // Lighter golden amber (bold)
     bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds
     barFill: '\x1b[38;5;80m',     // Lighter blue fill
     userBg: '\x1b[48;5;236m'      // Slightly lighter bg
@@ -59,7 +59,7 @@ export const THEMES = {
     muted: '\x1b[38;5;240m',
     rule: '\x1b[38;5;238m',
     coral: '\x1b[38;5;203m',
-    bash: '\x1b[1;38;5;148m',     // Vivid chartreuse green (bold)
+    bash: '\x1b[1;38;5;214m',     // Warm golden amber (bold)
     bar: '\x1b[38;5;238m',
     barFill: '\x1b[38;5;249m',
     userBg: '\x1b[48;5;238m'
@@ -79,7 +79,7 @@ export const THEMES = {
     muted: '\x1b[38;5;245m',
     rule: '\x1b[38;5;250m',
     coral: '\x1b[38;5;160m',
-    bash: '\x1b[38;5;64m',        // Rich forest green for light bg
+    bash: '\x1b[1;38;5;172m',     // Warm rich amber for light bg
     bar: '\x1b[38;5;250m',
     barFill: '\x1b[38;5;28m',
     userBg: '\x1b[48;5;252m'
