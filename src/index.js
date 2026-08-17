@@ -27,6 +27,7 @@ import {
   formatTime,
   formatDurationMs,
   textOf,
+  reasoningOf,
   sessionTitle,
   welcomeCardRows,
   renderDiffLines,
@@ -3168,6 +3169,12 @@ class TuiApp {
     for (const block of this.reasoningBlocks) {
       keys.add(block.key)
     }
+    for (const event of events) {
+      if (event.type === 'assistant/message') {
+        const reasoning = reasoningOf(event.data?.message?.content)
+        if (reasoning) keys.add(`reason-${event.seq}`)
+      }
+    }
     let group = []
     const isToolEvent = (type) => type === 'tool/call' || type === 'tool/result' || type === 'approval/asked' || type === 'approval/decided' || type === 'hook/invoked' || type === 'hook/result'
     const isStrongEvent = (type) => type === 'user/message' || type === 'assistant/message' || type === 'turn/start' || type === 'turn/end'
@@ -3196,9 +3203,7 @@ class TuiApp {
       if (expand) this.expandedKeys.add(key)
       else this.expandedKeys.delete(key)
     }
-    const columns = Math.max(60, process.stdout.columns || 100)
-    const formatted = this.formatEvents(this.agent.session.events, columns)
-    this.commitToScrollback(formatted)
+    this.repaint(true)
   }
 
   // ── rendering ──────────────────────────────────────────────────────────

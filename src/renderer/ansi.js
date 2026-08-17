@@ -150,3 +150,11 @@ export function textOf(content) {
   if (!Array.isArray(content)) return ''
   return content.filter((block) => block?.type === 'text').map((block) => block.text).join('')
 }
+
+export function reasoningOf(content) {
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block) => block?.type === 'reasoning' || block?.type === 'thought')
+    .map((block) => block.reasoning ?? block.text ?? '')
+    .join('')
+}
