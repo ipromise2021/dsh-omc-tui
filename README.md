@@ -8,7 +8,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-v20%2B%20%7C%20v22%2B-green?style=flat-square)](package.json)
 [![ANSI TUI](https://img.shields.io/badge/ANSI-Zero%20Alternate%20Screen-87af87?style=flat-square)](README.md)
 
-**个人学习与探索项目 · 采用 Claude Code CLI 风格的 DeepSeek Harness 终端界面**
+**面向 DeepSeek Harness 的原生 ANSI TUI 插件 · Claude Code CLI 风格的键盘优先终端界面**
 
 [设计亮点与功能详解](PRODUCT_SHOWCASE.md) · [Harness 兼容性记录](HARNESS_COMPATIBILITY.md)
 
@@ -45,13 +45,13 @@
 
 ## 📖 项目背景与初心 (Background)
 
-`dsh-omc-tui` (Oh-My-Claude) 是我作为一名开发者，在学习和探索 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 底层架构与封装能力时写的一个终端 TUI 插件。
+`dsh-omc-tui` (Oh-My-Claude) 是 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的原生终端 TUI 插件。它属于 Harness 的 **projection layer**：负责终端渲染、键盘交互和局部面板，不是独立的 Agent runtime，也不复制模型、会话、工具或持久化状态。
 
 平时写代码时我个人非常喜欢使用 **Claude Code CLI**，很喜欢它那种清爽、轻快、键盘优先（Keyboard-First）的交互质感。在研究 DSH 时，发现 DSH 底层封装了非常强大的 Cordis 服务组合、Durable Session 事件流、工具调度与审批机制，于是萌生了自己动手写一个终端界面的想法：
 
-- **方便日常调用**：让自己可以在熟悉的纯终端环境里，顺手调用 DSH 封装的各类 Agent、会话、工具与审批能力；
+- **方便日常调用**：在熟悉的纯终端环境里，调用 DSH 提供的 Agent、会话、工具与审批能力；
 - **实现喜欢的交互**：尝试在终端中做出自己用着最舒服的体验（比如坚持不进备用屏幕以保留终端原生滚轮、调教柔和四阶灰度消除白光刺眼感、实现 `@` 文件逐层补全与 Thinking 折叠等）；
-- **学习与探索**：纯粹出于个人技术探索与日常顺手使用的目的，代码和功能都在边用边完善中。也非常欢迎喜欢终端 Coding 的朋友一起交流探讨。
+- **持续打磨**：这是一个个人维护的 pre-release 项目，功能会随 Harness 契约和实际使用持续完善，也欢迎喜欢终端 Coding 的朋友交流探讨。
 
 ---
 
@@ -60,7 +60,7 @@
 | 依赖 | 版本 / 说明 |
 | :--- | :--- |
 | Node.js | `v20+` / `v22+`（以 `package.json` engines 为准） |
-| DeepSeek Harness | `^0.1.0-rc.6`（以 `peerDependencies` 为准） |
+| DeepSeek Harness | `^0.1.0-rc.6` 及配套 peer services（以 `package.json` 为准） |
 | 终端 | 支持 ANSI 256 色即可（VS Code / iTerm2 / WezTerm / 原生 Terminal 等） |
 | 推荐等宽字体 | *JetBrains Mono*, *Fira Code*, *Cascadia Code*, *SF Mono*, *Menlo* 等（支持 Unicode 边框与 CJK 字符） |
 | 图片粘贴（可选） | iTerm2（OSC 1337）或支持 Kitty Graphics 的终端 |
@@ -75,7 +75,7 @@
 # 方式 A：从 GitHub 仓库安装
 npx --yes @deepseek-ai/dsh@latest plugin --profile tui add github:ipromise2021/dsh-omc-tui
 
-# 方式 B：从 npm 官方仓库安装 (发布后可用)
+# 方式 B：从 npm 安装（仅在该包已发布时可用）
 npx --yes @deepseek-ai/dsh@latest plugin --profile tui add dsh-omc-tui
 
 # 启动 tui profile 交互会话
@@ -145,8 +145,8 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 
 ---
 
-### 7. ⚡ 零污染侧边临时提问（`/ask <query>`）
-- 在执行复杂代码任务时，可使用 `/ask <问题>` 进行临时概念查询（如 `/ask JS Map 遍历效率`）。
+### 7. ⚡ 零污染侧边临时提问（`/btw <query>`）
+- 在执行复杂代码任务时，可使用 `/btw <问题>` 进行临时概念查询（如 `/btw JS Map 遍历效率`）。
 - 系统在后台创建独立的临时会话作答，**完全不污染主任务 Session Context，不浪费主任务 Token 预算**。
 
 ---
@@ -169,6 +169,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `Ctrl+G` | **外部编辑器** | 调用系统 `$EDITOR`（如 VS Code / Vim）编辑复杂 Prompt |
 | `Ctrl+F` / `Ctrl+R` | **历史搜索** | 打开交互式输入提示词模糊搜索面板 |
 | `Ctrl+P` | **命令面板** | 快速过滤并运行任意 Command 或 Skill |
+| `Ctrl+K` | **删除当前行** | 删除输入框中的当前行内容 |
 | `Shift+Tab` | **权限轮转** | 在只读、工作区读写、全权限预设间无缝切换并落盘 |
 | `Ctrl+A` / `Ctrl+E` | **行首 / 行尾** | 光标快速跳至当前行首或行尾 |
 | `Alt+←` / `Alt+→` | **按词跳跃** | 按单词粒度左右快速移动光标 |
@@ -190,20 +191,21 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `/export` | 会话操作 | 将当前完整对话历史导出为格式清晰的 Markdown 文件 |
 | `/exit` | 会话操作 | 干净退出 TUI 进程 |
 | `/model` | 模型管理 | 两步式模型选择器（Provider → Model → 思考档位设置） |
-| `/effort` | 模型管理 | 动态调整当前模型的思考预算档位（low / medium / high） |
+| `/effort` | 模型管理 | 动态调整当前模型的思考预算档位，具体选项由当前模型提供 |
 | `/preset` | Agent 预设 | 切换 Agent 预设（standard / code / minimal / cordis） |
 | `/plan` | 模式切换 | 切换 plan（只读规划模式）与 build（代码构建模式） |
 | `/status` | 诊断看板 | 输出模型、会话、Token 分布、扩展组件与配置全局看板 |
 | `/context` | 诊断看板 | 详细展示当前上下文窗口（Context Window）占用分布 |
 | `/settings` | 配置管理 | 交互式配置主题配色与状态行密度（detailed / compact / minimal） |
 | `/rename` | 会话操作 | 快速重命名当前会话标题 |
-| `/ask <问题>` | 辅助查询 | 隔离侧边提问，不污染主会话上下文与 Token 预算 |
+| `/btw <问题>` | 辅助查询 | 隔离侧边提问，不污染主会话上下文与 Token 预算 |
 | `/compact` | 优化干预 | 平滑上下文压缩，带防重入互斥锁与 Token 节省统计 |
 | `/steer` | 动态干预 | 运行时动态干预模型方向，或将已排队消息提升为实时指示 |
 | `/resume` | 会话管理 | 浏览并恢复历史会话 |
 | `/skills` | 扩展生态 | 浏览、搜索并执行已挂载的 Skill 技能列表 |
 | `/grill-me` | 架构技能 | 内置 Matt Pocock 经典法则的架构深度拷问与决策对齐技能 |
 | `/jobs` | 任务管理 | 监控后台异步长任务，支持输出查看与取消 |
+| `/paste` | 图片附件 | 从系统剪贴板读取图片并加入下一条消息 |
 | `/mcp` | 扩展生态 | 查看已配置的 MCP 服务器及其工具状态 |
 | `/hooks` | 扩展生态 | 查看已挂载的 Claude Code 风格 Hook 拦截点 |
 
@@ -212,7 +214,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 ## 🔌 MCP 服务器与 Hooks 集成
 
 ### 1. MCP 服务器配置 (`cordis.patch.yml`)
-可在 profile 补丁中声明标准 `@deepseek-ai/dsh-mcp-client`：
+MCP 不是本插件默认安装的服务。若 profile 已安装 `@deepseek-ai/dsh-mcp-client`，可在 profile 补丁中声明服务器；TUI 只负责读取并展示已挂载的服务：
 
 ```yaml
 - insert:
@@ -235,6 +237,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 ```
 
 ### 2. Claude Code 风格 Hooks
+Hooks 同样属于可选的 profile 集成，不由 TUI 自行伪造或持久化：
 ```yaml
 - insert:
     - id: hooks-cc
@@ -267,10 +270,13 @@ python3 test/pty-interaction.py /tmp/interaction.log # 菜单/快捷键/多行�
 # 1. 快速语法与模块导入完整性校验
 npm run verify
 
-# 2. 重新渲染 README / 宣传场景截图 (可选)
+# 2. 默认 PTY E2E 回归测试
+npm test
+
+# 3. 重新渲染 README / 宣传场景截图 (可选)
 npm run render-assets
 
-# 3. 发布至公共 npm 镜像 / DSH 插件体系
+# 4. 发布至公共 npm 镜像 / DSH 插件体系
 npm publish --access public
 ```
 
@@ -278,9 +284,10 @@ npm publish --access public
 
 ## 🏗️ 架构规范与单一真相源 (Architecture & SSOT)
 
-1. **纯粹的 Cordis 依赖注入**：严禁静态 import `@deepseek-ai/*`，依赖解析与宿主环境完全解耦；
-2. **单一真相源（Single Source of Truth）**：会话历史、权限、Token 用量全部以 Harness Durable Event 为准，UI 本地只保留纯粹的渲染状态；
-3. **分层节流与 Memoization**：Token 流式批处理（56ms）与状态行 Key 缓存，保证长时间高密度输出下不卡顿、不闪烁。
+1. **薄 UI projection layer**：TUI 负责服务/事件映射、局部视图与原生追加渲染，不实现第二套 Agent runtime；
+2. **纯粹的 Cordis 依赖注入**：严禁静态 import `@deepseek-ai/*`，依赖解析与宿主环境完全解耦；
+3. **单一真相源（Single Source of Truth）**：会话历史、权限、Token 用量全部以 Harness Durable Event 为准，UI 本地只保留纯粹的渲染状态；
+4. **分层节流与 Memoization**：Token 流式批处理（56ms）与状态行 Key 缓存，保证长时间高密度输出下不卡顿、不闪烁。
 
 ---
 
