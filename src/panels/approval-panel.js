@@ -76,18 +76,23 @@ export function renderInlineApproval(pendingApproval, approvalChoice, approvalDi
   }
   lines.push(`  ${ANSI.ink}${ANSI.bold}${promptText}${ANSI.reset}`)
 
-  // 6. Numbered option list
-  if (isAllow) {
-    lines.push(`  ${ANSI.blue}❯ 1. 同意 (Yes · Y)${ANSI.reset}`)
-    lines.push(`    ${ANSI.dim}2. 拒绝 (No · N)${ANSI.reset}`)
-  } else {
-    lines.push(`    ${ANSI.dim}1. 同意 (Yes · Y)${ANSI.reset}`)
-    lines.push(`  ${ANSI.coral}❯ 2. 拒绝 (No · N)${ANSI.reset}`)
-  }
+  // 6. Numbered vertical options (list item style)
+  const opt1Marker = isAllow ? `${ANSI.blue}>${ANSI.reset}` : ' '
+  const opt1Text = isAllow
+    ? `${ANSI.blueSoft}${ANSI.bold}1. 同意 (Yes · Y)${ANSI.reset}  ${ANSI.dim}允许本次权限提升并继续执行${ANSI.reset}`
+    : `${ANSI.dim}1. 同意 (Yes · Y)${ANSI.reset}`
 
-  // 7. Footer hint with space/enter/y/n/esc
+  const opt2Marker = !isAllow ? `${ANSI.coral}>${ANSI.reset}` : ' '
+  const opt2Text = !isAllow
+    ? `${ANSI.coral}${ANSI.bold}2. 拒绝并终止 (No · N)${ANSI.reset}  ${ANSI.dim}拒绝授权并立即终止本次对话${ANSI.reset}`
+    : `${ANSI.dim}2. 拒绝并终止 (No · N)${ANSI.reset}`
+
+  lines.push(`  ${opt1Marker}  ${opt1Text}`)
+  lines.push(`  ${opt2Marker}  ${opt2Text}`)
+
+  // 7. Footer hint
   lines.push('')
-  lines.push(`  ${ANSI.muted}Esc 取消 · Tab / ↑↓ 切换 · Enter / Space 确认 · y / n 快速键${ANSI.reset}`)
+  lines.push(`  ${ANSI.muted}↑↓ / Tab 切换  ·  Enter / Space 确认  ·  1/2 或 y/n 快速选择  ·  Esc 拒绝并终止${ANSI.reset}`)
 
   return lines
 }
