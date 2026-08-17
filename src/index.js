@@ -1064,6 +1064,7 @@ class TuiApp {
     const lines = []
     if (entry.command) {
       const isExitLine = /^exit /.test(entry.command)
+      const isSlashCmd = entry.command.startsWith('/')
       if (isExitLine) {
         // Output block: render command output cleanly
         const exitCode = parseInt(entry.command.replace('exit ', ''), 10)
@@ -1080,15 +1081,25 @@ class TuiApp {
           lines.push(`  ${ANSI.coral}↳ exit ${exitCode}${ANSI.reset}`)
         }
         lines.push('')
-      } else {
-        // Command header: "! <cmd>" on a single line, Claude Code style
+      } else if (isSlashCmd) {
+        // Slash command: "❯ /cmd", Claude Code style
         lines.push('')
-        // entry.command === '!' means entry.text holds "$ <cmd>" — merge them
+        lines.push(`${ANSI.blue}${ANSI.bold}❯ ${entry.command}${ANSI.reset}`)
+        if (entry.text) {
+          const isError = entry.kind === 'error'
+          const prefix = isError ? `${ANSI.coral}✗${ANSI.reset}` : `${ANSI.blueSoft}·${ANSI.reset}`
+          for (const line of String(entry.text).split('\n')) {
+            lines.push(`  ${prefix} ${line}`)
+          }
+        }
+        lines.push('')
+      } else {
+        // Shell command: "! <cmd>", Claude Code style
+        lines.push('')
         const cmdLine = entry.command === '!'
           ? String(entry.text ?? '').replace(/^\$\s*/, '')
           : entry.command
         lines.push(`${ANSI.bash}${ANSI.bold}! ${cmdLine}${ANSI.reset}`)
-        // Only show extra text lines for non-! entries (e.g. error/usage messages)
         if (entry.command !== '!' && entry.text) {
           for (const line of String(entry.text).split('\n')) {
             lines.push(`${ANSI.dim}  ${line}${ANSI.reset}`)
