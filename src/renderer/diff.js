@@ -28,15 +28,30 @@ export function renderDiffLines(text, contentWidth, ANSI = defaultAnsi) {
   return rows
 }
 
-export function approvalDiffLines(request, args, columns, ANSI = defaultAnsi) {
+export function approvalDiffLines(request, argsOrColumns, columnsOrAnsi, ANSI = defaultAnsi) {
+  let args = typeof argsOrColumns === 'object' && argsOrColumns !== null ? argsOrColumns : undefined
+  let columns = typeof argsOrColumns === 'number' ? argsOrColumns : (typeof columnsOrAnsi === 'number' ? columnsOrAnsi : 80)
+  let ansiTheme = typeof columnsOrAnsi === 'object' && columnsOrAnsi !== null ? columnsOrAnsi : (ANSI ?? defaultAnsi)
+
+  if (!args && request) {
+    const raw = request.args ?? request.input ?? request.arguments
+    if (raw) {
+      if (typeof raw === 'string') {
+        try { args = JSON.parse(raw) } catch { args = {} }
+      } else if (typeof raw === 'object') {
+        args = raw
+      }
+    }
+  }
+  args = args ?? {}
   const command = args.command
   const lines = []
   if (command) {
-    lines.push(`${ANSI.coral}│${ANSI.reset} ${ANSI.ink}$${ANSI.reset} ${safe(truncateWidth(command, Math.max(20, columns - 8)))}`)
+    lines.push(`${ansiTheme.coral}│${ansiTheme.reset} ${ansiTheme.ink}$${ansiTheme.reset} ${safe(truncateWidth(command, Math.max(20, columns - 8)))}`)
     return lines
   }
   const file = args.file_path ?? args.path
-  if (file) lines.push(`${ANSI.coral}│${ANSI.reset} ${ANSI.dim}file${ANSI.reset} ${safe(truncateWidth(file, Math.max(20, columns - 12)))}`)
+  if (file) lines.push(`${ansiTheme.coral}│${ansiTheme.reset} ${ansiTheme.dim}file${ansiTheme.reset} ${safe(truncateWidth(file, Math.max(20, columns - 12)))}`)
   const oldLines = String(args.old_str ?? '').split('\n').slice(0, 6)
   const newLines = String(args.new_str ?? '').split('\n').slice(0, 6)
   const count = Math.max(oldLines.length, newLines.length)
@@ -44,11 +59,12 @@ export function approvalDiffLines(request, args, columns, ANSI = defaultAnsi) {
     const oldLine = oldLines[i]
     const newLine = newLines[i]
     if (oldLine !== undefined && oldLine === newLine) {
-      lines.push(`${ANSI.coral}│${ANSI.reset}  ${ANSI.muted}${truncateWidth(safe(oldLine), Math.max(20, columns - 8))}${ANSI.reset}`)
+      lines.push(`${ansiTheme.coral}│${ansiTheme.reset}  ${ansiTheme.muted}${truncateWidth(safe(oldLine), Math.max(20, columns - 8))}${ansiTheme.reset}`)
     } else {
-      if (oldLine !== undefined) lines.push(`${ANSI.coral}│${ANSI.reset}${ANSI.coral}- ${truncateWidth(safe(oldLine), Math.max(20, columns - 8))}${ANSI.reset}`)
-      if (newLine !== undefined) lines.push(`${ANSI.coral}│${ANSI.reset}${ANSI.blue}+ ${truncateWidth(safe(newLine), Math.max(20, columns - 8))}${ANSI.reset}`)
+      if (oldLine !== undefined) lines.push(`${ansiTheme.coral}│${ansiTheme.reset}${ansiTheme.coral}- ${truncateWidth(safe(oldLine), Math.max(20, columns - 8))}${ansiTheme.reset}`)
+      if (newLine !== undefined) lines.push(`${ansiTheme.coral}│${ansiTheme.reset}${ansiTheme.blue}+ ${truncateWidth(safe(newLine), Math.max(20, columns - 8))}${ansiTheme.reset}`)
     }
   }
   return lines
 }
+

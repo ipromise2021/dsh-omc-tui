@@ -3,37 +3,8 @@ import { formatImageBytes } from '../image-protocol.js'
 import { ANSI as defaultAnsi } from './themes.js'
 import { renderMarkdownRows } from './markdown.js'
 import { renderDiffLines } from './diff.js'
+import { compactExpandedFileReferences } from '../core/events.js'
 
-function compactExpandedFileReferences(text) {
-  const lines = safe(text).split('\n')
-  const compact = []
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(/^(\s*)@([^\s@:]+):$/)
-    const opening = lines[index + 1]?.match(/^\s*```[A-Za-z0-9_+.-]*\s*$/)
-    if (!match || !opening) {
-      compact.push(lines[index])
-      continue
-    }
-    let closing = index + 2
-    let closingSuffix = ''
-    while (closing < lines.length) {
-      const end = lines[closing].match(/^\s*```\s*(.*)$/)
-      if (end) {
-        closingSuffix = end[1].trim()
-        break
-      }
-      closing += 1
-    }
-    if (closing >= lines.length) {
-      compact.push(lines[index])
-      continue
-    }
-    compact.push(`${match[1]}@${match[2]}`)
-    if (closingSuffix) compact.push(`${match[1]}${closingSuffix}`)
-    index = closing
-  }
-  return compact.join('\n')
-}
 
 export function formatEvents(events, columns, options = {}) {
   const {

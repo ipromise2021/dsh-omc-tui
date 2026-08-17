@@ -1,11 +1,7 @@
 import { widthOf, visibleOf, truncateWidth, safe, shorten, formatTokens, sessionTitle } from './ansi.js'
 import { ANSI as defaultAnsi, explorationWords } from './themes.js'
+import { compactFileReferenceTitle } from '../core/events.js'
 
-function compactFileReferenceTitle(text) {
-  return String(text ?? '')
-    .replace(/^(\s*)@([^\s@:]+):[\s\S]*?```[\s\S]*?$/g, '@$2')
-    .replace(/@([^\s@:]+):\s*```.*$/g, '@$1')
-}
 
 export function renderStatusRows(options) {
   const {
