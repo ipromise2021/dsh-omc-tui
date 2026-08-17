@@ -3605,16 +3605,14 @@ class TuiApp {
     if (this.compactState) {
       lines.push('')
       const percent = Math.min(100, Math.max(0, this.compactState.percent ?? 0))
-      const meterWidth = 30
+      const meterWidth = Math.min(28, Math.max(16, columns - 24))
       const filled = Math.min(meterWidth, Math.max(0, Math.round((percent / 100) * meterWidth)))
-      const filledPart = `${ANSI.ink}${'■'.repeat(filled)}`
-      const emptyPart = `${ANSI.dim}${'□'.repeat(meterWidth - filled)}`
-      const bar = `${filledPart}${emptyPart}${ANSI.reset} ${ANSI.dim}${percent}%${ANSI.reset}`
+      const bar = `${(ANSI.blue ?? ANSI.amber)}${'█'.repeat(filled)}${ANSI.rule}${'░'.repeat(meterWidth - filled)}${ANSI.reset} ${ANSI.blueSoft}${percent}%${ANSI.reset}`
       
-      lines.push(`${ANSI.dim}✻${ANSI.reset} ${ANSI.ink}Compacting conversation...${ANSI.reset}`)
-      lines.push(`  ${bar}`)
+      lines.push(`  ${ANSI.blueSoft}✻${ANSI.reset} ${ANSI.bold}Compacting conversation...${ANSI.reset}`)
+      lines.push(`    ${bar}`)
       if (this.compactState.tip) {
-        lines.push(`  ${ANSI.dim}└ ${this.compactState.tip}${ANSI.reset}`)
+        lines.push(`    ${ANSI.dim}└ ${this.compactState.tip}${ANSI.reset}`)
       }
     }
 
