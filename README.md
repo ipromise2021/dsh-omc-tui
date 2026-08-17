@@ -182,7 +182,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 
 ### 8. 🐚 `!` 本地 Bash 快速执行与后台任务（`/jobs`）
 
-输入 `!` 时输入框边框高亮变绿，`Enter` 直接在本地宿主 Shell 中执行命令，输出逐行持久化写入对话日志（`Ctrl+B` 一键转入后台）。`/jobs` 面板基于官方 `ctx.jobs` 构建：列出任务状态、游标读取实时输出、`k` 取消、`r` 刷新，不伪造虚假进度。
+输入 `!` 时输入区与提示符高亮变琥珀金，`Enter` 直接在本地宿主 Shell 中执行命令，输出逐行持久化写入对话日志（`Ctrl+B` 一键转入后台）。`/jobs` 面板基于官方 `ctx.jobs` 构建：列出任务状态、游标读取实时输出、`k` 取消、`r` 刷新，不伪造虚假进度。
 
 > 每个特性的设计动机、问题记录与交互细节见 [PRODUCT_SHOWCASE.md](PRODUCT_SHOWCASE.md)。
 
