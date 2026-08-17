@@ -763,12 +763,12 @@ class TuiApp {
       case 'assistant/chunk': {
         const chunk = event.data.chunk
         if (chunk.type === 'text-delta') {
+          this.commitUnprintedEvents()
           this.flushThinking(event.seq)
           this.streaming.text += chunk.text
           if (!this.turnHeaderCommitted) {
             this.turnHeaderCommitted = true
             this.streamHeaderCommitted = true
-            this.commitUnprintedEvents()
             const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
             const headerLines = [
               `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`,
@@ -780,7 +780,10 @@ class TuiApp {
           this.flushStreamBuffer(false)
         }
         else if (chunk.type === 'reasoning-delta') {
-          if (this.streaming.reasoning === '') this.reasoningAt = Date.now()
+          if (this.streaming.reasoning === '') {
+            this.reasoningAt = Date.now()
+            this.commitUnprintedEvents()
+          }
           this.streaming.reasoning += chunk.text
         }
         else if (chunk.type === 'tool-call-delta') {
@@ -799,6 +802,7 @@ class TuiApp {
         break
       }
       case 'assistant/message': {
+        this.commitUnprintedEvents()
         this.flushThinking(event.seq)
         this.flushStreamBuffer(true)
         this.streamHeaderCommitted = false
@@ -818,7 +822,6 @@ class TuiApp {
       case 'tool/result':
         this.streaming.tool = undefined
         this.message = event.data.error ? `tool error · ${event.data.error.code}` : 'tool complete'
-        this.commitUnprintedEvents()
         break
       case 'request/context':
         if (event.data.contextWindow) this.usage.contextWindow = event.data.contextWindow
@@ -830,6 +833,7 @@ class TuiApp {
         this.presetName = event.data.agentPreset
         break
       case 'turn/end':
+        this.commitUnprintedEvents()
         this.flushThinking(event.seq)
         this.flushStreamBuffer(true)
         this.commitUnprintedEvents()
