@@ -3672,7 +3672,7 @@ class TuiApp {
     const bashMode = this.inBashMode()
     const prompt = bashMode ? `${ANSI.bash}!${ANSI.reset} ` : `${ANSI.blue}❯${ANSI.reset} `
     const prefixWidth = 2
-    const draftWidth = Math.max(24, columns - prefixWidth - 4)
+    const draftWidth = Math.max(24, columns - prefixWidth - 1)
     if (!this.agent) {
       this.caretRow = 0
       this.caretCol = prefixWidth
