@@ -276,16 +276,16 @@ export function formatEvents(events, columns, options = {}) {
           push(ANSI.coral, `  ✗ ${error?.code ?? 'error'}: ${shorten(error?.message ?? '', contentWidth - 20)}`)
         } else if (event.data.reason?.kind === 'completed') {
           let startIndex = -1
-          for (let cursor = allSessionEvents.length - 1; cursor >= 0; cursor -= 1) {
-            if (allSessionEvents[cursor].type === 'turn/start') {
+          for (let cursor = eventIndex - 1; cursor >= 0; cursor -= 1) {
+            if (events[cursor].type === 'turn/start') {
               startIndex = cursor
               break
             }
           }
           if (startIndex >= 0) {
-            const durationMs = Number(event.time) - Number(allSessionEvents[startIndex].time)
+            const durationMs = Number(event.time) - Number(events[startIndex].time)
             if (Number.isFinite(durationMs) && durationMs >= 0) {
-              const tools = allSessionEvents.slice(startIndex).filter((e) => e.type === 'tool/call').length
+              const tools = events.slice(startIndex, eventIndex).filter((e) => e.type === 'tool/call').length
               const toolsText = tools > 0 ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : ''
               push(ANSI.dim, `  ✻ finished in ${formatDurationMs(durationMs)}${toolsText}`)
             }
