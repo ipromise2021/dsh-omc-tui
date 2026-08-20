@@ -193,6 +193,7 @@ diff --git a/src/renderer/diff.js b/src/renderer/diff.js
 | `/compact` | 上下文压缩 | 对齐 Claude Code 的平滑压缩，防重入锁与 Token 节省统计 |
 | `/steer` | 动态干预 | 运行时干预模型方向，或一键提拔已排队消息为实时指示 |
 | `/model` | 模型切换 | 两步式模型选择器（Provider → Model → 思考档位） |
+| `/provider` | 提供方管理 | 交互式模型提供方管理（预设厂商、自定义端点、端点模型一键探测） |
 | `/preset` | 预设管理 | Agent 预设组合（空会话直接生效，有内容自动触发确认） |
 | `/jobs` | 任务管理 | 监控后台异步长任务，支持游标读取输出、`k` 取消、`r` 刷新 |
 | `/status` | 系统看板 | 输出模型、会话、Token 分布、扩展组件与运行态体检报告 |

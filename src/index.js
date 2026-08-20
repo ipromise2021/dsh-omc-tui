@@ -93,12 +93,29 @@ import {
   renderVariantPicker,
   renderSessionPicker,
   renderFilePicker,
-  renderInlineApproval
+  renderInlineApproval,
+  renderProviderList,
+  renderAddPresetPicker,
+  renderProviderForm,
+  renderDiscoverModelsModal,
+  renderDeleteConfirmModal
 } from './panels/index.js'
+
+const PRESET_PROVIDERS = [
+  { id: 'openai', name: 'OpenAI (Official)', baseURL: 'https://api.openai.com/v1', api: 'openai', description: 'GPT-4o, GPT-4.1, o1, o3-mini' },
+  { id: 'anthropic', name: 'Anthropic (Claude)', baseURL: 'https://api.anthropic.com', api: 'anthropic', description: 'Claude 3.5 Sonnet, Claude 3.7 Sonnet' },
+  { id: 'moonshot', name: 'Moonshot AI (Kimi)', baseURL: 'https://api.moonshot.cn/v1', api: 'openai', description: 'Kimi Chat, Moonshot-v1' },
+  { id: 'minimax-cn', name: 'MiniMax (国内端点)', baseURL: 'https://api.minimax.chat/v1', api: 'openai', description: 'MiniMax-abab6.5, abab7' },
+  { id: 'siliconflow', name: 'SiliconFlow (硅基流动)', baseURL: 'https://api.siliconflow.cn/v1', api: 'openai', description: 'DeepSeek-V3, R1, Qwen2.5' },
+  { id: 'openrouter', name: 'OpenRouter', baseURL: 'https://openrouter.ai/api/v1', api: 'openai', description: 'Multi-provider unified gateway' },
+  { id: 'together', name: 'Together AI', baseURL: 'https://api.together.xyz/v1', api: 'openai', description: 'Llama 3, Qwen, DeepSeek' },
+  { id: 'groq', name: 'Groq Cloud', baseURL: 'https://api.groq.com/openai/v1', api: 'openai', description: 'Ultra-fast LPU inference' },
+  { id: 'ollama', name: 'Ollama (Local Server)', baseURL: 'http://localhost:11434/v1', api: 'openai', description: 'Local LLM server (Zero Key needed)' }
+]
 
 // ── the app ──────────────────────────────────────────────────────────────
 
-class TuiApp {
+export class TuiApp {
   constructor(ctx) {
     this.ctx = ctx
     this.agent = undefined
@@ -140,6 +157,7 @@ class TuiApp {
     this.historySearch = undefined // { query, matches, selected }
     this.modelPicker = undefined // { entries, selected }
     this.variantPicker = undefined // { provider, model, name, entries, selected }
+    this.providerPanel = undefined // { view, providers, selected, ... }
     this.commandPalette = undefined // { query, items, selected }
     this.mru = {} // sessionId -> last-used timestamp
     this.mcpPanel = undefined // { entries, selected, failed }
@@ -522,7 +540,7 @@ class TuiApp {
     this.active = status === 'running'
     if (this.active && !wasActive && !this.animationTimer) {
       this.animationTimer = setInterval(() => {
-        const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.skillsPanel
+        const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.providerPanel || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.skillsPanel
         if (hasOverlay) return
         this.scheduleRender()
       }, 100)
@@ -1951,6 +1969,27 @@ class TuiApp {
           })
         }
       }
+      try {
+        if (this.ctx.settings?.describe) {
+          const desc = await this.ctx.settings.describe({})
+          const piAiNs = desc?.result?.value?.namespaces?.find((n) => n.ns === 'llm-pi-ai')
+          if (piAiNs?.value?.providers) {
+            for (const [routeId, prof] of Object.entries(piAiNs.value.providers)) {
+              if (Array.isArray(prof.models)) {
+                for (const m of prof.models) {
+                  if (m.id && !entries.some((e) => e.provider === routeId && e.model === m.id)) {
+                    entries.push({
+                      provider: routeId,
+                      model: m.id,
+                      name: m.name || m.id
+                    })
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch {}
       if (entries.length === 0) {
         this.log('error', 'no models listed by providers', '/model')
         this.scheduleRender()
@@ -2014,6 +2053,578 @@ class TuiApp {
     this.effortPicker = undefined
     this.log('ok', `${this.reasoningEffort}`, '/effort')
     this.scheduleRender()
+  }
+
+  async openProviderPanel() {
+    try {
+      const llm = this.llmService
+      const providersList = llm?.listProviders?.() ?? []
+      const resultProviders = []
+
+      let customProvidersMap = {}
+      try {
+        if (this.ctx.settings?.describe) {
+          const desc = await this.ctx.settings.describe({})
+          const piAiNs = desc?.result?.value?.namespaces?.find((n) => n.ns === 'llm-pi-ai')
+          if (piAiNs?.value?.providers) {
+            customProvidersMap = piAiNs.value.providers
+          }
+        }
+      } catch {}
+
+      for (const p of providersList) {
+        let models = []
+        try {
+          models = (await llm.listModels(p.id)) ?? []
+        } catch {
+          models = []
+        }
+        const customEntry = customProvidersMap[p.id]
+        resultProviders.push({
+          id: p.id,
+          name: p.name || customEntry?.displayName || p.id,
+          custom: !!p.custom || !!p.declared || !!customEntry,
+          configured: p.configured !== false,
+          hasKey: true,
+          api: p.api || customEntry?.api || (p.id.includes('deepseek') ? 'deepseek' : 'openai'),
+          baseURL: p.baseURL || customEntry?.baseURL || '',
+          modelsCount: models.length || (customEntry?.models?.length ?? 0),
+          models: models.map((m) => ({ id: m.id || m.name, name: m.name, contextWindow: m.contextWindow, maxTokens: m.maxTokens }))
+        })
+      }
+
+      for (const [routeId, prof] of Object.entries(customProvidersMap)) {
+        if (!resultProviders.some((p) => p.id === routeId)) {
+          const mList = Array.isArray(prof.models) ? prof.models : []
+          resultProviders.push({
+            id: routeId,
+            name: prof.displayName || routeId,
+            custom: true,
+            configured: true,
+            hasKey: true,
+            api: prof.api || 'openai',
+            baseURL: prof.baseURL || '',
+            modelsCount: mList.length,
+            models: mList
+          })
+        }
+      }
+
+      if (resultProviders.length === 0) {
+        resultProviders.push({
+          id: 'deepseek-official',
+          name: 'DeepSeek Official',
+          custom: false,
+          configured: true,
+          hasKey: true,
+          api: 'deepseek',
+          modelsCount: 2,
+          models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat' }, { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' }]
+        })
+      }
+
+      const existingIds = new Set(resultProviders.map((p) => p.id))
+      const presetCandidates = PRESET_PROVIDERS.filter((p) => !existingIds.has(p.id))
+
+      this.providerPanel = {
+        view: 'list',
+        providers: resultProviders,
+        selected: 0,
+        presetCandidates,
+        editingProvider: undefined,
+        formDraft: { id: '', displayName: '', baseURL: '', api: 'openai', apiKey: '', models: [] },
+        formField: 0,
+        formError: '',
+        discovering: false,
+        discoveredCandidates: [],
+        candidateSelected: 0,
+        pickedCandidates: new Set(),
+        deleteTarget: undefined,
+        protocols: ['openai', 'anthropic', 'google']
+      }
+      this.scheduleRender()
+    } catch (error) {
+      this.log('error', error instanceof Error ? error.message : String(error), '/provider')
+      this.scheduleRender()
+    }
+  }
+
+  openCustomProviderForm() {
+    if (!this.providerPanel) return
+    this.providerPanel.view = 'form'
+    this.providerPanel.editingProvider = undefined
+    this.providerPanel.formDraft = {
+      id: '',
+      displayName: '',
+      baseURL: '',
+      api: 'openai',
+      apiKey: '',
+      hasStoredKey: false,
+      models: []
+    }
+    this.providerPanel.formField = 0
+    this.providerPanel.formError = ''
+    this.scheduleRender()
+  }
+
+  openEditProviderForm(target) {
+    if (!this.providerPanel) return
+    this.providerPanel.view = 'form'
+    this.providerPanel.editingProvider = target
+    this.providerPanel.formDraft = {
+      id: target.id,
+      displayName: target.name || target.id,
+      baseURL: target.baseURL || '',
+      api: target.api || 'openai',
+      apiKey: '',
+      hasStoredKey: target.hasKey,
+      models: Array.isArray(target.models) && target.models.length > 0 ? [...target.models] : [{ id: `${target.id}-default` }]
+    }
+    this.providerPanel.formField = 0
+    this.providerPanel.formError = ''
+    this.scheduleRender()
+  }
+
+  openAddPresetPicker() {
+    if (!this.providerPanel) return
+    const existingIds = new Set((this.providerPanel.providers || []).map((p) => p.id))
+    this.providerPanel.presetCandidates = PRESET_PROVIDERS.filter((p) => !existingIds.has(p.id))
+    this.providerPanel.view = 'add-preset'
+    this.providerPanel.selected = 0
+    this.scheduleRender()
+  }
+
+  async saveProviderForm() {
+    const draft = this.providerPanel?.formDraft
+    if (!draft) return
+    const id = (draft.id || '').trim().toLowerCase()
+    if (!id || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(id)) {
+      this.providerPanel.formError = 'Provider ID 格式错误 (需小写字母开头，支持小写字母/数字/短横线)'
+      this.scheduleRender()
+      return
+    }
+    const baseURL = (draft.baseURL || '').trim()
+    if (!baseURL) {
+      this.providerPanel.formError = 'Base URL 不能为空 (如: http://localhost:11434/v1)'
+      this.scheduleRender()
+      return
+    }
+    const models = draft.models || []
+    if (models.length === 0) {
+      this.providerPanel.formError = '至少需要配置 1 个可用模型 (按 [F] 探测端点或 [+] 手动添加)'
+      this.scheduleRender()
+      return
+    }
+
+    this.message = `saving provider ${id}…`
+    this.scheduleRender()
+
+    try {
+      const keyRef = `${id.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`
+      const hasKey = !!draft.apiKey?.trim()
+      const profile = {
+        ...(draft.displayName?.trim() ? { displayName: draft.displayName.trim() } : {}),
+        baseURL,
+        api: draft.api || 'openai',
+        ...(hasKey ? { apiKeyEnv: keyRef } : {}),
+        models: models.map((m) => ({
+          id: m.id,
+          ...(m.name ? { name: m.name } : {}),
+          ...(m.contextWindow ? { contextWindow: m.contextWindow } : {}),
+          ...(m.maxTokens ? { maxTokens: m.maxTokens } : {})
+        }))
+      }
+
+      if (this.ctx.settings?.mutate) {
+        await this.ctx.settings.mutate({
+          ns: 'llm-pi-ai',
+          ops: [{ op: 'set', path: ['providers', id], value: profile }]
+        })
+      }
+
+      if (hasKey) {
+        const val = draft.apiKey.trim()
+        if (this.ctx.get('credentials')?.set) {
+          await this.ctx.get('credentials').set({ ref: keyRef, value: val })
+        }
+        process.env[keyRef] = val
+      }
+
+      this.log('ok', `provider "${id}" saved (${models.length} models) · ready in /model`, '/provider')
+      await this.openProviderPanel()
+    } catch (error) {
+      this.providerPanel.formError = error instanceof Error ? error.message : String(error)
+      this.scheduleRender()
+    }
+  }
+
+  async confirmDeleteProvider() {
+    const target = this.providerPanel?.deleteTarget
+    if (!target) return
+    const id = target.id
+    this.message = `deleting provider ${id}…`
+    this.scheduleRender()
+
+    try {
+      if (this.ctx.settings?.mutate) {
+        await this.ctx.settings.mutate({
+          ns: 'llm-pi-ai',
+          ops: [{ op: 'unset', path: ['providers', id] }]
+        })
+      }
+      const keyRef = `${id.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`
+      if (this.ctx.get('credentials')?.unset) {
+        await this.ctx.get('credentials').unset({ ref: keyRef })
+      }
+      delete process.env[keyRef]
+      this.log('ok', `provider "${id}" removed`, '/provider')
+      await this.openProviderPanel()
+    } catch (error) {
+      this.log('error', error instanceof Error ? error.message : String(error), '/provider')
+      this.providerPanel.view = 'list'
+      this.scheduleRender()
+    }
+  }
+
+  async discoverModels() {
+    const draft = this.providerPanel?.formDraft
+    if (!draft) return
+    const baseURL = (draft.baseURL || '').trim()
+    if (!baseURL) {
+      this.providerPanel.formError = '请先填写 Base URL 再探测模型'
+      this.scheduleRender()
+      return
+    }
+
+    this.providerPanel.discovering = true
+    this.providerPanel.view = 'discover'
+    this.scheduleRender()
+
+    let models = []
+    try {
+      const llm = this.llmService
+      if (llm?.discoverModels) {
+        const resp = await llm.discoverModels({
+          settingsNs: 'llm-pi-ai',
+          provider: draft.id || undefined,
+          baseURL,
+          api: draft.api || 'openai',
+          apiKey: draft.apiKey?.trim() || undefined
+        })
+        if (resp?.models) models = resp.models
+      }
+
+      if (models.length === 0) {
+        let endpoint = baseURL.replace(/\/+$/, '')
+        if (!endpoint.endsWith('/models')) {
+          endpoint = endpoint.endsWith('/v1') ? `${endpoint}/models` : `${endpoint}/v1/models`
+        }
+        const headers = { Accept: 'application/json' }
+        if (draft.apiKey?.trim()) {
+          headers.Authorization = `Bearer ${draft.apiKey.trim()}`
+        }
+        const res = await fetch(endpoint, {
+          headers,
+          signal: AbortSignal.timeout(6000)
+        })
+        if (res.ok) {
+          const json = await res.json()
+          const rawList = Array.isArray(json?.data) ? json.data : (Array.isArray(json?.models) ? json.models : (Array.isArray(json) ? json : []))
+          models = rawList.map((item) => {
+            const mId = item.id || item.name || item.model
+            return {
+              id: mId,
+              name: item.name || mId,
+              contextWindow: item.context_length || item.contextWindow || 131072,
+              maxTokens: item.max_tokens || item.maxTokens || 8192
+            }
+          }).filter((m) => !!m.id)
+        }
+      }
+    } catch (err) {
+      this.log('error', `discovery failed: ${err instanceof Error ? err.message : String(err)}`, '/provider')
+    }
+
+    this.providerPanel.discovering = false
+    this.providerPanel.discoveredCandidates = models
+    this.providerPanel.candidateSelected = 0
+    this.providerPanel.pickedCandidates = new Set(models.map((m) => m.id))
+    this.scheduleRender()
+  }
+
+  handleProviderInput(value) {
+    const panel = this.providerPanel
+    if (!panel) return
+
+    if (panel.view === 'list') {
+      if (value === '\x1b' || value === '\x03') {
+        this.providerPanel = undefined
+        this.scheduleRender()
+        return
+      }
+      if (value === 'a' || value === 'A') return void this.openAddPresetPicker()
+      if (value === 'c' || value === 'C') return void this.openCustomProviderForm()
+      if (value === 'e' || value === 'E') {
+        const target = panel.providers[panel.selected]
+        if (target) return void this.openEditProviderForm(target)
+      }
+      if (value === 'd' || value === 'D') {
+        const target = panel.providers[panel.selected]
+        if (!target) return
+        if (target.id === 'deepseek-official') {
+          this.log('error', '官方 DeepSeek 提供方不可删除 (可通过 [E] 修改端点与密钥)', '/provider')
+          this.scheduleRender()
+          return
+        }
+        panel.deleteTarget = target
+        panel.view = 'delete-confirm'
+        this.scheduleRender()
+        return
+      }
+      if (value === '\r') {
+        const target = panel.providers[panel.selected]
+        if (target) return void this.openEditProviderForm(target)
+      }
+      if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) return this.onEscapeSequence(value)
+      return
+    }
+
+    if (panel.view === 'add-preset') {
+      if (value === '\x1b' || value === '\x03') {
+        panel.view = 'list'
+        this.scheduleRender()
+        return
+      }
+      if (value === '\r') {
+        const chosen = panel.presetCandidates[panel.selected]
+        if (chosen) {
+          return void this.openEditProviderForm({
+            id: chosen.id,
+            name: chosen.name,
+            baseURL: chosen.baseURL || '',
+            api: chosen.api || 'openai',
+            custom: false,
+            models: [{ id: `${chosen.id}-default` }]
+          })
+        }
+      }
+      if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) return this.onEscapeSequence(value)
+      return
+    }
+
+    if (panel.view === 'form') {
+      if (value === '\x1b' || value === '\x03') {
+        panel.view = 'list'
+        this.scheduleRender()
+        return
+      }
+      if (value === '\x13') {
+        // Ctrl+S
+        return void this.saveProviderForm()
+      }
+      if (value === '\x04' && panel.editingProvider && panel.editingProvider.id !== 'deepseek-official') {
+        // Ctrl+D to delete
+        panel.deleteTarget = panel.editingProvider
+        panel.view = 'delete-confirm'
+        this.scheduleRender()
+        return
+      }
+      if (value === '\t' || value === '\r') {
+        if (panel.formField === 5 && value === '\r') {
+          return void this.saveProviderForm()
+        }
+        panel.formField = (panel.formField + 1) % 6
+        this.scheduleRender()
+        return
+      }
+      if (value === '\x1b[Z') {
+        // Shift+Tab
+        panel.formField = (panel.formField - 1 + 6) % 6
+        this.scheduleRender()
+        return
+      }
+      if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) return this.onEscapeSequence(value)
+
+      // Protocol cycling via space
+      if (panel.formField === 3 && value === ' ') {
+        const protos = panel.protocols || ['openai', 'anthropic', 'google']
+        const curIdx = protos.indexOf(panel.formDraft.api || 'openai')
+        panel.formDraft.api = protos[(curIdx + 1) % protos.length]
+        this.scheduleRender()
+        return
+      }
+
+      // Models shortcuts
+      if (panel.formField === 5) {
+        if (value === 'f' || value === 'F') return void this.discoverModels()
+        if (value === '+' || value === 'a' || value === 'A') {
+          const curModels = panel.formDraft.models || []
+          const defaultId = `${panel.formDraft.id || 'model'}-v${curModels.length + 1}`
+          panel.formDraft.models = [...curModels, { id: defaultId, name: defaultId, contextWindow: 128000, maxTokens: 8192 }]
+          this.scheduleRender()
+          return
+        }
+        if (value === '-' || value === 'd' || value === 'D') {
+          const curModels = panel.formDraft.models || []
+          if (curModels.length > 0) {
+            panel.formDraft.models = curModels.slice(0, -1)
+            this.scheduleRender()
+          }
+          return
+        }
+        return
+      }
+
+      // Text input fields (0: id, 1: displayName, 2: baseURL, 4: apiKey)
+      const fieldKeys = ['id', 'displayName', 'baseURL', 'api', 'apiKey', 'models']
+      const curKey = fieldKeys[panel.formField]
+      if (curKey === 'id' && panel.editingProvider) {
+        return // id is locked when editing
+      }
+
+      if (value === '\x7f' || value === '\x08') {
+        // Backspace
+        panel.formDraft[curKey] = (panel.formDraft[curKey] || '').slice(0, -1)
+        this.scheduleRender()
+        return
+      }
+      if (value === '\x15') {
+        // Ctrl+U
+        panel.formDraft[curKey] = ''
+        this.scheduleRender()
+        return
+      }
+      if (!value.startsWith('\x1b') && value >= ' ') {
+        panel.formDraft[curKey] = (panel.formDraft[curKey] || '') + value
+        this.scheduleRender()
+        return
+      }
+      return
+    }
+
+    if (panel.view === 'discover') {
+      if (value === '\x1b' || value === '\x03') {
+        panel.view = 'form'
+        this.scheduleRender()
+        return
+      }
+      if (value === ' ') {
+        const cand = panel.discoveredCandidates[panel.candidateSelected]
+        if (cand) {
+          if (panel.pickedCandidates.has(cand.id)) panel.pickedCandidates.delete(cand.id)
+          else panel.pickedCandidates.add(cand.id)
+          this.scheduleRender()
+        }
+        return
+      }
+      if (/^[1-9]$/.test(value)) {
+        const idx = Number(value) - 1
+        const cand = panel.discoveredCandidates[idx]
+        if (cand) {
+          if (panel.pickedCandidates.has(cand.id)) panel.pickedCandidates.delete(cand.id)
+          else panel.pickedCandidates.add(cand.id)
+          this.scheduleRender()
+        }
+        return
+      }
+      if (value === 'a' || value === 'A') {
+        if (panel.pickedCandidates.size === panel.discoveredCandidates.length) {
+          panel.pickedCandidates.clear()
+        } else {
+          panel.pickedCandidates = new Set(panel.discoveredCandidates.map((c) => c.id))
+        }
+        this.scheduleRender()
+        return
+      }
+      if (value === '\r') {
+        const picked = panel.pickedCandidates
+        const cands = panel.discoveredCandidates.filter((c) => picked.has(c.id))
+        if (cands.length > 0) {
+          panel.formDraft.models = cands.map((c) => ({
+            id: c.id,
+            name: c.name || c.id,
+            contextWindow: c.contextWindow || 131072,
+            maxTokens: c.maxTokens || 8192
+          }))
+        }
+        panel.view = 'form'
+        this.scheduleRender()
+        return
+      }
+      if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) return this.onEscapeSequence(value)
+      return
+    }
+
+    if (panel.view === 'delete-confirm') {
+      if (value === '\x1b' || value === 'n' || value === 'N') {
+        panel.deleteTarget = undefined
+        panel.view = 'list'
+        this.scheduleRender()
+        return
+      }
+      if (value === '\r' || value === 'y' || value === 'Y' || value === 'd' || value === 'D') {
+        return void this.confirmDeleteProvider()
+      }
+    }
+  }
+
+  handleProviderEscape(value) {
+    const panel = this.providerPanel
+    if (!panel) return
+
+    if (panel.view === 'list') {
+      if (value === '\x1b[A' || value === '\x1bOA') {
+        panel.selected = Math.max(0, panel.selected - 1)
+        this.scheduleRender()
+      } else if (value === '\x1b[B' || value === '\x1bOB') {
+        panel.selected = Math.min(panel.providers.length - 1, panel.selected + 1)
+        this.scheduleRender()
+      }
+      return
+    }
+
+    if (panel.view === 'add-preset') {
+      if (value === '\x1b[A' || value === '\x1bOA') {
+        panel.selected = Math.max(0, panel.selected - 1)
+        this.scheduleRender()
+      } else if (value === '\x1b[B' || value === '\x1bOB') {
+        panel.selected = Math.min(panel.presetCandidates.length - 1, panel.selected + 1)
+        this.scheduleRender()
+      }
+      return
+    }
+
+    if (panel.view === 'form') {
+      if (value === '\x1b[A' || value === '\x1bOA') {
+        panel.formField = Math.max(0, panel.formField - 1)
+        this.scheduleRender()
+      } else if (value === '\x1b[B' || value === '\x1bOB') {
+        panel.formField = Math.min(5, panel.formField + 1)
+        this.scheduleRender()
+      } else if (panel.formField === 3 && (value === '\x1b[D' || value === '\x1bOD')) {
+        const protos = panel.protocols || ['openai', 'anthropic', 'google']
+        const curIdx = protos.indexOf(panel.formDraft.api || 'openai')
+        panel.formDraft.api = protos[(curIdx - 1 + protos.length) % protos.length]
+        this.scheduleRender()
+      } else if (panel.formField === 3 && (value === '\x1b[C' || value === '\x1bOC')) {
+        const protos = panel.protocols || ['openai', 'anthropic', 'google']
+        const curIdx = protos.indexOf(panel.formDraft.api || 'openai')
+        panel.formDraft.api = protos[(curIdx + 1) % protos.length]
+        this.scheduleRender()
+      }
+      return
+    }
+
+    if (panel.view === 'discover') {
+      if (value === '\x1b[A' || value === '\x1bOA') {
+        panel.candidateSelected = Math.max(0, panel.candidateSelected - 1)
+        this.scheduleRender()
+      } else if (value === '\x1b[B' || value === '\x1bOB') {
+        panel.candidateSelected = Math.min(panel.discoveredCandidates.length - 1, panel.candidateSelected + 1)
+        this.scheduleRender()
+      }
+      return
+    }
   }
 
   async openPresetPicker() {
@@ -3087,6 +3698,11 @@ class TuiApp {
       return
     }
 
+    if (this.providerPanel) {
+      this.handleProviderInput(value)
+      return
+    }
+
     if (this.modelPicker) {
       if (value === '\r' || value === '\t') void this.chooseModel()
       else if (value === '\x1b' || value === '\x03') {
@@ -3301,6 +3917,7 @@ class TuiApp {
   }
 
   onEscapeSequence(value) {
+    if (this.providerPanel) return this.handleProviderEscape(value)
     if (this.questionPanel) {
       const isVertical = value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[B' || value === '\x1bOB'
       const isHorizontal = value === '\x1b[C' || value === '\x1bOC' || value === '\x1b[D' || value === '\x1bOD'
@@ -3819,7 +4436,7 @@ class TuiApp {
     this.lastColumns = columns
 
     let cursorMove = ''
-    const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.skillsPanel
+    const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.skillsPanel
     if (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasOverlay) {
       const rowInFooter = this.inputTopInFooter + (this.caretRow - (this.inputWindowStart ?? 0))
       const upLines = (footerLines.length - 1) - rowInFooter
@@ -3953,6 +4570,14 @@ class TuiApp {
     if (this.historySearch) return renderHistorySearch(this.historySearch, capacity, columns, ANSI)
     if (this.modelPicker) return renderModelPicker(this.modelPicker, this.ctx.agentDefaultModel.currentSelection(), capacity, columns, ANSI)
     if (this.variantPicker) return renderVariantPicker(this.variantPicker, this.reasoningEffort ?? 'high', ANSI)
+    if (this.providerPanel) {
+      const { view } = this.providerPanel
+      if (view === 'add-preset') return renderAddPresetPicker(this.providerPanel, capacity, columns, ANSI)
+      if (view === 'form') return renderProviderForm(this.providerPanel, columns, ANSI)
+      if (view === 'discover') return renderDiscoverModelsModal(this.providerPanel, capacity, columns, ANSI)
+      if (view === 'delete-confirm') return renderDeleteConfirmModal(this.providerPanel, ANSI)
+      return renderProviderList(this.providerPanel, this.ctx.agentDefaultModel?.currentSelection?.(), capacity, columns, ANSI)
+    }
     if (this.picker) return renderSessionPicker(this.picker, capacity, columns, ANSI)
     if (this.filePicker) return renderFilePicker(this.filePicker, capacity, columns, ANSI)
     return []
@@ -3993,7 +4618,7 @@ class TuiApp {
     this.lastColumns = columns
 
     let cursorMove = ''
-    const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.skillsPanel
+    const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.skillsPanel
     if (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasOverlay) {
       const rowInFooter = this.inputTopInFooter + (this.caretRow - (this.inputWindowStart ?? 0))
       const upLines = (footerLines.length - 1) - rowInFooter

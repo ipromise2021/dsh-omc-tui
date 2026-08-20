@@ -228,6 +228,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `/export` | 会话操作 | 将当前完整对话历史导出为格式清晰的 Markdown 文件 |
 | `/exit` | 会话操作 | 干净退出 TUI 进程 |
 | `/model` | 模型管理 | 两步式模型选择器（Provider → Model → 思考档位设置） |
+| `/provider` | 提供方管理 | 交互式模型提供方管理（预设提供方、自定义端点、远程模型自动探测） |
 | `/effort` | 模型管理 | 动态调整当前模型的思考预算档位，具体选项由当前模型提供 |
 | `/preset` | Agent 预设 | 切换 Agent 预设（standard / code / minimal / cordis） |
 | `/plan` | 模式切换 | 切换 plan（只读规划模式）与 build（代码构建模式） |

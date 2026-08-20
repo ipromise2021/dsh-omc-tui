@@ -12,3 +12,5 @@ export * from './model-picker.js'
 export * from './session-picker.js'
 export * from './file-picker.js'
 export * from './approval-panel.js'
+export * from './provider-panel.js'
+

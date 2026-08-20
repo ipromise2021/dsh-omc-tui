@@ -17,6 +17,7 @@ export const LOCAL_COMMANDS = [
   { name: 'clear', description: 'clear the local transcript view' },
   { name: 'resume', description: 'pick a past session to resume' },
   { name: 'model', description: 'pick the default model' },
+  { name: 'provider', description: 'manage model providers and custom endpoints' },
   { name: 'effort', description: 'set reasoning effort: off, high, or max' },
   { name: 'status', description: 'show full session and environment status' },
   { name: 'preset', description: 'select the agent preset for this blank session' },
@@ -100,6 +101,11 @@ export function handleLocalCommand(app, commandName, line = '') {
       break
     case 'model': {
       void app.openModelPicker()
+      break
+    }
+    case 'provider':
+    case 'providers': {
+      void app.openProviderPanel()
       break
     }
     case 'export':
