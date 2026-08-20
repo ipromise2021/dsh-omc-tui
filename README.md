@@ -57,9 +57,9 @@
 
 <div align="center">
 
-### 1. 终端启动与 4 行 Statusline
+### 1. 终端启动与 Statusline
 ![DSH OMC 终端运行主界面](assets/welcome.png)
-*欢迎卡片、4 行 Statusline 状态指示器与护眼调色板*
+*欢迎卡片、Statusline 状态指示器与护眼调色板*
 
 ---
 
