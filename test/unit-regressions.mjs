@@ -5,6 +5,8 @@ import { handleCompact } from '../src/commands/compact.js'
 import { renderMarkdownRows } from '../src/renderer/markdown.js'
 import { renderStatusRows } from '../src/renderer/statusline.js'
 import { renderJobPanel } from '../src/panels/jobs-panel.js'
+import { renderModelPicker } from '../src/panels/model-picker.js'
+import { renderQuestionPanel } from '../src/panels/question-panel.js'
 import { formatEvents } from '../src/renderer/transcript.js'
 import { ANSI, applyTheme } from '../src/renderer/themes.js'
 import { safe, visibleOf, widthOf } from '../src/renderer/ansi.js'
@@ -129,6 +131,358 @@ TuiApp.prototype.handleQuestionToken.call(confirmationApp, '\t')
 assert.equal(confirmationApp.questionPanel.selected, 0)
 TuiApp.prototype.handleQuestionToken.call(confirmationApp, '\r')
 assert.deepEqual(questionResult, { answers: [{ id: 'q1', selected: ['b'] }] })
+
+let customQuestionResult
+const customQuestionApp = {
+  input: '',
+  cursor: 0,
+  questionPanel: {
+    questions: [{ id: 'q-custom', question: 'Explain', options: [] }],
+    index: 0,
+    selected: 0,
+    selectedOptions: new Set(),
+    answers: [],
+    customs: [],
+    customModes: [],
+    customEditing: true
+  },
+  currentQuestion: TuiApp.prototype.currentQuestion,
+  insertQuestionText: TuiApp.prototype.insertQuestionText,
+  eraseQuestionText: TuiApp.prototype.eraseQuestionText,
+  saveCurrentQuestionAnswer: TuiApp.prototype.saveCurrentQuestionAnswer,
+  restoreCurrentQuestionAnswer: TuiApp.prototype.restoreCurrentQuestionAnswer,
+  answerQuestion: TuiApp.prototype.answerQuestion,
+  scheduleRender: noop,
+  finishQuestion(_error, answer) { customQuestionResult = answer }
+}
+TuiApp.prototype.handleQuestionToken.call(customQuestionApp, 'a')
+TuiApp.prototype.handleQuestionToken.call(customQuestionApp, '\x1b\r')
+TuiApp.prototype.handleQuestionToken.call(customQuestionApp, 'b')
+TuiApp.prototype.handleQuestionToken.call(customQuestionApp, '\r')
+TuiApp.prototype.handleQuestionToken.call(customQuestionApp, '\r')
+assert.deepEqual(customQuestionResult, { answers: [{ id: 'q-custom', selected: [], custom: 'a\nb' }] })
+
+const emojiQuestionApp = {
+  input: '😀x',
+  cursor: '😀x'.length,
+  questionPanel: {
+    questions: [{ id: 'q-emoji', options: [] }],
+    index: 0,
+    selected: 0,
+    selectedOptions: new Set(),
+    answers: [],
+    customs: ['😀x'],
+    customModes: [true],
+    customEditing: true
+  },
+  currentQuestion: TuiApp.prototype.currentQuestion,
+  eraseQuestionText: TuiApp.prototype.eraseQuestionText,
+  toggleCustomQuestionInput: TuiApp.prototype.toggleCustomQuestionInput,
+  scheduleRender: noop
+}
+TuiApp.prototype.eraseQuestionText.call(emojiQuestionApp)
+assert.deepEqual([emojiQuestionApp.input, emojiQuestionApp.cursor], ['😀', 2])
+TuiApp.prototype.insertQuestionText.call(emojiQuestionApp, '🚀')
+assert.deepEqual([emojiQuestionApp.input, emojiQuestionApp.cursor], ['😀🚀', 4])
+TuiApp.prototype.handleQuestionToken.call(emojiQuestionApp, '\x0f')
+assert.equal(emojiQuestionApp.questionPanel.customEditing, false)
+
+const emptyCustomRestoreApp = {
+  input: '',
+  cursor: 0,
+  questionPanel: {
+    questions: [{ id: 'q-empty', options: [] }],
+    index: 0,
+    selected: 0,
+    selectedOptions: new Set(),
+    answers: [],
+    customs: [],
+    customModes: []
+  },
+  currentQuestion: TuiApp.prototype.currentQuestion
+}
+TuiApp.prototype.restoreCurrentQuestionAnswer.call(emptyCustomRestoreApp)
+assert.deepEqual([emptyCustomRestoreApp.input, emptyCustomRestoreApp.cursor], ['', 0])
+
+let commandArgs
+const commandApp = {
+  ctx: {
+    commands: {
+      find: () => ({ input: { images: true } }),
+      async execute(...args) {
+        commandArgs = args
+        return { result: { kind: 'success', text: 'ok' } }
+      }
+    }
+  },
+  agent: {},
+  commandImages: TuiApp.prototype.commandImages,
+  pendingImages: [],
+  log: noop,
+  scheduleRender: noop,
+  message: ''
+}
+await TuiApp.prototype.runCommand.call(commandApp, '/goal inspect', [{ base64: 'AQ==', mediaType: 'image/png', name: 'one.png' }])
+assert.equal(commandArgs[1], '/goal inspect')
+assert.deepEqual(commandArgs[2], [{ data: 'AQ==', mediaType: 'image/png', name: 'one.png' }])
+assert.ok(commandArgs[3] instanceof AbortSignal)
+
+let planRoute
+const planCommandApp = {
+  ctx: {
+    commands: {
+      find: () => ({ input: { images: true } }),
+      async execute() {
+        planRoute = 'registry'
+        return { result: { kind: 'success', text: 'ok' } }
+      }
+    }
+  },
+  agent: {},
+  handleLocalCommand() { planRoute = 'local' },
+  commandImages: TuiApp.prototype.commandImages,
+  pendingImages: [],
+  log: noop,
+  scheduleRender: noop,
+  message: ''
+}
+await TuiApp.prototype.runCommand.call(planCommandApp, '/plan off')
+assert.equal(planRoute, 'registry')
+
+const failedCommandApp = {
+  ctx: {
+    commands: {
+      find: () => ({ input: { images: true } }),
+      async execute() {
+        return { result: { kind: 'error', text: 'rejected' } }
+      }
+    }
+  },
+  agent: {},
+  commandImages: TuiApp.prototype.commandImages,
+  pendingImages: [],
+  log: noop,
+  scheduleRender: noop,
+  message: ''
+}
+const failedImage = { base64: 'AQ==', mediaType: 'image/png', name: 'retry.png' }
+await TuiApp.prototype.runCommand.call(failedCommandApp, '/plan inspect', [failedImage])
+assert.deepEqual(failedCommandApp.pendingImages, [failedImage])
+
+let submittedImageMessage
+const imageSubmitApp = {
+  ctx: {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-v4-flash-vision-exp' }) },
+    get(name) {
+      return name === 'attachments' ? imageSubmitApp.attachmentsService : name === 'llm' ? imageSubmitApp.llmService : undefined
+    }
+  },
+  llmService: { resolveModelInfo: async () => ({ inputModalities: ['text', 'image'] }) },
+  attachmentsService: {
+    saveImages: async (inputs) => {
+      assert.equal(Buffer.from(inputs[0].data).toString(), 'x')
+      return [{ attachmentId: 'att-1', mediaType: 'image/png', bytes: 1, width: 1, height: 1 }]
+    }
+  },
+  expandFileReferences: async (text) => ({ text, missing: [] }),
+  persistImageDrafts: TuiApp.prototype.persistImageDrafts,
+  agent: { status: 'idle', followup(message) { submittedImageMessage = message } },
+  pendingImages: [],
+  scheduleRender: noop,
+  log: noop,
+  streamBuffer: '',
+  streamHeaderCommitted: false,
+  turnHeaderCommitted: false
+}
+await TuiApp.prototype.submitUserMessage.call(imageSubmitApp, 'inspect', [], [{
+  data: Buffer.from('x'),
+  base64: 'eA==',
+  filePath: '/tmp/private-image.png',
+  path: '/tmp/private-image.png',
+  mediaType: 'image/png'
+}])
+assert.equal(submittedImageMessage.content[0].attachment.attachmentId, 'att-1')
+assert.equal('base64' in submittedImageMessage.content[0].attachment, false)
+assert.equal('filePath' in submittedImageMessage.content[0].attachment, false)
+assert.deepEqual(submittedImageMessage.content[1], { type: 'text', text: 'inspect' })
+assert.equal(JSON.stringify(submittedImageMessage).includes('/tmp/private-image.png'), false)
+
+const failedImageSubmitApp = {
+  activeModel: { provider: 'deepseek', model: 'deepseek-v4-vision' },
+  ctx: { agentDefaultModel: { currentSelection: () => ({ provider: 'old', model: 'old' }) } },
+  llmService: { resolveModelInfo: async () => ({ inputModalities: ['text', 'image'] }) },
+  expandFileReferences: async (text) => ({ text, missing: [] }),
+  persistImageDrafts: async () => { throw new Error('storage unavailable') },
+  pendingImages: [],
+  input: '',
+  cursor: 0,
+  message: 'queued',
+  log: noop,
+  scheduleRender: noop
+}
+const retryImage = { data: Buffer.from('x'), mediaType: 'image/png' }
+await TuiApp.prototype.submitUserMessage.call(failedImageSubmitApp, 'keep this prompt', [], [retryImage])
+assert.equal(failedImageSubmitApp.input, 'keep this prompt')
+assert.equal(failedImageSubmitApp.cursor, 'keep this prompt'.length)
+assert.deepEqual(failedImageSubmitApp.pendingImages, [retryImage])
+
+let requestOverrideHandler
+const requestOverrideApp = {
+  disposers: [],
+  reasoningEffort: 'high',
+  activeModel: { provider: 'deepseek-official', model: 'deepseek-v4-vision' },
+  llmService: {
+    resolveModelInfo: async () => ({
+      inputModalities: ['text', 'image'],
+      reasoning: { efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' }
+    })
+  },
+  ctx: { agentDefaultModel: { currentSelection: () => ({ provider: 'old', model: 'old' }) } }
+}
+TuiApp.prototype.attachRequestOverride.call(requestOverrideApp, {
+  ctx: { on(_event, handler) { requestOverrideHandler = handler; return noop } }
+})
+const visionRequest = await requestOverrideHandler({}, async () => ({
+  provider: 'old',
+  model: 'old',
+  reasoningEffort: 'low',
+  messages: [{ content: [{ type: 'image', attachment: { attachmentId: 'att-vision' } }] }]
+}))
+assert.equal(visionRequest.messages[0].content[0].type, 'image')
+assert.equal(visionRequest.reasoningEffort, 'high')
+
+requestOverrideApp.reasoningEffort = undefined
+requestOverrideApp.activeModel = { provider: 'deepseek-official', model: 'deepseek-chat' }
+requestOverrideApp.llmService.resolveModelInfo = async () => ({ inputModalities: ['text'] })
+const textOnlyRequest = await requestOverrideHandler({}, async () => ({
+  provider: 'old',
+  model: 'old',
+  reasoningEffort: 'high',
+  messages: [{ content: [{ type: 'image', attachment: { attachmentId: 'att-text', name: 'diagram.png' } }] }]
+}))
+assert.equal('reasoningEffort' in textOnlyRequest, false)
+assert.deepEqual(textOnlyRequest.messages[0].content[0], { type: 'text', text: '[Attached Image: diagram.png]' })
+
+let bashCommand
+const bashImage = { data: Buffer.from('x'), mediaType: 'image/png' }
+const bashImageApp = {
+  agent: { session: { id: 'session-1' } },
+  input: '!pwd',
+  cursor: 4,
+  pendingImages: [bashImage],
+  history: [],
+  historyIndex: -1,
+  appendHistory: noop,
+  touchMru: noop,
+  runBash(command) { bashCommand = command },
+  pasteFolded: undefined,
+  help: false,
+  menu: undefined
+}
+TuiApp.prototype.submit.call(bashImageApp)
+assert.equal(bashCommand, 'pwd')
+assert.deepEqual(bashImageApp.pendingImages, [bashImage])
+
+const effortVariants = await TuiApp.prototype.reasoningVariants.call({
+  llmService: { resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'low', name: 'low', description: 'fast' }] } }) },
+  reasoningMetadata: TuiApp.prototype.reasoningMetadata
+}, 'deepseek-official', 'deepseek-v4-flash')
+assert.deepEqual(effortVariants, [{ id: 'low', label: 'low', desc: 'fast' }])
+
+const effortMetadata = await TuiApp.prototype.reasoningMetadata.call({
+  llmService: { resolveModelInfo: async () => ({ reasoning: { defaultEffort: 'off', efforts: [{ id: 'off', name: 'off' }] } }) }
+}, 'deepseek-official', 'deepseek-v4-flash')
+assert.equal(effortMetadata.defaultEffort, 'off')
+
+const noEffortMetadata = await TuiApp.prototype.reasoningMetadata.call({
+  llmService: { resolveModelInfo: async () => ({ name: 'plain-model' }) }
+}, 'provider', 'plain-model')
+assert.deepEqual(noEffortMetadata, { entries: [], defaultEffort: undefined })
+
+const modelSwitchApp = {
+  modelPicker: { entries: [{ provider: 'deepseek', model: 'vision', name: 'vision' }], selected: 0 },
+  reasoningEffort: 'medium',
+  ctx: { agentDefaultModel: { saveSelection: async () => {}, currentSelection: () => ({ provider: 'deepseek', model: 'vision' }) } },
+  llmService: { resolveModelInfo: async () => ({ reasoning: { defaultEffort: 'off', efforts: [{ id: 'off', name: 'off' }] } }) },
+  reasoningMetadata: TuiApp.prototype.reasoningMetadata,
+  log: noop,
+  scheduleRender: noop,
+  message: ''
+}
+await TuiApp.prototype.chooseModel.call(modelSwitchApp)
+assert.equal(modelSwitchApp.reasoningEffort, 'off')
+
+const narrowModelRows = renderModelPicker({
+  entries: [{
+    provider: 'deepseek-official',
+    model: 'deepseek-v4-flash-vision-exp',
+    name: 'DeepSeek V4 Flash Vision Experimental',
+    inputModalities: ['text', 'image']
+  }],
+  selected: 0
+}, { provider: 'other', model: 'other' }, 8, 60)
+assert.ok(narrowModelRows.every((row) => widthOf(visibleOf(row)) <= 60))
+
+const narrowQuestion = { id: 'q-narrow', question: 'Choose', options: ['one', 'two'] }
+const narrowQuestionRows = renderQuestionPanel({
+  questions: [narrowQuestion],
+  index: 0,
+  selected: 0,
+  selectedOptions: new Set(),
+  answers: [],
+  customs: [],
+  customEditing: false
+}, narrowQuestion, 60, 30)
+assert.ok(narrowQuestionRows.every((row) => widthOf(visibleOf(row)) <= 60))
+
+const normalizedJob = TuiApp.prototype.normalizeJobSnapshot.call({}, { jobId: 7, type: 'subagent', status: 'running', title: 'worker' })
+assert.deepEqual(normalizedJob, { jobId: 7, type: 'subagent', status: 'running', title: 'worker', id: '7', kind: 'subagent', label: 'worker', detail: 'worker' })
+
+const readJobApp = {
+  jobPanel: {
+    entries: [{ id: 'subagent-1', kind: 'subagent', label: 'worker', status: 'running' }],
+    selected: 0,
+    outputJobId: undefined,
+    output: undefined,
+    outputBusy: false,
+    outputError: undefined
+  },
+  agent: {},
+  localBackgroundJobs: [],
+  jobsService: {
+    read: async () => ({ text: 'worker output', snapshot: { id: 'subagent-1', kind: 'subagent', label: 'worker', status: 'completed', detail: 'done' } })
+  },
+  selectedJob: TuiApp.prototype.selectedJob,
+  jobOutputText: TuiApp.prototype.jobOutputText,
+  normalizeJobSnapshot: TuiApp.prototype.normalizeJobSnapshot,
+  scheduleRender: noop
+}
+await TuiApp.prototype.readSelectedJob.call(readJobApp)
+assert.equal(readJobApp.jobPanel.output, 'worker output')
+assert.equal(readJobApp.jobPanel.entries[0].status, 'completed')
+
+const killJobApp = {
+  jobPanel: {
+    entries: [{ id: 'subagent-2', kind: 'subagent', label: 'worker', status: 'completed' }],
+    selected: 0,
+    outputJobId: undefined,
+    output: undefined,
+    outputBusy: false,
+    outputError: undefined
+  },
+  agent: {},
+  localBackgroundJobs: [],
+  jobsService: {
+    kill: async () => 'already-finished',
+    list: () => [{ id: 'subagent-2', kind: 'subagent', label: 'worker', status: 'completed' }]
+  },
+  selectedJob: TuiApp.prototype.selectedJob,
+  jobSnapshots: TuiApp.prototype.jobSnapshots,
+  normalizeJobSnapshot: TuiApp.prototype.normalizeJobSnapshot,
+  scheduleRender: noop
+}
+await TuiApp.prototype.killSelectedJob.call(killJobApp)
+assert.equal(killJobApp.jobPanel.output, 'already finished · subagent-2')
 
 const turnLifecycleApp = {
   active: false,

@@ -8,7 +8,7 @@
 2. 业务写入走官方 API：不要由 TUI 直接篡改 session log、权限状态、模型状态或 Harness 配置文件。
 3. durable event 是可重放状态的依据：恢复会话时，应由事件重建 UI，而不是使用未持久化的内存缓存猜测状态。
 4. 可选服务须 capability-detect：服务未挂载时显示明确提示或关闭该入口，不能静默伪造结果。
-5. Harness 仍为 developer preview：每次升级 `@deepseek-ai/dsh` 后，须复核 patch、注入服务、事件 payload，并运行 mock/PTY 回归。
+5. Harness 仍为 developer preview：当前已验证 `@deepseek-ai/dsh@0.1.1-rc.1`；每次升级后，须复核 patch、注入服务、命令签名、事件 payload，并运行 mock/PTY 回归。
 
 ## 已适配的 Harness 能力
 
@@ -16,14 +16,15 @@
 | --- | --- | --- |
 | 创建、恢复和提交对话 | `ctx.agents`、`ctx.sessions`、`sessionPersistence`、`sessionQuery` | `agents.create/resume`、`agent.followup`、durable `session/event` |
 | 流式输出、reasoning、工具调用、usage | `session/event`、`agent/status` | durable 消息/工具/usage 事件与 agent 状态 |
-| 模型与 effort | `ctx.llm`、`agentDefaultModel` | 模型列表/信息、request override、默认模型选择 |
+| 模型与 effort | `ctx.llm`、`agentDefaultModel` | `inputModalities` 视觉能力、动态 reasoning efforts、request override、默认模型选择 |
 | Agent preset 与 plan/build | `agentPresets`、`planMode` | preset mount/recompose 与 durable preset/plan 事件 |
 | 权限审批 | `permissionPresets`、`approval/request` | 预设服务、审批回调、durable permission 事件 |
 | Slash 命令 | `ctx.commands` | 官方 command registry 的 find/list/execute |
 | Skills | `ctx.skills` | 官方 skill registry；技能选择仅回填输入，由 Harness tool 注入 |
-| 图片附件 | `ctx.attachments` | `saveImage` 生成官方 attachment ref，再随消息提交 |
-| 问卷 | `ctx.userQuestions` + `dsh-tool-ask-user` | TUI 注册 provider，回答交由官方工具回合继续处理 |
-| 后台任务 | `ctx.jobs` | list/read/kill/onJobsChanged；不自行制造百分比进度 |
+| 图片附件 | `ctx.attachments` | 粘贴时 `validateImage`；普通消息提交时批量 `saveImages`，命令图片由 registry admission 负责；durable ref 不携带 base64/本地路径 |
+| 问卷 | `ctx.userQuestions` + `dsh-tool-ask-user` | TUI 注册 provider，支持选项、`custom` 自由文本和多行回答 |
+| 后台任务 | `ctx.jobs` | list/read/kill/onJobsChanged；归一化 bash、subagent、workflow 等任务快照，不自行制造百分比进度 |
+| 图片命令 | `ctx.commands` + `ctx.attachments` | 以新版 `execute(agent, line, images, signal)` 传递 `/goal`、官方 `/plan` 等命令图片附件；准入失败保留 composer draft |
 | TUI 设置 | `ctx.settings` / settings-file | `dsh-omc-tui` namespace，主题与输入历史偏好持久化到 `$DSH_HOME/settings.yaml` |
 
 ## 允许保留在 TUI 本地的内容

@@ -18,7 +18,7 @@ export const LOCAL_COMMANDS = [
   { name: 'resume', description: 'pick a past session to resume' },
   { name: 'model', description: 'pick the default model' },
   { name: 'provider', description: 'manage model providers and custom endpoints' },
-  { name: 'effort', description: 'set reasoning effort: off, high, or max' },
+  { name: 'effort', description: 'set the model-specific reasoning effort' },
   { name: 'status', description: 'show full session and environment status' },
   { name: 'preset', description: 'select the agent preset for this blank session' },
   { name: 'settings', description: 'configure TUI theme and local preferences' },

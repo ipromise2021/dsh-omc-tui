@@ -148,7 +148,7 @@ export class TuiApp {
     this.pendingApproval = undefined
     this.approvalQueue = []
     this.questionPanel = undefined // { questions, index, selected, selectedOptions, answers, resolve, reject, abortCleanup }
-    this.pendingImages = [] // ImageAttachmentRef[] waiting for the next submit
+    this.pendingImages = [] // ImageDraft[] waiting for the next submit
     this.imageParser = new ImageParser()
     this.currentFileQuery = undefined
 
@@ -604,14 +604,31 @@ export class TuiApp {
     this.disposers.push(agent.ctx.on('agent/request', async (_payload, next) => {
       const request = await next()
       let result = request
-      if (this.reasoningEffort !== undefined) result = { ...result, reasoningEffort: this.reasoningEffort }
       if (this.activeModel) result = { ...result, provider: this.activeModel.provider, model: this.activeModel.model }
 
       const provider = result?.provider ?? this.ctx.agentDefaultModel?.currentSelection?.()?.provider ?? ''
       const model = result?.model ?? this.ctx.agentDefaultModel?.currentSelection?.()?.model ?? ''
       const isDeepSeek = /deepseek/i.test(provider) || /deepseek/i.test(model)
+      let modelInfo
+      try {
+        modelInfo = await this.llmService?.resolveModelInfo?.(provider, model)
+      } catch {}
 
-      if (isDeepSeek && Array.isArray(result.messages)) {
+      if (modelInfo && modelInfo.reasoning === undefined) {
+        const { reasoningEffort: _staleEffort, ...withoutReasoningEffort } = result
+        result = withoutReasoningEffort
+      } else if (this.reasoningEffort !== undefined) {
+        result = { ...result, reasoningEffort: this.reasoningEffort }
+      }
+
+      const supportsImages = Array.isArray(modelInfo?.inputModalities)
+        ? modelInfo.inputModalities.includes('image')
+        : undefined
+      const shouldDowngradeImages = supportsImages === false || (
+        supportsImages === undefined && isDeepSeek && !/vision/i.test(model)
+      )
+
+      if (shouldDowngradeImages && Array.isArray(result.messages)) {
         result = {
           ...result,
           messages: result.messages.map((msg) => {
@@ -619,8 +636,8 @@ export class TuiApp {
             const sanitized = []
             for (const item of msg.content) {
               if (item && item.type === 'image') {
-                const imgPath = item.attachment?.filePath || item.attachment?.path || item.attachment?.id || 'attached image'
-                sanitized.push({ type: 'text', text: `[Attached Image: ${imgPath}]` })
+                const imageLabel = item.attachment?.name || item.attachment?.attachmentId || 'attached image'
+                sanitized.push({ type: 'text', text: `[Attached Image: ${imageLabel}]` })
               } else {
                 sanitized.push(item)
               }
@@ -1159,38 +1176,32 @@ export class TuiApp {
 
   async acceptImage(image) {
     const bytes = image.data?.length ?? 0
-    let filePath = image.filePath
-    if (!filePath && image.data) {
-      try {
-        const attachDir = join(this.stateDir(), 'attachments')
-        await mkdir(attachDir, { recursive: true })
-        filePath = join(attachDir, `image-${Date.now()}-${Math.floor(Math.random() * 1000)}.png`)
-        await writeFile(filePath, image.data)
-      } catch {}
-    }
     const attachments = this.attachmentsService
-    let ref
-    if (typeof attachments?.validateImage === 'function' && typeof attachments?.saveImage === 'function') {
+    if (typeof attachments?.validateImage === 'function') {
       try {
         await attachments.validateImage(image)
-        ref = await attachments.saveImage(image)
-      } catch {}
-    }
-    if (!ref) {
-      ref = {
-        id: `img-${Date.now()}`,
-        name: image.name || 'clipboard.png',
-        bytes,
-        mediaType: image.mediaType || 'image/png',
-        data: image.data,
-        base64: image.data ? image.data.toString('base64') : undefined,
-        width: image.width,
-        height: image.height
+      } catch (error) {
+        this.log('error', error instanceof Error ? error.message : String(error), 'Cmd+V')
+        this.scheduleRender()
+        return
       }
     }
-    ref.filePath = filePath || ref.filePath || ref.path
-    ref.path = ref.filePath
-    this.pendingImages.push(ref)
+    const filePath = image.filePath || image.path
+    const data = image.data ? Buffer.from(image.data) : undefined
+    const base64 = typeof image.base64 === 'string'
+      ? image.base64
+      : data ? data.toString('base64') : undefined
+    this.pendingImages.push({
+      data,
+      base64,
+      name: image.name || 'clipboard.png',
+      bytes,
+      mediaType: image.mediaType || 'image/png',
+      width: image.width,
+      height: image.height,
+      filePath,
+      path: filePath
+    })
     this.scheduleRender()
   }
 
@@ -1310,6 +1321,9 @@ export class TuiApp {
         selected: 0,
         selectedOptions: new Set(),
         answers: [],
+        customs: [],
+        customModes: [],
+        customEditing: (questions[0]?.options?.length ?? 0) === 0,
         resolve,
         reject,
         abortCleanup: undefined
@@ -1350,9 +1364,14 @@ export class TuiApp {
     const panel = this.questionPanel
     const question = this.currentQuestion()
     if (!panel) return
+    panel.customs ??= []
+    panel.customModes ??= []
     if (!question) {
       panel.selected = 0
       panel.selectedOptions = new Set()
+      panel.customEditing = false
+      this.input = ''
+      this.cursor = 0
       return
     }
     const options = Array.isArray(question.options) ? question.options : []
@@ -1368,6 +1387,46 @@ export class TuiApp {
     }
     panel.selectedOptions = selectedOptions
     panel.selected = [...selectedOptions][0] ?? 0
+    panel.customs[panel.index] = answer?.custom ?? panel.customs[panel.index] ?? ''
+    panel.customEditing = panel.customModes[panel.index] ?? options.length === 0
+    this.input = panel.customEditing ? (panel.customs[panel.index] ?? '') : ''
+    this.cursor = this.input.length
+  }
+
+  toggleCustomQuestionInput() {
+    const panel = this.questionPanel
+    const question = this.currentQuestion()
+    if (!panel || !question) return
+    panel.customs ??= []
+    panel.customModes ??= []
+    if (panel.customEditing) panel.customs[panel.index] = this.input
+    panel.customEditing = !panel.customEditing
+    panel.customModes[panel.index] = panel.customEditing
+    this.input = panel.customEditing ? panel.customs[panel.index] ?? '' : ''
+    this.cursor = this.input.length
+    this.scheduleRender()
+  }
+
+  insertQuestionText(text) {
+    const panel = this.questionPanel
+    if (!panel || !panel.customEditing) return
+    const value = String(text ?? '')
+    const cursor = alignCodePoint(this.input, this.cursor, -1)
+    this.input = `${this.input.slice(0, cursor)}${value}${this.input.slice(cursor)}`
+    this.cursor = cursor + value.length
+    panel.customs[panel.index] = this.input
+    this.scheduleRender()
+  }
+
+  eraseQuestionText() {
+    const panel = this.questionPanel
+    if (!panel || !panel.customEditing || this.cursor <= 0) return
+    const cursor = alignCodePoint(this.input, this.cursor, -1)
+    const start = alignCodePoint(this.input, Math.max(0, cursor - 1), -1)
+    this.input = `${this.input.slice(0, start)}${this.input.slice(cursor)}`
+    this.cursor = start
+    panel.customs[panel.index] = this.input
+    this.scheduleRender()
   }
 
   toggleQuestionOption(index) {
@@ -1390,6 +1449,7 @@ export class TuiApp {
     if (!panel) return
     const question = this.currentQuestion()
     if (!question) return
+    panel.customs ??= []
     const options = Array.isArray(question.options) ? question.options : []
     if (options.length > 0 && panel.selectedOptions.size === 0 && !question.multiSelect && !question.multi_select) {
       panel.selectedOptions.add(panel.selected)
@@ -1402,7 +1462,15 @@ export class TuiApp {
         return String(opt?.label ?? opt?.value ?? opt?.text ?? '')
       })
       .filter(Boolean)
-    panel.answers[panel.index] = { id: String(question.id ?? `question-${panel.index + 1}`), selected }
+    const custom = panel.customEditing ? this.input : ''
+    panel.customs[panel.index] = custom ?? ''
+    const hasCustom = typeof custom === 'string' && custom.trim().length > 0
+    const answerSelected = hasCustom && !question.multiSelect && !question.multi_select ? [] : selected
+    panel.answers[panel.index] = {
+      id: String(question.id ?? `question-${panel.index + 1}`),
+      selected: answerSelected,
+      ...(hasCustom ? { custom } : {})
+    }
   }
 
   answerQuestion() {
@@ -1442,6 +1510,52 @@ export class TuiApp {
         this.agent.cancel({ kind: 'user' })
       }
       this.scheduleRender()
+      return
+    }
+
+    if (!isConfirmTab && value === '\x0f') {
+      this.toggleCustomQuestionInput()
+      return
+    }
+
+    if (!isConfirmTab && panel.customEditing) {
+      if (value === '\r') {
+        this.answerQuestion()
+        return
+      }
+      if (value === '\x1b\r' || value === '\n' || value === '\x1b[13;2u' || value === '\x1b[27;2;13~') {
+        this.insertQuestionText('\n')
+        return
+      }
+      if (value === '\x7f' || value === '\x08') {
+        this.eraseQuestionText()
+        return
+      }
+      if (value === '\x1b[D' || value === '\x1bOD') {
+        this.cursor = alignCodePoint(this.input, Math.max(0, this.cursor - 1), -1)
+        this.scheduleRender()
+        return
+      }
+      if (value === '\x1b[C' || value === '\x1bOC') {
+        this.cursor = alignCodePoint(this.input, Math.min(this.input.length, this.cursor + 1), 1)
+        this.scheduleRender()
+        return
+      }
+      if (value === '\t') {
+        this.saveCurrentQuestionAnswer()
+        panel.index = (panel.index + 1) % totalTabs
+        this.restoreCurrentQuestionAnswer()
+        this.scheduleRender()
+        return
+      }
+      if (value.length > 0 && !/[\p{Cc}\p{Cs}]/u.test(value)) {
+        this.insertQuestionText(value)
+        return
+      }
+    }
+
+    if (!isConfirmTab && value === 'o') {
+      this.toggleCustomQuestionInput()
       return
     }
 
@@ -1607,9 +1721,11 @@ export class TuiApp {
           this.scheduleRender()
           return
         }
+        const images = this.pendingImages.slice()
+        this.pendingImages = []
         this.input = ''
         this.cursor = 0
-        void this.runCommand(`/${selected.name}`)
+        void this.runCommand(`/${selected.name}`, images)
         return
       }
     }
@@ -1630,6 +1746,7 @@ export class TuiApp {
     this.pendingImages = []
 
     if (prompt.startsWith('!') && !prompt.startsWith('!!')) {
+      if (images.length > 0) this.pendingImages = [...images, ...this.pendingImages]
       this.runBash(prompt.slice(1).trim())
       return
     }
@@ -1647,7 +1764,7 @@ export class TuiApp {
         void this.submitUserMessage(prompt, [], images)
         return
       }
-      void this.runCommand(firstLine)
+      void this.runCommand(prompt, images)
       return
     }
     this.message = 'queued'
@@ -1659,22 +1776,43 @@ export class TuiApp {
     const { text, missing } = await this.expandFileReferences(prompt)
     for (const path of missing) this.log('error', `@${path} not found`)
 
-    // Check if current LLM model adapter supports native vision content blocks
-    const selection = this.ctx.agentDefaultModel?.currentSelection?.()
+    // Check if current LLM model adapter supports native vision content blocks.
+    // DSH rc.1 exposes this through inputModalities; keep the model-name
+    // fallback for adapters that do not return exact metadata.
+    const selection = this.activeModel ?? this.ctx.agentDefaultModel?.currentSelection?.()
     const isDeepSeek = /deepseek/i.test(selection?.provider ?? '') || /deepseek/i.test(selection?.model ?? '')
-    let supportsNativeVision = !isDeepSeek
+    let supportsNativeVision = !isDeepSeek || /vision/i.test(selection?.model ?? '')
     if (this.llmService?.resolveModelInfo) {
       try {
         const info = await this.llmService.resolveModelInfo(selection?.provider, selection?.model)
-        if (info?.capabilities && typeof info.capabilities.vision === 'boolean') {
+        if (Array.isArray(info?.inputModalities)) {
+          supportsNativeVision = info.inputModalities.includes('image')
+        } else if (info?.capabilities && typeof info.capabilities.vision === 'boolean') {
+          // Compatibility with older adapters.
           supportsNativeVision = info.capabilities.vision
         }
       } catch {}
     }
 
     if (supportsNativeVision && images.length > 0) {
-      for (const attachment of images) {
-        content.push({ type: 'image', attachment })
+      let persisted
+      try {
+        persisted = await this.persistImageDrafts(images)
+      } catch (error) {
+        this.pendingImages = [...images, ...(this.pendingImages ?? [])]
+        if (prompt) {
+          this.input = this.input
+            ? `${prompt}\n${this.input}`
+            : prompt
+        }
+        this.cursor = this.input.length
+        this.message = ''
+        this.log('error', error instanceof Error ? error.message : String(error), 'image attachment')
+        this.scheduleRender()
+        return
+      }
+      for (const { ref } of persisted) {
+        content.push({ type: 'image', attachment: ref })
       }
     }
 
@@ -1689,8 +1827,25 @@ export class TuiApp {
       fullText = fullText ? `${ctxBlock}\n\n${fullText}` : ctxBlock
       this.pendingBashContext = undefined
     }
-    if (images.length > 0) {
-      const paths = images.map((img) => img.filePath || img.path).filter(Boolean)
+    if (!supportsNativeVision && images.length > 0) {
+      const paths = []
+      for (const image of images) {
+        const path = image.filePath || image.path || await this.materializeImageDraft(image)
+        if (!path) {
+          this.pendingImages = [...images, ...(this.pendingImages ?? [])]
+          if (prompt) {
+            this.input = this.input
+              ? `${prompt}\n${this.input}`
+              : prompt
+          }
+          this.cursor = this.input.length
+          this.message = ''
+          this.log('error', 'unable to prepare image fallback for this model', 'image attachment')
+          this.scheduleRender()
+          return
+        }
+        paths.push(path)
+      }
       if (paths.length > 0) {
         const imageInfo = paths.map((p) => `[Attached Image: ${p}]`).join('\n')
         fullText = fullText ? `${imageInfo}\n${fullText}` : imageInfo
@@ -1707,17 +1862,91 @@ export class TuiApp {
     this.scheduleRender()
   }
 
-  async runCommand(line) {
+  commandImages(images = []) {
+    return images.map((image) => {
+      const raw = image?.data
+      const data = typeof image?.base64 === 'string'
+        ? image.base64
+        : raw && typeof raw !== 'string'
+          ? Buffer.from(raw).toString('base64')
+          : typeof raw === 'string'
+            ? raw
+            : ''
+      if (!data) return undefined
+      return {
+        mediaType: image.mediaType || 'image/png',
+        data,
+        ...(image.name ? { name: image.name } : {})
+      }
+    }).filter(Boolean)
+  }
+
+  async materializeImageDraft(image) {
+    if (image?.filePath || image?.path) return image.filePath || image.path
+    const data = image?.data ?? (typeof image?.base64 === 'string' ? Buffer.from(image.base64, 'base64') : undefined)
+    if (!data || data.length === 0) return undefined
+    try {
+      const attachDir = join(this.stateDir(), 'attachments')
+      await mkdir(attachDir, { recursive: true })
+      const filePath = join(attachDir, `image-${Date.now()}-${Math.floor(Math.random() * 1000)}.png`)
+      await writeFile(filePath, data)
+      return filePath
+    } catch {
+      return undefined
+    }
+  }
+
+  async persistImageDrafts(images = []) {
+    const attachments = this.attachmentsService
+    if (!attachments) throw new Error('image attachments are not available in this profile')
+    const inputs = images.map((image) => {
+      const data = image?.data instanceof Uint8Array
+        ? image.data
+        : typeof image?.base64 === 'string'
+          ? Buffer.from(image.base64, 'base64')
+          : undefined
+      if (!data || data.length === 0) throw new Error('image attachment data is missing')
+      return {
+        data,
+        mediaType: image.mediaType || 'image/png',
+        ...(image.name ? { name: image.name } : {})
+      }
+    })
+    let refs
+    if (typeof attachments.saveImages === 'function') {
+      refs = await attachments.saveImages(inputs)
+    } else if (typeof attachments.saveImage === 'function') {
+      refs = []
+      for (const input of inputs) refs.push(await attachments.saveImage(input))
+    } else {
+      throw new Error('image attachments are not available in this profile')
+    }
+    if (!Array.isArray(refs) || refs.length !== images.length) {
+      throw new Error('image attachment storage returned an incomplete batch')
+    }
+    return images.map((draft, index) => ({ draft, ref: refs[index] }))
+  }
+
+  async runCommand(line, images = []) {
     const namePart = line.trimStart().split(/\s+/)[0] ?? ''
     const commandName = namePart.replace(/^\/+/, '').toLowerCase()
     const local = LOCAL_COMMANDS.find((entry) => entry.name === commandName)
-    if (local) {
+    const registry = this.ctx.commands
+    const found = registry?.find(this.agent, commandName)
+    const useRegistryCommand = commandName === 'plan' && Boolean(found)
+    const useRegistryForImages = images.length > 0 && found?.input?.images === true
+    if (local && !useRegistryCommand && !useRegistryForImages) {
+      if (images.length > 0) {
+        this.pendingImages = [...images, ...(this.pendingImages ?? [])]
+        this.log('error', `/${commandName} does not accept image attachments`, `/${commandName}`)
+        this.scheduleRender()
+        return
+      }
       this.handleLocalCommand(local.name, line)
       return
     }
-    const registry = this.ctx.commands
-    const found = registry?.find(this.agent, commandName)
     if (!found) {
+      if (images.length > 0) this.pendingImages = [...images, ...(this.pendingImages ?? [])]
       this.log('error', `unknown command`, `/${commandName}`)
       this.scheduleRender()
       return
@@ -1727,18 +1956,28 @@ export class TuiApp {
     const controller = new AbortController()
     const onInterrupt = () => controller.abort()
     process.stdin.once('data', onInterrupt)
+    let restoreImages = false
     try {
-      const execution = await registry.execute(this.agent, line, controller.signal)
+      const encodedImages = this.commandImages(images)
+      if (encodedImages.length !== images.length) restoreImages = true
+      const execution = await registry.execute(this.agent, line, encodedImages, controller.signal)
       const result = execution?.result
       if (result?.kind === 'success') {
         this.log('ok', result.text ?? 'done', `/${commandName}`)
       } else if (result?.kind === 'error') {
+        restoreImages = true
         this.log('error', result.text ?? 'failed', `/${commandName}`)
+      } else {
+        restoreImages = true
       }
     } catch (error) {
+      restoreImages = true
       this.log('error', error instanceof Error ? error.message : String(error), `/${commandName}`)
     } finally {
       process.stdin.off('data', onInterrupt)
+      if (restoreImages && images.length > 0) {
+        this.pendingImages = [...images, ...(this.pendingImages ?? [])]
+      }
       this.message = ''
       this.scheduleRender()
     }
@@ -1748,14 +1987,46 @@ export class TuiApp {
     handleLocalCommand(this, commandName, line)
   }
 
-  async openEffortPicker() {
-    const liveModel = this.activeModel ?? this.ctx.agentDefaultModel.currentSelection()
-    const variants = [
+  async reasoningVariants(provider, model) {
+    return (await this.reasoningMetadata(provider, model)).entries
+  }
+
+  async reasoningMetadata(provider, model) {
+    const fallback = [
       { id: 'default', label: 'default', desc: '标准模式 (极速响应 · 无多余思考)' },
+      { id: 'low', label: 'low', desc: '轻量思考 (低延迟 · 适合简单任务)' },
       { id: 'high', label: 'high', desc: '深度思考 (Deep Reasoning · 推荐)' },
       { id: 'max', label: 'max', desc: '最大思考预算 (Ultra Depth · 攻坚复杂问题)' }
     ]
-    let sel = variants.findIndex((v) => v.id.toLowerCase() === (this.reasoningEffort ?? 'high').toLowerCase())
+    try {
+      const info = await this.llmService?.resolveModelInfo?.(provider, model)
+      const efforts = info?.reasoning?.efforts
+      if (Array.isArray(efforts) && efforts.length > 0) {
+        return {
+          entries: efforts.map((effort) => ({
+            id: String(effort.id),
+            label: String(effort.name ?? effort.id),
+            desc: effort.description ?? ''
+          })),
+          defaultEffort: info?.reasoning?.defaultEffort
+            ? String(info.reasoning.defaultEffort)
+            : undefined
+        }
+      }
+      if (info) return { entries: [], defaultEffort: undefined }
+    } catch {}
+    return { entries: fallback, defaultEffort: 'default' }
+  }
+
+  async openEffortPicker() {
+    const liveModel = this.activeModel ?? this.ctx.agentDefaultModel.currentSelection()
+    const metadata = await this.reasoningMetadata(liveModel.provider, liveModel.model)
+    const variants = metadata.entries
+    if (variants.length === 0) {
+      this.log('ok', 'the current model does not expose selectable reasoning efforts', '/effort')
+      return
+    }
+    let sel = variants.findIndex((v) => v.id.toLowerCase() === (this.reasoningEffort ?? metadata.defaultEffort ?? 'high').toLowerCase())
     if (sel === -1) sel = 0
     this.variantPicker = {
       provider: liveModel.provider,
@@ -2053,7 +2324,9 @@ export class TuiApp {
       this.scheduleRender()
       return
     }
-    void this.runCommand(`/${item.name}`)
+    const images = this.pendingImages.slice()
+    this.pendingImages = []
+    void this.runCommand(`/${item.name}`, images)
   }
 
   updateHistorySearch() {
@@ -2091,7 +2364,11 @@ export class TuiApp {
           entries.push({
             provider: provider.id,
             model: entry.id ?? entry.name ?? entry.model,
-            name: entry.name ?? entry.id ?? entry.model
+            name: entry.name ?? entry.id ?? entry.model,
+            description: entry.description,
+            inputModalities: entry.inputModalities,
+            contextWindow: entry.contextWindow,
+            maxTokens: entry.maxTokens
           })
         }
       }
@@ -2107,7 +2384,11 @@ export class TuiApp {
                     entries.push({
                       provider: routeId,
                       model: m.id,
-                      name: m.name || m.id
+                      name: m.name || m.id,
+                      description: m.description,
+                      inputModalities: m.inputModalities,
+                      contextWindow: m.contextWindow,
+                      maxTokens: m.maxTokens
                     })
                   }
                 }
@@ -2143,12 +2424,19 @@ export class TuiApp {
       await this.ctx.agentDefaultModel.saveSelection({ provider: entry.provider, model: entry.model })
       this.activeModel = { provider: entry.provider, model: entry.model }
       this.log('ok', `${entry.provider}/${entry.model} (active now · new sessions default)`, '/model')
-      const variants = [
-        { id: 'default', label: 'default', desc: '标准模式 (极速响应 · 无多余思考)' },
-        { id: 'high', label: 'high', desc: '深度思考 (Deep Reasoning · 推荐)' },
-        { id: 'max', label: 'max', desc: '最大思考预算 (Ultra Depth · 攻坚复杂问题)' }
-      ]
-      let sel = variants.findIndex((v) => v.id.toLowerCase() === (this.reasoningEffort ?? 'high').toLowerCase())
+      const metadata = await this.reasoningMetadata(entry.provider, entry.model)
+      const variants = metadata.entries
+      if (variants.length === 0) {
+        this.reasoningEffort = undefined
+        this.message = ''
+        this.scheduleRender()
+        return
+      }
+      const requestedEffort = this.reasoningEffort
+      const supported = requestedEffort && variants.some((variant) => variant.id.toLowerCase() === requestedEffort.toLowerCase())
+      const effectiveEffort = supported ? requestedEffort : metadata.defaultEffort ?? variants[0]?.id
+      if (effectiveEffort) this.reasoningEffort = effectiveEffort
+      let sel = variants.findIndex((v) => v.id.toLowerCase() === (effectiveEffort ?? 'high').toLowerCase())
       if (sel === -1) sel = 0
       this.variantPicker = {
         provider: entry.provider,
@@ -2895,11 +3183,30 @@ export class TuiApp {
     this.scheduleRender(true)
   }
 
+  normalizeJobSnapshot(job) {
+    if (!job || typeof job !== 'object') return undefined
+    const id = job.id ?? job.jobId
+    if (id === undefined || id === null) return undefined
+    const kind = job.kind ?? job.type ?? 'job'
+    const label = job.label ?? job.name ?? job.title
+    return {
+      ...job,
+      id: String(id),
+      kind: String(kind),
+      status: String(job.status ?? 'unknown'),
+      ...(label !== undefined ? { label: String(label) } : {}),
+      detail: String(job.detail ?? label ?? kind)
+    }
+  }
+
   jobSnapshots() {
     let remote = []
     try {
       remote = this.jobsService?.list?.(this.agent) ?? []
     } catch {}
+    const normalizedRemote = (Array.isArray(remote) ? remote : [])
+      .map((job) => this.normalizeJobSnapshot(job))
+      .filter(Boolean)
     const local = (this.localBackgroundJobs ?? []).map((job) => ({
       id: job.id,
       kind: 'bash',
@@ -2912,7 +3219,7 @@ export class TuiApp {
       elapsedMs: job.elapsedMs,
       durationMs: job.durationMs
     }))
-    return [...remote, ...local]
+    return [...normalizedRemote, ...local]
   }
 
   ensureJobStatusTimer() {
@@ -2984,8 +3291,10 @@ export class TuiApp {
     try {
       const result = await this.jobsService.read(entry.id, this.agent)
       panel.output = this.jobOutputText(result) || '(no new output)'
-      if (result?.job) {
-        panel.entries = panel.entries.map((item) => item.id === result.job.id ? result.job : item)
+      const snapshot = result?.snapshot ?? result?.job
+      if (snapshot) {
+        const job = this.normalizeJobSnapshot(snapshot)
+        if (job) panel.entries = panel.entries.map((item) => item.id === job.id ? job : item)
       }
     } catch (error) {
       panel.outputError = error instanceof Error ? error.message : String(error)
@@ -3027,10 +3336,16 @@ export class TuiApp {
     this.scheduleRender()
     try {
       const result = await this.jobsService.kill(entry.id, this.agent, 'cancelled from TUI')
-      const outcome = result?.outcome === 'already-finished' ? 'already finished' : 'cancellation requested'
+      const outcome = result === 'already-finished' || result?.outcome === 'already-finished'
+        ? 'already finished'
+        : 'cancellation requested'
       panel.output = `${outcome} · ${entry.id}`
-      if (result?.job) {
-        panel.entries = panel.entries.map((item) => item.id === result.job.id ? result.job : item)
+      const snapshot = result?.snapshot ?? result?.job
+      if (snapshot) {
+        const job = this.normalizeJobSnapshot(snapshot)
+        if (job) panel.entries = panel.entries.map((item) => item.id === job.id ? job : item)
+      } else {
+        panel.entries = this.jobSnapshots()
       }
     } catch (error) {
       panel.outputError = error instanceof Error ? error.message : String(error)
@@ -4337,7 +4652,9 @@ export class TuiApp {
     for (const entry of local) merged.set(entry.name, { ...entry, kind: 'command' })
     for (const entry of remote) {
       if (entry.name === 'quit') continue
-      if (!merged.has(entry.name)) merged.set(entry.name, { name: entry.name, description: entry.description, kind: 'command' })
+      if (entry.name === 'plan' || !merged.has(entry.name)) {
+        merged.set(entry.name, { name: entry.name, description: entry.description, input: entry.input, kind: 'command' })
+      }
     }
     for (const entry of this.skills) {
       if (!merged.has(entry.name)) merged.set(entry.name, entry)
@@ -4525,7 +4842,10 @@ export class TuiApp {
       return [`${prompt}${ANSI.muted}starting session…${ANSI.reset}`]
     }
     if (this.questionPanel) {
-      return [`${prompt}${ANSI.muted}choose an option above · number keys or ↑↓ · Enter submit${ANSI.reset}`]
+      const hint = this.questionPanel.customEditing
+        ? 'type a custom answer · Ctrl+O close custom · Shift+Enter newline · Enter submit'
+        : 'choose an option · o custom answer · ↑↓ navigate · Enter submit'
+      return [`${prompt}${ANSI.muted}${truncateWidth(hint, Math.max(10, columns - prefixWidth - 1))}${ANSI.reset}`]
     }
     if (this.commandPalette) {
       const query = this.commandPalette.query

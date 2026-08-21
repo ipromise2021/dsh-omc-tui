@@ -7,7 +7,8 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
 
   const tabItems = panel.questions.map((q, qIndex) => {
     const ans = panel.answers?.[qIndex]?.selected
-    const hasAns = (ans && ans.length > 0) || (qIndex === panel.index && panel.selectedOptions?.size > 0)
+    const custom = panel.answers?.[qIndex]?.custom ?? panel.customs?.[qIndex]
+    const hasAns = (ans && ans.length > 0) || Boolean(custom) || (qIndex === panel.index && panel.selectedOptions?.size > 0)
     const marker = hasAns ? '☑' : '☐'
     const title = safe(q.header || q.title || q.id || ((q.multiSelect || q.multi_select) ? `多选设置 ${qIndex + 1}` : `单项选择 ${qIndex + 1}`))
     if (qIndex === panel.index && !isConfirmTab) {
@@ -34,7 +35,7 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
     let answeredCount = 0
     for (let i = 0; i < panel.questions.length; i++) {
       const ans = panel.answers?.[i]?.selected
-      if (ans && ans.length > 0) answeredCount++
+      if ((ans && ans.length > 0) || panel.answers?.[i]?.custom) answeredCount++
     }
     const allAnswered = answeredCount === panel.questions.length
 
@@ -47,13 +48,22 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
       const q = panel.questions[qIdx]
       const qPrompt = safe(q.question || q.header || q.title || `Question ${qIdx + 1}`)
       const chosen = panel.answers?.[qIdx]?.selected ?? []
+      const custom = panel.answers?.[qIdx]?.custom
       lines.push(`  ${ANSI.dim}●${ANSI.reset} ${ANSI.ink}${qPrompt}${ANSI.reset}`)
       if (chosen.length > 0) {
         for (const item of chosen) {
           lines.push(`    ${ANSI.blueSoft}→ ${safe(item)}${ANSI.reset}`)
         }
-      } else {
+      } else if (!custom) {
         lines.push(`    ${ANSI.dim}→ (unanswered / default)${ANSI.reset}`)
+      }
+      if (custom) {
+        const customLines = String(custom).split('\n')
+          .flatMap((line) => wrap(safe(line), Math.max(20, columns - 8)))
+          .slice(-3)
+        for (const line of customLines) {
+          lines.push(`    ${ANSI.teal ?? ANSI.blueSoft}✎ ${safe(line)}${ANSI.reset}`)
+        }
       }
     }
 
@@ -116,10 +126,23 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
   if (options.length > shown.length) {
     lines.push(`  ${ANSI.dim}… ${options.length - shown.length} more options${ANSI.reset}`)
   }
+  const custom = panel.customs?.[panel.index] ?? ''
+  lines.push('')
+  if (panel.customEditing) {
+    lines.push(`  ${ANSI.teal ?? ANSI.blue}✎ Other / custom answer${ANSI.reset}`)
+    const customLines = String(custom || 'type a free-form answer…').split('\n')
+      .flatMap((line) => wrap(safe(line), Math.max(20, columns - 8)))
+      .slice(-3)
+    for (const line of customLines) {
+      lines.push(`    ${ANSI.ink}${safe(line)}${ANSI.reset}`)
+    }
+  } else {
+    lines.push(`  ${ANSI.dim}✎ Other / custom answer · press o to edit${ANSI.reset}`)
+  }
   lines.push('')
   const hint = isMulti
-    ? `  ${ANSI.muted}Space/1-9 toggle  ·  ↑↓ navigate  ·  Tab to Submit  ·  Esc cancel${ANSI.reset}`
-    : `  ${ANSI.muted}Space/Enter select  ·  1-${Math.min(9, options.length)} quick select  ·  ↑↓ navigate  ·  Tab to Submit  ·  Esc cancel${ANSI.reset}`
-  lines.push(hint)
+    ? 'Space/1-9 toggle · o custom · Ctrl+O close custom · Shift+Enter newline · Tab submit · Esc cancel'
+    : `Space/Enter select · 1-${Math.min(9, options.length)} quick select · o custom · Ctrl+O close custom · Shift+Enter newline · Tab submit · Esc cancel`
+  lines.push(...wrap(hint, Math.max(20, columns - 4)).map((line) => `  ${ANSI.muted}${line}${ANSI.reset}`))
   return lines
 }

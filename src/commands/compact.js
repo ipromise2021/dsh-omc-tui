@@ -15,7 +15,7 @@ const COMPACT_TIPS = [
   'Tip: Press Shift+Tab to cycle permission presets (auto-read, workspace-write, unrestricted).',
   'Tip: Press Ctrl+O to expand or collapse thinking steps and tool executions.',
   'Tip: Run !<command> for direct bash shell passthrough with output context injection.',
-  'Tip: Type /effort to toggle reasoning effort between standard and max.',
+  'Tip: Run /effort to choose the model\'s available reasoning level.',
   'Tip: Run /cost or /status anytime to inspect session token expenditure.'
 ]
 
@@ -76,7 +76,7 @@ export async function handleCompact(app, line) {
 
   try {
     const ctrl = new AbortController()
-    const execution = await registry.execute(app.agent, line || '/compact', ctrl.signal)
+    const execution = await registry.execute(app.agent, line || '/compact', [], ctrl.signal)
     const result = execution?.result
 
     clearInterval(timer)
