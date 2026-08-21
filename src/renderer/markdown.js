@@ -86,23 +86,39 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
 
         // Fit table to contentWidth if needed
         const maxTableWidth = contentWidth - 4
-        let totalWidth = colWidths.reduce((a, b) => a + b, 0) + (numCols + 1)
-        if (totalWidth > maxTableWidth) {
-          const excess = totalWidth - maxTableWidth
-          // Shrink columns proportionally
+        const targetColumnsWidth = Math.max(1, maxTableWidth - (numCols + 1))
+        if (targetColumnsWidth < numCols) {
+          rows.push(null)
+          for (const row of parsedRows) {
+            const compact = row.map((cell) => stripMarkdownSyntax(cell)).join(' | ')
+            for (const wrapped of wrap(compact, Math.max(20, contentWidth - 4))) push('', `  ${wrapped}`)
+          }
+          rows.push(null)
+          continue
+        }
+        const naturalColumnsWidth = colWidths.reduce((a, b) => a + b, 0)
+        if (naturalColumnsWidth > targetColumnsWidth) {
+          const minColumnWidth = targetColumnsWidth >= numCols * 3 ? 3 : 1
           for (let c = 0; c < numCols; c++) {
-            const reduce = Math.floor((colWidths[c] / totalWidth) * excess)
-            colWidths[c] = Math.max(6, colWidths[c] - reduce)
+            colWidths[c] = minColumnWidth
+          }
+          let remaining = targetColumnsWidth - colWidths.reduce((a, b) => a + b, 0)
+          for (let c = 0; remaining > 0; c = (c + 1) % numCols) {
+            colWidths[c] += 1
+            remaining -= 1
           }
         }
 
         const formatCell = (text, width, isHeader = false) => {
           let plain = stripMarkdownSyntax(text)
           let styled = styleInlineMarkdown(text)
-          const cellInnerWidth = Math.max(2, width - 2)
+          if (width <= 2) return truncateWidth(plain, width)
+          const cellInnerWidth = Math.max(1, width - 2)
           let plainW = widthOf(plain)
           if (plainW > cellInnerWidth) {
-            plain = truncateWidth(plain, Math.max(1, cellInnerWidth - 1)) + '…'
+            plain = cellInnerWidth === 1
+              ? '…'
+              : `${truncateWidth(plain, cellInnerWidth - 1)}…`
             styled = plain
             plainW = widthOf(plain)
           }

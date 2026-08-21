@@ -38,8 +38,8 @@ export function formatEvents(events, columns, options = {}) {
     const isMultiple = calls.length > 1
 
     if (isMultiple) {
-      const names = [...new Set(calls.map((call) => call.data.name || 'tool'))].map((name) => {
-        const count = calls.filter((call) => (call.data.name || 'tool') === name).length
+      const names = [...new Set(calls.map((call) => safe(call.data.name || 'tool')))].map((name) => {
+        const count = calls.filter((call) => safe(call.data.name || 'tool') === name).length
         return count > 1 ? `${name} ×${count}` : name
       }).join(' · ')
       const isExpanded = expandedKeys.has(key)
@@ -54,7 +54,7 @@ export function formatEvents(events, columns, options = {}) {
     for (const event of group) {
       if (event.type === 'tool/call') {
         const args = parseToolArgs(event.data.arguments)
-        const name = event.data.name || 'tool'
+        const name = safe(event.data.name || 'tool')
         const isBash = /bash|shell|terminal|exec/i.test(name)
         const isSkill = /^skill$/i.test(name)
         const isWrite = /write|create|save/i.test(name)
@@ -84,22 +84,22 @@ export function formatEvents(events, columns, options = {}) {
           push(ANSI.ink, `${indent}● ${name}(${safe(shorten(String(target), Math.max(20, contentWidth - name.length - 8)))})`)
         }
       } else if (event.type === 'approval/asked') {
-        push(ANSI.coral, `${indent}  ! approval needed · ${event.data.toolName}`)
+        push(ANSI.coral, `${indent}  ! approval needed · ${safe(event.data.toolName ?? '')}`)
       } else if (event.type === 'approval/decided') {
-        push(ANSI.dim, `${indent}  └ decision: ${event.data.outcome}`)
+        push(ANSI.dim, `${indent}  └ decision: ${safe(event.data.outcome ?? '')}`)
       } else if (event.type === 'hook/invoked') {
-        push(ANSI.dim, `${indent}  ϟ hook · ${event.data.point} · ${event.data.dialect}${event.data.matcher ? ` · ${event.data.matcher}` : ''}`)
+        push(ANSI.dim, `${indent}  ϟ hook · ${safe(event.data.point ?? '')} · ${safe(event.data.dialect ?? '')}${event.data.matcher ? ` · ${safe(event.data.matcher)}` : ''}`)
       } else if (event.type === 'hook/result') {
         const data = event.data
         const ok = data.decision === 'allow' || data.decision === 'pass'
-        const decision = ok ? `${ANSI.blue}${data.decision}${ANSI.reset}` : `${ANSI.coral}${data.decision}${ANSI.reset}`
+        const decision = ok ? `${ANSI.blue}${safe(data.decision ?? '')}${ANSI.reset}` : `${ANSI.coral}${safe(data.decision ?? '')}${ANSI.reset}`
         const duration = data.durationMs !== undefined ? ` · ${(data.durationMs / 1000).toFixed(1)}s` : ''
         push(ANSI.dim, `${indent}  └ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}`)
       } else {
         const resultText = textOf(event.data.message?.content)
         if (event.data.error) {
           const detail = event.data.error.message ?? resultText
-          push(ANSI.coral, `${indent}  └ ✗ ${event.data.error.code ?? 'error'} · ${shorten(detail, Math.max(20, contentWidth - 24))}`)
+          push(ANSI.coral, `${indent}  └ ✗ ${safe(event.data.error.code ?? 'error')} · ${shorten(detail, Math.max(20, contentWidth - 24))}`)
         } else if (/^diff |\n(---|\+\+\+)/.test(`\n${resultText}`) && /^[+-]/.test(resultText.split('\n').find((l) => l.startsWith('+') || l.startsWith('-')) ?? '')) {
           const diffLines = renderDiffLines(resultText, contentWidth, ANSI)
           for (const line of diffLines) rows.push(line)
@@ -180,13 +180,13 @@ export function formatEvents(events, columns, options = {}) {
             const rawText = block.text ?? ''
             if (rawText.startsWith('!') && !rawText.startsWith('!!')) {
               const [firstLine, ...restLines] = rawText.split('\n')
-              const cmdName = firstLine.slice(1).trim()
+              const cmdName = safe(firstLine.slice(1).trim())
               push('', `${ANSI.bash}${ANSI.bold}! ${cmdName}${ANSI.reset}`)
               if (restLines.length > 0) {
                 const textLines = restLines.join('\n').trimEnd().split('\n').slice(0, 30)
                 for (const [i, line] of textLines.entries()) {
                   const prefix = i === 0 ? `${ANSI.dim}└${ANSI.reset} ` : `  `
-                  push('', `${prefix}${ANSI.answer}${line}${ANSI.reset}`)
+                  push('', `${prefix}${ANSI.answer}${safe(line)}${ANSI.reset}`)
                 }
               }
             } else {
@@ -296,16 +296,16 @@ export function formatEvents(events, columns, options = {}) {
       case 'local/log': {
         const entry = event.data ?? {}
         if (entry.command) {
-          push('', `${ANSI.bash}${ANSI.bold}! ${entry.command}${ANSI.reset}`)
+          push('', `${ANSI.bash}${ANSI.bold}! ${safe(entry.command)}${ANSI.reset}`)
           if (entry.text) {
             for (const line of String(entry.text).split('\n')) {
-              push('', `  ${ANSI.dim}${line}${ANSI.reset}`)
+              push('', `  ${ANSI.dim}${safe(line)}${ANSI.reset}`)
             }
           }
         } else if (entry.text) {
           const color = entry.kind === 'error' ? ANSI.coral : (entry.kind === 'ok' ? ANSI.blue : ANSI.dim)
           for (const line of String(entry.text).split('\n')) {
-            push('', `  ${color}${line}${ANSI.reset}`)
+            push('', `  ${color}${safe(line)}${ANSI.reset}`)
           }
         }
         rows.push('')

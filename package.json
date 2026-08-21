@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "verify": "node -e \"Promise.all([import('./src/index.js'), import('./src/renderer/themes.js'), import('./src/commands/registry.js')]).then(() => console.log('✓ All modules verified OK!'))\"",
-    "test": "python3 test/pty-e2e.py",
+    "test": "node test/unit-regressions.mjs",
+    "test:pty": "sh test/run-pty-suite.sh",
     "render-assets": "node scripts/render-tui-scenes.mjs"
   },
   "engines": {

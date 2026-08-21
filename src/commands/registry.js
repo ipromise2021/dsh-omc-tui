@@ -46,7 +46,7 @@ export function handleLocalCommand(app, commandName, line = '') {
         app.log('error', 'usage: /rename <new title>', '/rename')
       } else {
         if (app.agent?.session) {
-          app.agent.session.append('session/renamed', { title })
+          app.agent.session.append('session/title', { title })
           if (app.ctx.sessionQuery?.writeTitle) {
             void app.ctx.sessionQuery.writeTitle(app.agent.session.id, title).catch(() => {})
           }

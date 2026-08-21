@@ -105,7 +105,7 @@ try:
     snapshot("default-listing")
 
     # 2. filter narrows to the test/ directory; Enter enters it
-    send("te")
+    send("test")
     drain(0.8)
     send("\r")
     assert wait_for("@test/", 10), "directory entry did not become the @ prefix"
@@ -149,6 +149,7 @@ except SystemExit:
 except Exception as error:
     log.append(f"\n===== SCRIPT ERROR: {error} =====\n")
     cleanup("error")
+    raise SystemExit(1)
 finally:
     try:
         os.unlink(FIXTURE)
@@ -161,3 +162,4 @@ if code == "timeout":
     except ProcessLookupError:
         pass
     cleanup("timeout")
+    raise SystemExit(1)

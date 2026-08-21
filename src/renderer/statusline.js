@@ -33,7 +33,11 @@ export function renderStatusRows(options) {
   // High-performance memoization cache for typing & idle frames
   const runningAnimStep = active ? Math.floor(Date.now() / 520) : 'idle'
   const runningWordStep = active ? Math.floor(Date.now() / 3000) : 'idle'
-  const cacheKey = `${columns}|${density}|${mode}|${pending}|${liveModel}|${cwdName}|${presetName}|${effort}|${permissionName}|${usage.input}|${usage.output}|${usage.cacheRead}|${usage.recentInput}|${usage.contextWindow}|${skills.length}|${mcpCount}|${hookCount}|${runningAnimStep}|${runningWordStep}`
+  const recentToolsKey = (recent.toolDetails ?? []).join('\x1f')
+  const recentJobsKey = (recent.jobs ?? []).map((job) => `${job.id ?? ''}:${job.status ?? ''}`).join('\x1f')
+  const localJobsKey = (localBackgroundJobs ?? []).map((job) => `${job.id ?? ''}:${job.status ?? ''}`).join('\x1f')
+  const titleKey = sessionTitle(sessionEvents)
+  const cacheKey = `${columns}|${density}|${mode}|${pending}|${liveModel}|${cwdName}|${presetName}|${effort}|${permissionName}|${usage.input}|${usage.output}|${usage.cacheRead}|${usage.recentInput}|${usage.contextWindow}|${skills.length}|${mcpCount}|${hookCount}|${hasSystemPrompt}|${recentToolsKey}|${recentJobsKey}|${localJobsKey}|${titleKey}|${runningAnimStep}|${runningWordStep}`
 
   if (statusRowsCache && statusRowsCache.key === cacheKey) {
     return { rows: statusRowsCache.rows, cache: statusRowsCache }

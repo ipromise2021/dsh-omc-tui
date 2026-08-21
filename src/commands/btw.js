@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { textOf, widthOf } from '../renderer/ansi.js'
+import { safe, textOf, widthOf } from '../renderer/ansi.js'
 import { userMessage } from '../core/events.js'
 import { renderMarkdownRows } from '../renderer/markdown.js'
 import { ANSI } from '../renderer/themes.js'
@@ -20,7 +20,7 @@ export async function handleBtw(app, line) {
   }
 
   // Print command header in scrollback
-  app.commitToScrollback(['', `${ANSI.blue}${ANSI.bold}❯ /btw ${query}${ANSI.reset}`])
+  app.commitToScrollback(['', `${ANSI.blue}${ANSI.bold}❯ /btw ${safe(query)}${ANSI.reset}`])
   app.message = 'asking side query (ephemeral context)…'
   app.scheduleRender()
 
@@ -35,26 +35,41 @@ export async function handleBtw(app, line) {
     })
 
     let fullResponse = ''
-    const cleanupEvent = app.ctx.on('session/event', (session, event) => {
-      if (session.id === tempSessionId && event.type === 'assistant/message') {
-        const text = textOf(event.data.message.content)
-        if (text) fullResponse = text
-      }
-    })
-
-    tempAgent.followup(userMessage([{ type: 'text', text: query }]))
-
-    await new Promise((resolve) => {
-      const off = app.ctx.on('agent/status', ({ agent: a, status }) => {
-        if (a === tempAgent && (status === 'idle' || status === 'error')) {
-          off()
-          resolve()
+    let cleanupEvent
+    let cleanupStatus
+    let timeout
+    try {
+      await new Promise((resolve, reject) => {
+        let settled = false
+        const finish = (error) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timeout)
+          if (error) reject(error)
+          else resolve()
+        }
+        cleanupEvent = app.ctx.on('session/event', (session, event) => {
+          if (session.id === tempSessionId && event.type === 'assistant/message') {
+            const text = textOf(event.data.message.content)
+            if (text) fullResponse = text
+          }
+        })
+        cleanupStatus = app.ctx.on('agent/status', ({ agent: a, status }) => {
+          if (a === tempAgent && (status === 'idle' || status === 'error')) finish()
+        })
+        timeout = setTimeout(() => finish(new Error('side query timed out')), 120000)
+        try {
+          Promise.resolve(tempAgent.followup(userMessage([{ type: 'text', text: query }]))).catch(finish)
+        } catch (error) {
+          finish(error)
         }
       })
-    })
-
-    cleanupEvent()
-    try { dispose() } catch {}
+    } finally {
+      clearTimeout(timeout)
+      cleanupEvent?.()
+      cleanupStatus?.()
+      try { await dispose?.() } catch {}
+    }
 
     if (fullResponse) {
       const columns = Math.max(60, process.stdout.columns || 100)
@@ -62,7 +77,7 @@ export async function handleBtw(app, line) {
       const mdRows = renderMarkdownRows(fullResponse, contentWidth, ANSI.answer, ANSI)
       
       const boxWidth = Math.max(32, Math.min(columns - 2, 100))
-      const tagText = ` ✦ Side Query · ${selection.model} (not saved to session) `
+      const tagText = ` ✦ Side Query · ${safe(selection.model)} (not saved to session) `
       const ruleLen = Math.max(2, boxWidth - 4 - widthOf(tagText))
 
       const cardLines = [
@@ -86,7 +101,7 @@ export async function handleBtw(app, line) {
       app.commitToScrollback([`  ${ANSI.coral}✗ No response received for side query${ANSI.reset}`, ''])
     }
   } catch (err) {
-    app.commitToScrollback([`  ${ANSI.coral}✗ Side query failed: ${err instanceof Error ? err.message : String(err)}${ANSI.reset}`, ''])
+    app.commitToScrollback([`  ${ANSI.coral}✗ Side query failed: ${safe(err instanceof Error ? err.message : String(err))}${ANSI.reset}`, ''])
   } finally {
     app.message = ''
     app.scheduleRender()

@@ -134,6 +134,7 @@ except SystemExit:
 except Exception as error:
     log.append(f"\n===== SCRIPT ERROR: {error} =====\n")
     cleanup("error")
+    raise SystemExit(1)
 
 if code == "timeout":
     try:
@@ -141,3 +142,4 @@ if code == "timeout":
     except ProcessLookupError:
         pass
     cleanup("timeout")
+    raise SystemExit(1)

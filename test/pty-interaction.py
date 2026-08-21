@@ -235,3 +235,5 @@ finally:
     with open(OUT, "w") as f:
         f.write("".join(log))
     print("exit code:", code)
+    if code != 0:
+        raise SystemExit(1)

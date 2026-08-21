@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { appendFile, mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
-import { dirname, extname, join } from 'node:path'
+import { appendFile, mkdir, readdir, readFile, realpath, unlink, writeFile } from 'node:fs/promises'
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { ImageParser, formatImageBytes } from './image-protocol.js'
 import {
@@ -200,20 +200,24 @@ export class TuiApp {
     const origStderrWrite = process.stderr.write.bind(process.stderr)
     this.disposers.push(() => { process.stderr.write = origStderrWrite })
     process.stderr.write = (chunk, encoding, cb) => {
+      const callback = typeof encoding === 'function' ? encoding : cb
+      const writeEncoding = typeof encoding === 'string' ? encoding : 'utf8'
       const text = String(chunk ?? '')
       if (/Ignoring invalid configuration option|Database connection test failed|Access denied for user|Can't find any matching password/i.test(text)) {
-        if (typeof cb === 'function') cb()
+        if (typeof callback === 'function') callback()
         return true
       }
+      const write = () => typeof callback === 'function'
+        ? origStderrWrite(safe(text), writeEncoding, callback)
+        : origStderrWrite(safe(text), writeEncoding)
       if (this.terminalOpen && this.lastFooterHeight > 0) {
         this.clearFooter()
-        origStderrWrite(chunk, encoding)
+        const result = write()
         this.render()
+        return result
       } else {
-        origStderrWrite(chunk, encoding)
+        return write()
       }
-      if (typeof cb === 'function') cb()
-      return true
     }
 
     this.onData = (chunk) => this.handleInput(chunk)
@@ -1071,13 +1075,19 @@ export class TuiApp {
     }
     if (refs.length === 0) return { text, missing: [] }
     const cwd = this.agent?.session.header.cwd ?? process.cwd()
+    const workspaceRoot = await realpath(cwd).catch(() => resolve(cwd))
     const missing = []
     const parts = []
     let last = 0
     for (const ref of refs) {
       parts.push(text.slice(last, ref.start))
       try {
-        const data = await readFile(join(cwd, ref.path))
+        const target = await realpath(resolve(cwd, ref.path))
+        const targetRelative = relative(workspaceRoot, target)
+        if (isAbsolute(targetRelative) || targetRelative === '..' || targetRelative.startsWith(`..${sep}`)) {
+          throw new Error('file reference is outside the workspace')
+        }
+        const data = await readFile(target)
         if (data.includes(0)) {
           missing.push(ref.path)
           parts.push(`@${ref.path}`)
@@ -1192,7 +1202,7 @@ export class TuiApp {
         // Output block: render command output cleanly
         const exitCode = parseInt(entry.command.replace('exit ', ''), 10)
         const ok = exitCode === 0
-        const outputText = String(entry.text ?? '').trimEnd()
+        const outputText = safe(String(entry.text ?? '')).trimEnd()
         if (outputText) {
           const outputLines = outputText.split('\n')
           for (const [i, line] of outputLines.entries()) {
@@ -1212,7 +1222,7 @@ export class TuiApp {
           const isError = entry.kind === 'error'
           const prefix = isError ? `${ANSI.coral}✗${ANSI.reset}` : `${ANSI.blueSoft}·${ANSI.reset}`
           for (const line of String(entry.text).split('\n')) {
-            lines.push(`  ${prefix} ${line}`)
+            lines.push(`  ${prefix} ${safe(line)}`)
           }
         }
         lines.push('')
@@ -1220,12 +1230,12 @@ export class TuiApp {
         // Shell command: "! <cmd>", Claude Code style
         lines.push('')
         const cmdLine = entry.command === '!'
-          ? String(entry.text ?? '').replace(/^\$\s*/, '')
-          : entry.command
+          ? safe(String(entry.text ?? '').replace(/^\$\s*/, ''))
+          : safe(entry.command)
         lines.push(`${ANSI.bash}${ANSI.bold}! ${cmdLine}${ANSI.reset}`)
         if (entry.command !== '!' && entry.text) {
           for (const line of String(entry.text).split('\n')) {
-            lines.push(`${ANSI.dim}  ${line}${ANSI.reset}`)
+            lines.push(`${ANSI.dim}  ${safe(line)}${ANSI.reset}`)
           }
         }
       }
@@ -1233,7 +1243,7 @@ export class TuiApp {
       const color = entry.kind === 'error' ? ANSI.coral : entry.kind === 'denied' ? ANSI.dim : ANSI.blue
       const marker = entry.kind === 'error' ? '✗' : entry.kind === 'ok' ? '·' : '∅'
       for (const [index, line] of String(entry.text ?? '').split('\n').entries()) {
-        lines.push(`${color}${index === 0 ? marker : ' '} ${line}${ANSI.reset}`)
+        lines.push(`${color}${index === 0 ? marker : ' '} ${safe(line)}${ANSI.reset}`)
       }
       lines.push('')
     }
@@ -1287,6 +1297,30 @@ export class TuiApp {
     return this.questionPanel?.questions[this.questionPanel.index]
   }
 
+  restoreCurrentQuestionAnswer() {
+    const panel = this.questionPanel
+    const question = this.currentQuestion()
+    if (!panel) return
+    if (!question) {
+      panel.selected = 0
+      panel.selectedOptions = new Set()
+      return
+    }
+    const options = Array.isArray(question.options) ? question.options : []
+    const answer = panel.answers[panel.index]
+    const selected = Array.isArray(answer?.selected) ? answer.selected : []
+    const selectedOptions = new Set()
+    for (const value of selected) {
+      const index = options.findIndex((option) => {
+        const label = typeof option === 'string' ? option : option?.label ?? option?.value ?? option?.text
+        return String(label ?? '') === String(value)
+      })
+      if (index >= 0) selectedOptions.add(index)
+    }
+    panel.selectedOptions = selectedOptions
+    panel.selected = [...selectedOptions][0] ?? 0
+  }
+
   toggleQuestionOption(index) {
     const panel = this.questionPanel
     const question = this.currentQuestion()
@@ -1329,8 +1363,7 @@ export class TuiApp {
     const totalTabs = panel.questions.length + 1
     if (panel.index + 1 < totalTabs) {
       panel.index += 1
-      panel.selected = 0
-      panel.selectedOptions = new Set()
+      this.restoreCurrentQuestionAnswer()
       this.scheduleRender()
       return
     }
@@ -1424,12 +1457,14 @@ export class TuiApp {
       if (value === '\t' || value === 'l' || value === '\x1b[C' || value === '\x1bOC') {
         panel.index = 0
         panel.selected = 0
+        this.restoreCurrentQuestionAnswer()
         this.scheduleRender()
         return
       }
       if (value === '\x1b[Z' || value === 'h' || value === '\x1b[D' || value === '\x1bOD') {
         panel.index = panel.questions.length - 1
         panel.selected = 0
+        this.restoreCurrentQuestionAnswer()
         this.scheduleRender()
         return
       }
@@ -1443,14 +1478,14 @@ export class TuiApp {
     if (value === '\t' || value === '\x1b[C' || value === '\x1bOC') {
       this.saveCurrentQuestionAnswer()
       panel.index = (panel.index + 1) % totalTabs
-      panel.selected = 0
+      this.restoreCurrentQuestionAnswer()
       this.scheduleRender()
       return
     }
     if (value === '\x1b[Z' || value === '\x1b[D' || value === '\x1bOD') {
       this.saveCurrentQuestionAnswer()
       panel.index = (panel.index - 1 + totalTabs) % totalTabs
-      panel.selected = 0
+      this.restoreCurrentQuestionAnswer()
       this.scheduleRender()
       return
     }
@@ -1472,7 +1507,7 @@ export class TuiApp {
       this.saveCurrentQuestionAnswer()
       const delta = value === 'h' ? -1 : 1
       panel.index = (panel.index + delta + totalTabs) % totalTabs
-      panel.selected = 0
+      this.restoreCurrentQuestionAnswer()
       this.scheduleRender()
       return
     }
@@ -2684,18 +2719,53 @@ export class TuiApp {
       this.scheduleRender()
       return
     }
-    // User confirmed: start a new session then apply preset
-    try {
-      await this.ctx.newSession?.(this.agent)
-    } catch {}
+    // User confirmed: create a fresh Harness session with the requested preset.
     this.message = `switching preset · ${id}…`
     this.scheduleRender()
     try {
-      const preset = await this.ctx.agentPresets.recompose(this.agent.ctx, id)
-      this.agent.session.append('agent-preset/selected', { agentPreset: preset.id })
-      this.presetName = preset.id
+      const previous = this.handle
+      const selection = this.ctx.agentDefaultModel.currentSelection()
+      const { agent, dispose } = await this.ctx.agents.create({
+        sessionId: `session-${randomUUID()}`,
+        meta: { cwd: process.cwd(), agentPreset: id },
+        agentOptions: { provider: selection.provider, model: selection.model },
+        setup: async (agentCtx) => {
+          await this.ctx.agentPresets.mount(agentCtx, id)
+        }
+      })
+      this.handle = { agent, dispose }
+      this.agent = agent
+      this.presetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? id
+      this.reasoningEffort = selection.reasoningEffort
+      this.activeModel = undefined
+      this.attachRequestOverride(agent)
+      if (previous) {
+        await Promise.race([
+          this.sessionsService?.flush?.(previous.agent.session),
+          new Promise((resolve) => setTimeout(resolve, 500))
+        ]).catch(() => {})
+        try {
+          await previous.dispose()
+        } catch {}
+      }
+      this.reasoningBlocks = []
+      this.streaming = { text: '', reasoning: '', tool: undefined }
+      this.streamBuffer = ''
+      this.reasoningAt = undefined
+      this.usage = foldUsage(agent.session.events)
+      this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
+      this.viewClearedSeq = 0
+      this.lastCommittedSeq = agent.session.events[agent.session.events.length - 1]?.seq ?? 0
+      this.localLog = []
+      this.expandedKeys = new Set()
+      this.pendingImages = []
+      this.turnHeaderCommitted = false
+      this.streamHeaderCommitted = false
+      this.lastQueuedText = undefined
+      this.active = false
       void this.refreshSkills()
-      this.log('ok', `New session started with preset "${preset.id}"`, '/preset')
+      this.log('ok', `New session started with preset "${id}"`, '/preset')
+      this.repaint(true)
     } catch (error) {
       this.log('error', error instanceof Error ? error.message : String(error), '/preset')
     }
@@ -3220,8 +3290,10 @@ export class TuiApp {
       }
       return
     }
-    this.input = this.input.slice(0, this.cursor - 1) + this.input.slice(this.cursor)
-    this.cursor -= 1
+    const cursor = this.alignCodePoint(this.cursor, -1)
+    const start = this.alignCodePoint(Math.max(0, cursor - 1), -1)
+    this.input = this.input.slice(0, start) + this.input.slice(cursor)
+    this.cursor = start
     this.updateMenu()
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
@@ -3230,7 +3302,10 @@ export class TuiApp {
   eraseAt() {
     this.pasteFolded = undefined
     if (this.cursor >= this.input.length) return
-    this.input = this.input.slice(0, this.cursor) + this.input.slice(this.cursor + 1)
+    const start = this.alignCodePoint(this.cursor, -1)
+    const end = this.alignCodePoint(start + 1, 1)
+    this.input = this.input.slice(0, start) + this.input.slice(end)
+    this.cursor = start
     this.updateMenu()
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
@@ -3267,7 +3342,8 @@ export class TuiApp {
   moveLeft() {
     this.pasteFolded = undefined
     this.clearSelection()
-    if (this.cursor > 0) this.cursor -= 1
+    this.cursor = this.alignCodePoint(this.cursor, -1)
+    if (this.cursor > 0) this.cursor = this.alignCodePoint(this.cursor - 1, -1)
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
   }
@@ -3275,7 +3351,8 @@ export class TuiApp {
   moveRight() {
     this.pasteFolded = undefined
     this.clearSelection()
-    if (this.cursor < this.input.length) this.cursor += 1
+    this.cursor = this.alignCodePoint(this.cursor, 1)
+    if (this.cursor < this.input.length) this.cursor = this.alignCodePoint(this.cursor + 1, 1)
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
   }
@@ -3429,31 +3506,32 @@ export class TuiApp {
       active.output += text
       if (active.output.length > 32000) active.output = active.output.slice(-32000)
     })
-    child.on('close', (code) => {
+    const finish = ({ code, error } = {}) => {
+      if (ended) return
       ended = true
       clearTimeout(timer)
-      active.status = code === 0 ? 'completed' : 'failed'
-      active.exitCode = code
+      if (error) {
+        active.status = 'failed'
+        active.error = error.message
+      } else {
+        active.status = code === 0 ? 'completed' : 'failed'
+        active.exitCode = code
+      }
       if (this.activeBash === active) {
         this.activeBash = undefined
-        this.finishBash(code, active.output)
+        this.finishBash(error ? null : code, error ? `\n(spawn failed: ${error.message})` : active.output)
       } else {
-        this.log(code === 0 ? 'ok' : 'error', `Background job ${active.id} ($ ${shorten(command, 40)}) finished (exit ${code})`, 'job')
+        if (error) {
+          this.log('error', `Background job ${active.id} failed: ${error.message}`, 'job')
+        } else {
+          this.log(code === 0 ? 'ok' : 'error', `Background job ${active.id} ($ ${shorten(command, 40)}) finished (exit ${code})`, 'job')
+        }
         if (this.jobPanel) void this.refreshJobsPanel()
       }
-    })
+    }
+    child.on('close', (code) => finish({ code }))
     child.on('error', (error) => {
-      ended = true
-      clearTimeout(timer)
-      active.status = 'failed'
-      active.error = error.message
-      if (this.activeBash === active) {
-        this.activeBash = undefined
-        this.finishBash(null, `\n(spawn failed: ${error.message})`)
-      } else {
-        this.log('error', `Background job ${active.id} failed: ${error.message}`, 'job')
-        if (this.jobPanel) void this.refreshJobsPanel()
-      }
+      finish({ error })
     })
   }
 
@@ -3924,9 +4002,10 @@ export class TuiApp {
       if (isVertical || isHorizontal) {
         const panel = this.questionPanel
         if (isHorizontal && panel.questions.length > 1) {
+          this.saveCurrentQuestionAnswer()
           const delta = (value === '\x1b[D' || value === '\x1bOD') ? -1 : 1
           panel.index = (panel.index + delta + panel.questions.length) % panel.questions.length
-          panel.selected = 0
+          this.restoreCurrentQuestionAnswer()
           this.scheduleRender()
           return
         }

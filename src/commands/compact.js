@@ -1,4 +1,4 @@
-import { shorten, formatTokens } from '../renderer/ansi.js'
+import { safe, shorten, formatTokens } from '../renderer/ansi.js'
 import { ANSI } from '../renderer/themes.js'
 
 const COMPACT_PHRASES = [
@@ -83,7 +83,7 @@ export async function handleCompact(app, line) {
     const totalSec = ((Date.now() - startedAt) / 1000).toFixed(1)
 
     if (result?.kind === 'success' || result?.text) {
-      const text = result.text ?? 'Conversation compacted successfully'
+      const text = safe(String(result.text ?? 'Conversation compacted successfully'))
       if (text.includes('could not produce a useful summary') || text.includes('conversation is unchanged')) {
         const summaryLines = [
           `  ${ANSI.dim}· Conversation is already fully compacted (no new messages to compress).${ANSI.reset}`,

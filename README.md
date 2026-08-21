@@ -286,12 +286,13 @@ MCP 与 Hooks 均为**可选的 profile 级集成**，不由 TUI 自行伪造或
 
 ```sh
 npm run verify              # 模块导入完整性校验
-npm test                    # 默认 PTY E2E 回归测试
+npm test                    # 可移植的单元回归测试
+DSH_TEST_FIXTURE_HOME=/path/to/dsh-home npm run test:pty  # 可选 PTY 集成测试
 npm run render-assets       # 重新渲染 README / 宣传场景截图（可选）
 npm publish --access public # 发布至 npm / DSH 插件体系
 ```
 
-测试套件基于无凭据 Mock 环境与 PTY 端到端回归：覆盖流式渲染 / 行内审批 / usage / 权限 / 中断 / 退出、`/compact` / 窄终端 / 会话恢复、OSC 1337 与 Kitty 图片粘贴、`@` 引用、审批 diff / 推理折叠 / 工具组、菜单 / 快捷键 / 多行输入 / 状态行等场景，入口见 `test/` 目录。
+单元回归测试不依赖本机 Harness 配置。PTY 集成测试基于无凭据 Mock 环境，需提供一个包含 `profiles/tui` 的 Harness home；设置 `DSH_TEST_FIXTURE_HOME` 后，脚本会复制夹具到独立临时目录，避免改写原始配置。PTY 场景覆盖流式渲染 / 行内审批 / usage / 权限 / 中断 / 退出、`/compact` / 窄终端 / 会话恢复、OSC 1337 与 Kitty 图片粘贴、`@` 引用、审批 diff / 推理折叠 / 工具组、菜单 / 快捷键 / 多行输入 / 状态行等，入口见 `test/` 目录。
 
 ---
 
@@ -334,7 +335,7 @@ npm publish --access public # 发布至 npm / DSH 插件体系
 ### 🚀 贡献代码
 
 1. Fork 仓库并创建特性分支；
-2. 改动后运行 `npm run verify` 与 `npm test` 确认无回归；
+2. 改动后运行 `npm run verify` 与 `npm test` 确认无回归；若本地具备 Harness 夹具，再运行 `DSH_TEST_FIXTURE_HOME=/path/to/dsh-home npm run test:pty`；
 3. 提交信息遵循 [Conventional Commits](AGENTS.md)（`feat` / `fix` / `style` / `refactor` / `docs`）；
 4. 提交 PR 时描述改动动机与验证方式，小步提交更易 review。
 
