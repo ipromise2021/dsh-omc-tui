@@ -106,6 +106,7 @@ export function applyTheme(theme) {
 export const TERMINAL_MOUSE_OFF = '\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1007l'
 
 export const STATUSLINE_MODES = ['detailed', 'compact', 'minimal']
+export const CONTEXT_DISPLAY_MODES = ['both', 'percent', 'tokens', 'remaining']
 
 export function tuiSettingsSchema(value) {
   if (value !== undefined && (typeof value !== 'object' || value === null || Array.isArray(value))) {
@@ -120,10 +121,41 @@ export function tuiSettingsSchema(value) {
   if (!STATUSLINE_MODES.includes(statusline)) {
     throw new TypeError(`dsh-omc-tui.settings.statusline must be one of: ${STATUSLINE_MODES.join(', ')}`)
   }
+  const contextMode = source.contextMode ?? 'both'
+  if (!CONTEXT_DISPLAY_MODES.includes(contextMode)) {
+    throw new TypeError(`dsh-omc-tui.settings.contextMode must be one of: ${CONTEXT_DISPLAY_MODES.join(', ')}`)
+  }
+  const contextWarnAt = source.contextWarnAt ?? 60
+  const contextCriticalAt = source.contextCriticalAt ?? 80
+  if (!Number.isInteger(contextWarnAt) || contextWarnAt < 1 || contextWarnAt > 99) {
+    throw new TypeError('dsh-omc-tui.settings.contextWarnAt must be an integer between 1 and 99')
+  }
+  if (!Number.isInteger(contextCriticalAt) || contextCriticalAt < 2 || contextCriticalAt > 100 || contextCriticalAt <= contextWarnAt) {
+    throw new TypeError('dsh-omc-tui.settings.contextCriticalAt must be an integer greater than contextWarnAt and at most 100')
+  }
   if (source.persistHistory !== undefined && typeof source.persistHistory !== 'boolean') {
     throw new TypeError('dsh-omc-tui.settings.persistHistory must be boolean')
   }
-  return { theme, statusline, persistHistory: source.persistHistory ?? true }
+  if (source.hudGit !== undefined && typeof source.hudGit !== 'boolean') {
+    throw new TypeError('dsh-omc-tui.settings.hudGit must be boolean')
+  }
+  if (source.hudSpeed !== undefined && typeof source.hudSpeed !== 'boolean') {
+    throw new TypeError('dsh-omc-tui.settings.hudSpeed must be boolean')
+  }
+  if (source.hudTools !== undefined && typeof source.hudTools !== 'boolean') {
+    throw new TypeError('dsh-omc-tui.settings.hudTools must be boolean')
+  }
+  return {
+    theme,
+    statusline,
+    contextMode,
+    contextWarnAt,
+    contextCriticalAt,
+    persistHistory: source.persistHistory ?? true,
+    hudGit: source.hudGit ?? true,
+    hudSpeed: source.hudSpeed ?? true,
+    hudTools: source.hudTools ?? true
+  }
 }
 
 tuiSettingsSchema.toJSON = () => ({
@@ -131,7 +163,13 @@ tuiSettingsSchema.toJSON = () => ({
   properties: {
     theme: { type: 'string', enum: Object.keys(THEMES), default: defaultTheme },
     statusline: { type: 'string', enum: STATUSLINE_MODES, default: 'detailed' },
-    persistHistory: { type: 'boolean', default: true }
+    contextMode: { type: 'string', enum: CONTEXT_DISPLAY_MODES, default: 'both' },
+    contextWarnAt: { type: 'integer', minimum: 1, maximum: 99, default: 60 },
+    contextCriticalAt: { type: 'integer', minimum: 2, maximum: 100, default: 80 },
+    persistHistory: { type: 'boolean', default: true },
+    hudGit: { type: 'boolean', default: true },
+    hudSpeed: { type: 'boolean', default: true },
+    hudTools: { type: 'boolean', default: true }
   }
 })
 

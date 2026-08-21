@@ -4,8 +4,9 @@ import { alignCodePoint, moveCursorLine } from '../src/input/editor.js'
 import { handleCompact } from '../src/commands/compact.js'
 import { renderMarkdownRows } from '../src/renderer/markdown.js'
 import { renderStatusRows } from '../src/renderer/statusline.js'
+import { renderJobPanel } from '../src/panels/jobs-panel.js'
 import { formatEvents } from '../src/renderer/transcript.js'
-import { ANSI } from '../src/renderer/themes.js'
+import { ANSI, applyTheme } from '../src/renderer/themes.js'
 import { safe, visibleOf, widthOf } from '../src/renderer/ansi.js'
 
 const noop = () => {}
@@ -129,6 +130,28 @@ assert.equal(confirmationApp.questionPanel.selected, 0)
 TuiApp.prototype.handleQuestionToken.call(confirmationApp, '\r')
 assert.deepEqual(questionResult, { answers: [{ id: 'q1', selected: ['b'] }] })
 
+const turnLifecycleApp = {
+  active: false,
+  finishTurn: TuiApp.prototype.finishTurn,
+  usage: { output: 10 },
+  turnStats: { speed: 0, durationMs: 0, active: false },
+  streaming: { text: '', reasoning: '', tool: undefined },
+  commitUnprintedEvents: noop,
+  scheduleRender: noop,
+  sessionsService: { flush: async () => {} },
+  agent: { session: {} },
+  refreshGitStatus: async () => {}
+}
+TuiApp.prototype.onStatus.call(turnLifecycleApp, 'running')
+turnLifecycleApp.turnStartTime = Date.now() - 1000
+turnLifecycleApp.usage.output = 110
+TuiApp.prototype.onTurnEnd.call(turnLifecycleApp, undefined)
+TuiApp.prototype.onStatus.call(turnLifecycleApp, 'idle')
+assert.equal(turnLifecycleApp.active, false)
+assert.equal(turnLifecycleApp.turnStats.active, false)
+assert.ok(turnLifecycleApp.turnStats.speed > 0)
+assert.equal(turnLifecycleApp.turnStartTime, undefined)
+
 const status = renderStatusRows({ columns: 100, sessionEvents: [] })
 const changedStatus = renderStatusRows({
   columns: 100,
@@ -170,8 +193,243 @@ await handleCompact({
 }, '/compact')
 assert.equal(compactCommits.some((line) => line.includes(osc)), false)
 
+import { parseGitStatusOutput } from '../src/core/git.js'
+import { tuiSettingsSchema } from '../src/renderer/themes.js'
+import { renderSettingsPicker } from '../src/panels/settings-panel.js'
+
 const fakeFileApp = { agent: { session: { header: { cwd: process.cwd() } } } }
 const expanded = await TuiApp.prototype.expandFileReferences.call(fakeFileApp, '@../../../../../../etc/hosts')
 assert.deepEqual(expanded.missing, ['../../../../../../etc/hosts'])
+
+// Git status parser assertions
+const gitParsed1 = parseGitStatusOutput('## main...origin/main [ahead 1, behind 2]\n M src/index.js')
+assert.deepEqual(gitParsed1, { isGit: true, branch: 'main', dirty: true, ahead: 1, behind: 2 })
+
+const gitParsed2 = parseGitStatusOutput('## feat/hud\n')
+assert.deepEqual(gitParsed2, { isGit: true, branch: 'feat/hud', dirty: false, ahead: 0, behind: 0 })
+
+const gitParsed3 = parseGitStatusOutput('fatal: not a git repository')
+assert.deepEqual(gitParsed3, { isGit: false, branch: '', dirty: false, ahead: 0, behind: 0 })
+
+// Settings schema assertions
+const settingsParsed = tuiSettingsSchema({ hudGit: false, hudSpeed: true })
+assert.equal(settingsParsed.hudGit, false)
+assert.equal(settingsParsed.hudSpeed, true)
+assert.equal(settingsParsed.hudTools, true)
+assert.equal(settingsParsed.contextMode, 'both')
+assert.equal(settingsParsed.contextWarnAt, 60)
+assert.equal(settingsParsed.contextCriticalAt, 80)
+assert.throws(() => tuiSettingsSchema({ contextMode: 'invalid' }), /contextMode must be one of/)
+assert.throws(() => tuiSettingsSchema({ contextWarnAt: 80, contextCriticalAt: 80 }), /contextCriticalAt must be an integer greater than contextWarnAt/)
+assert.throws(() => tuiSettingsSchema({ hudGit: 'invalid' }), /hudGit must be boolean/)
+
+// Settings panel rendering assertion
+const settingsRows = renderSettingsPicker({ selected: 0 }, { theme: 'claude', statusline: 'detailed', hudGit: true, hudSpeed: true, persistHistory: true })
+assert.match(settingsRows.join('\n'), /statusline git/)
+assert.match(settingsRows.join('\n'), /statusline speed/)
+assert.match(settingsRows.join('\n'), /statusline tools/)
+assert.match(settingsRows.join('\n'), /context display/)
+assert.match(settingsRows.join('\n'), /context warning/)
+assert.match(settingsRows.join('\n'), /context critical/)
+
+let thresholdUpdate
+const thresholdSettingsApp = {
+  settingsPicker: { selected: 3 },
+  settingsScope: { async update(next) { thresholdUpdate = next } },
+  preferences: { contextWarnAt: 20, contextCriticalAt: 30 },
+  log: noop,
+  scheduleRender: noop
+}
+await TuiApp.prototype.cycleSetting.call(thresholdSettingsApp, 1)
+assert.equal(thresholdUpdate.contextWarnAt, 29)
+
+// Statusline HUD enhancements assertions
+const hudStatus = renderStatusRows({
+  columns: 120,
+  usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, recentInput: 85000, contextWindow: 100000 },
+  git: { isGit: true, branch: 'main', dirty: true, ahead: 1, behind: 0 },
+  turnStats: { speed: 48.5, durationMs: 2200 },
+  recent: { toolDetails: ['✓ Read: index.js', '◐ Edit: statusline.js'], jobs: [] }
+})
+const hudText = visibleOf(hudStatus.rows.join('\n'))
+assert.match(hudText, /git:\(main\* ↑1\)/)
+assert.match(hudText, /48\.5 tok\/s/)
+assert.match(hudText, /2\.2s/)
+assert.match(hudText, /85% ⚠️/)
+assert.match(hudText, /Read: index\.js/)
+assert.match(hudText, /Edit: statusline\.js/)
+
+const percentContext = renderStatusRows({
+  columns: 120,
+  contextMode: 'percent',
+  usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, recentInput: 85000, contextWindow: 100000 }
+})
+assert.match(visibleOf(percentContext.rows.join('\n')), /Context.*85% ⚠️/)
+assert.equal(visibleOf(percentContext.rows.join('\n')).includes('85k \/ 100k'), false)
+
+const remainingContext = renderStatusRows({
+  columns: 120,
+  contextMode: 'remaining',
+  usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, recentInput: 85000, contextWindow: 100000 }
+})
+assert.match(visibleOf(remainingContext.rows.join('\n')), /15k left/)
+
+const customContextThreshold = renderStatusRows({
+  columns: 120,
+  contextWarnAt: 70,
+  contextCriticalAt: 90,
+  usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, recentInput: 85000, contextWindow: 100000 }
+})
+assert.equal(visibleOf(customContextThreshold.rows.join('\n')).includes('85% ⚠️'), false)
+
+const toolAggregationApp = {
+  active: false,
+  agent: {
+    session: {
+      events: [
+        { type: 'turn/start' },
+        ...['a.ts', 'b.ts', 'c.ts'].flatMap((file, index) => [
+          { type: 'tool/call', data: { name: 'Read', callId: `read-${index}`, arguments: JSON.stringify({ path: file }) } },
+          { type: 'tool/result', data: { callId: `read-${index}` } }
+        ]),
+        { type: 'tool/call', data: { name: 'Edit', callId: 'edit-1', arguments: JSON.stringify({ path: 'out.ts' }) } },
+        { type: 'tool/result', data: { callId: 'edit-1' } }
+      ]
+    }
+  },
+  jobSnapshots() { return [] }
+}
+const aggregatedTools = TuiApp.prototype.recentUsage.call(toolAggregationApp).toolDetails.join(' · ')
+assert.match(aggregatedTools, /Read ×3: c\.ts/)
+assert.match(aggregatedTools, /Edit: out\.ts/)
+
+const uppercaseCommandTools = {
+  active: false,
+  agent: {
+    session: {
+      events: [
+        { type: 'turn/start' },
+        { type: 'tool/call', data: { name: 'Bash', callId: 'bash-1', arguments: JSON.stringify({ command: 'npm test' }) } },
+        { type: 'tool/result', data: { callId: 'bash-1' } },
+        { type: 'tool/call', data: { name: 'Grep', callId: 'grep-1', arguments: JSON.stringify({ pattern: 'token' }) } },
+        { type: 'tool/result', data: { callId: 'grep-1' } }
+      ]
+    }
+  },
+  jobSnapshots() { return [] }
+}
+const uppercaseToolDetails = TuiApp.prototype.recentUsage.call(uppercaseCommandTools).toolDetails.join(' · ')
+assert.match(uppercaseToolDetails, /Exec: npm/)
+assert.match(uppercaseToolDetails, /Grep: "token"/)
+assert.equal(TuiApp.prototype.toolMayChangeWorkspace.call({}, 'Read'), false)
+assert.equal(TuiApp.prototype.toolMayChangeWorkspace.call({}, 'Bash'), true)
+
+for (const rawArgs of ['null', JSON.stringify({ path: 42 }), JSON.stringify({ path: ['a.ts'] })]) {
+  const malformedToolApp = {
+    active: false,
+    agent: { session: { events: [
+      { type: 'turn/start' },
+      { type: 'tool/call', data: { name: 'Read', callId: 'malformed', arguments: rawArgs } },
+      { type: 'tool/result', data: { callId: 'malformed' } }
+    ] } },
+    jobSnapshots() { return [] }
+  }
+  assert.doesNotThrow(() => TuiApp.prototype.recentUsage.call(malformedToolApp))
+}
+
+const recentOrderApp = {
+  active: false,
+  agent: {
+    session: {
+      events: [{ type: 'turn/start' }, ...['Read', 'Edit', 'Grep', 'Bash', 'Read'].flatMap((name, index) => [
+        { type: 'tool/call', data: { name, callId: `order-${index}`, arguments: '{}' } },
+        { type: 'tool/result', data: { callId: `order-${index}` } }
+      ])]
+    }
+  },
+  jobSnapshots() { return [] }
+}
+assert.match(TuiApp.prototype.recentUsage.call(recentOrderApp).toolDetails.at(-1), /Read/)
+
+applyTheme('claude')
+const claudeStatus = renderStatusRows({ columns: 100, ANSI })
+const oldThemeColor = ANSI.blue
+applyTheme('light')
+const lightStatus = renderStatusRows({ columns: 100, ANSI, statusRowsCache: claudeStatus.cache })
+assert.notEqual(lightStatus.rows, claudeStatus.rows)
+assert.equal(lightStatus.rows.join('\n').includes(oldThemeColor), false)
+applyTheme('claude')
+
+let resultRefreshForce
+const toolResultSession = {
+  events: [{ type: 'tool/call', data: { name: 'Edit', callId: 'edit-42' } }]
+}
+const toolResultApp = {
+  agent: { session: toolResultSession },
+  streaming: { tool: undefined },
+  flushThinking() {},
+  flushStreamBuffer() {},
+  refreshGitStatus(options) { resultRefreshForce = options.force; return Promise.resolve() },
+  toolMayChangeWorkspace: TuiApp.prototype.toolMayChangeWorkspace,
+  scheduleRender() {}
+}
+TuiApp.prototype.onSessionEvent.call(toolResultApp, toolResultSession, { type: 'tool/result', data: { callId: 'edit-42' } })
+assert.equal(resultRefreshForce, true)
+
+const jobDurationStatus = renderStatusRows({
+  columns: 120,
+  recent: { toolDetails: [], jobs: [{ id: 'job-1', status: 'running', startedAt: Date.now() - 2200 }] }
+})
+assert.match(visibleOf(jobDurationStatus.rows.join('\n')), /jobs 1 active · 2\.[0-9]s/)
+
+const duplicateJob = { id: 'job-1', status: 'running', startedAt: Date.now() - 2200 }
+const dedupedJobStatus = renderStatusRows({
+  columns: 120,
+  recent: { toolDetails: [], jobs: [duplicateJob] },
+  localBackgroundJobs: [duplicateJob]
+})
+const dedupedJobText = visibleOf(dedupedJobStatus.rows.join('\n'))
+assert.match(dedupedJobText, /jobs 1 active/)
+assert.equal(dedupedJobText.includes('jobs 2 active'), false)
+
+const jobPanelRows = renderJobPanel(
+  { entries: [{ id: 'job-1', status: 'completed', detail: 'npm test', durationMs: 2000 }], selected: 0 },
+  { id: 'job-1', status: 'completed', detail: 'npm test', durationMs: 2000 },
+  8,
+  100,
+  ANSI
+)
+assert.match(visibleOf(jobPanelRows.join('\n')), /npm test.*2\.0s/)
+
+for (const columns of [40, 60, 80, 100, 120]) {
+  const longJobPanelRows = renderJobPanel(
+    { entries: [{ id: 'job-1', status: 'running', detail: 'x'.repeat(300), durationMs: 12345 }], selected: 0 },
+    undefined,
+    8,
+    columns,
+    ANSI
+  )
+  assert.ok(Math.max(...longJobPanelRows.map((row) => widthOf(visibleOf(row)))) <= columns - 2)
+}
+
+for (const columns of [75, 95, 100, 120]) {
+  const { rows } = renderStatusRows({
+    columns,
+    liveModel: 'mock-v2',
+    cwdName: 'dsh-omc-tui',
+    usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, recentInput: 85000, contextWindow: 100000 },
+    git: { isGit: true, branch: 'main', dirty: true, ahead: 1, behind: 0 },
+    turnStats: { speed: 48.5, durationMs: 2200 },
+    recent: { toolDetails: ['✓ Read: index.js', '◐ Edit: statusline.js'], jobs: [] }
+  })
+  assert.ok(Math.max(...rows.map((row) => widthOf(visibleOf(row)))) <= columns - 2)
+}
+
+const hiddenTools = renderStatusRows({
+  columns: 120,
+  hudTools: false,
+  recent: { toolDetails: ['✓ Read: hidden.js'], jobs: [] }
+})
+assert.equal(visibleOf(hiddenTools.rows.join('\n')).includes('hidden.js'), false)
 
 console.log('unit regressions: ok')

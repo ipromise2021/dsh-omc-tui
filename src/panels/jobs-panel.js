@@ -1,4 +1,4 @@
-import { safe, shorten, wrap } from '../renderer/ansi.js'
+import { safe, shorten, wrap, formatDurationMs, widthOf, visibleOf, truncateAnsi } from '../renderer/ansi.js'
 import { ANSI as defaultAnsi } from '../renderer/themes.js'
 
 export function renderJobPanel(jobPanel, selectedJob, capacity, columns, ANSI = defaultAnsi) {
@@ -8,6 +8,7 @@ export function renderJobPanel(jobPanel, selectedJob, capacity, columns, ANSI = 
   const start = Math.min(Math.max(0, jobPanel.selected - slots + 1), Math.max(0, entries.length - slots))
   const shown = entries.slice(start, start + slots)
   const statusColor = (status) => status === 'failed' ? ANSI.coral : status === 'completed' ? ANSI.bash : ANSI.blueSoft
+  const maxWidth = Math.max(1, columns - 2)
   const lines = [
     `${ANSI.muted}BACKGROUND JOBS${ANSI.reset} ${ANSI.dim}· ${entries.length ? `${entries.length} visible` : 'none'}${ANSI.reset}`,
     ''
@@ -18,7 +19,18 @@ export function renderJobPanel(jobPanel, selectedJob, capacity, columns, ANSI = 
     const selected = index + start === jobPanel.selected
     const marker = selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
     const detail = entry.detail ?? entry.label ?? entry.kind ?? 'job'
-    lines.push(`${marker}  ${statusColor(entry.status)}${entry.status}${ANSI.reset}  ${ANSI.blueSoft}${entry.id}${ANSI.reset} ${ANSI.ink}${shorten(safe(detail), Math.max(24, columns - 28))}${ANSI.reset}`)
+    const elapsedMs = Number.isFinite(entry.elapsedMs)
+      ? entry.elapsedMs
+      : Number.isFinite(entry.durationMs)
+        ? entry.durationMs
+        : Number.isFinite(entry.startedAt)
+          ? (entry.finishedAt ?? Date.now()) - entry.startedAt
+          : undefined
+    const duration = elapsedMs === undefined ? '' : ` ${ANSI.dim}· ${formatDurationMs(Math.max(0, elapsedMs))}${ANSI.reset}`
+    const prefix = `${marker}  ${statusColor(entry.status)}${entry.status}${ANSI.reset}  ${ANSI.blueSoft}${entry.id}${ANSI.reset} `
+    const detailBudget = Math.max(1, maxWidth - widthOf(visibleOf(prefix)) - widthOf(visibleOf(duration)))
+    const row = `${prefix}${ANSI.ink}${shorten(safe(detail), detailBudget)}${ANSI.reset}${duration}`
+    lines.push(widthOf(visibleOf(row)) > maxWidth ? truncateAnsi(row, maxWidth) : row)
   }
   if (hasOutput) {
     const outputLabel = selectedJob ? `${selectedJob.id}${selectedJob.status ? ` · ${selectedJob.status}` : ''}` : 'selected job'
@@ -38,5 +50,5 @@ export function renderJobPanel(jobPanel, selectedJob, capacity, columns, ANSI = 
   }
   lines.push('')
   lines.push(`${ANSI.muted}↑↓ inspect  ·  Enter read  ·  k cancel  ·  r refresh  ·  Esc close${ANSI.reset}`)
-  return lines
+  return lines.map((line) => widthOf(visibleOf(line)) > maxWidth ? truncateAnsi(line, maxWidth) : line)
 }

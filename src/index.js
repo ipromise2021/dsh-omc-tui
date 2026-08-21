@@ -12,6 +12,7 @@ import {
   applyTheme,
   TERMINAL_MOUSE_OFF,
   STATUSLINE_MODES,
+  CONTEXT_DISPLAY_MODES,
   tuiSettingsSchema,
   activityWords,
   idleWords,
@@ -44,7 +45,9 @@ export const inject = ['agentDefaultModel', 'agentPresets', 'agents', 'permissio
 import {
   userMessage,
   foldUsage,
-  permissionFromEvents
+  permissionFromEvents,
+  getGitStatus,
+  invalidateGitCache
 } from './core/index.js'
 
 import {
@@ -87,6 +90,7 @@ import {
   renderCommandPalette,
   renderJobPanel,
   renderSettingsPicker,
+  SETTINGS_KEYS,
   renderEffortPicker,
   renderHistorySearch,
   renderModelPicker,
@@ -132,11 +136,12 @@ export class TuiApp {
     this.effortPicker = undefined // { efforts, selected }
     this.settingsPicker = undefined
     this.settingsScope = undefined
-    this.preferences = { theme: defaultTheme, showWelcome: true, persistHistory: true }
+    this.preferences = { theme: defaultTheme, showWelcome: true, persistHistory: true, contextMode: 'both', contextWarnAt: 60, contextCriticalAt: 80, hudGit: true, hudSpeed: true, hudTools: true }
     this.presetPicker = undefined // { entries, selected }
     this.presetConfirm = undefined
     this.localBackgroundJobs = []
     this.localJobsCount = 0
+    this.statuslineJobTimer = undefined
     this.jobPanel = undefined // { entries, selected, outputJobId, output, outputBusy, outputError }
     this.picker = undefined // { sessions, selected, loaded }
     this.filePicker = undefined // { baseDir, entries, selected }
@@ -178,6 +183,10 @@ export class TuiApp {
     this.reasoningEffort = undefined
     this.activeModel = undefined // { provider, model } live override for the current session
     this.usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextWindow: undefined, recentInput: undefined }
+    this.gitStatus = { isGit: false, branch: '', dirty: false, ahead: 0, behind: 0 }
+    this.turnStats = { speed: 0, durationMs: 0, active: false }
+    this.turnStartTime = undefined
+    this.turnStartOutputTokens = 0
     this.viewClearedSeq = 0
     this.lastCommittedSeq = 0
     this.lastFooterHeight = 0
@@ -387,7 +396,9 @@ export class TuiApp {
         this.disposers.push(this.jobsService.onJobsChanged(() => {
           if (this.jobPanel) void this.refreshJobsPanel()
           else this.scheduleRender()
+          this.ensureJobStatusTimer()
         }))
+        this.ensureJobStatusTimer()
       }
 
       if (isResumed) {
@@ -500,6 +511,8 @@ export class TuiApp {
         dispose?.()
       } catch {}
     }
+    clearInterval(this.statuslineJobTimer)
+    this.statuslineJobTimer = undefined
     if (!this.terminalOpen) return
     this.terminalOpen = false
     clearTimeout(this.renderTimer)
@@ -542,25 +555,49 @@ export class TuiApp {
   onStatus(status) {
     const wasActive = this.active
     this.active = status === 'running'
-    if (this.active && !wasActive && !this.animationTimer) {
-      this.animationTimer = setInterval(() => {
-        const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.providerPanel || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.skillsPanel
-        if (hasOverlay) return
-        this.scheduleRender()
-      }, 100)
+    if (this.active && !wasActive) {
+      this.turnStartTime = Date.now()
+      this.turnStartOutputTokens = this.usage?.output ?? 0
+      this.turnStats = { speed: 0, durationMs: 0, active: true }
+      if (!this.animationTimer) {
+        this.animationTimer = setInterval(() => {
+          if (this.turnStartTime) {
+            const durationMs = Math.max(100, Date.now() - this.turnStartTime)
+            this.turnStats = { speed: this.turnStats.speed, durationMs, active: true }
+          }
+          const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.providerPanel || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.skillsPanel
+          if (hasOverlay) return
+          this.scheduleRender()
+        }, 100)
+      }
     }
     if (!this.active && this.animationTimer) {
       clearInterval(this.animationTimer)
       this.animationTimer = undefined
     }
     if (wasActive && !this.active) {
-      this.commitUnprintedEvents()
-      this.streaming = { text: '', reasoning: '', tool: undefined }
-      this.message = ''
-      this.lastQueuedText = undefined
-      void this.sessionsService?.flush?.(this.agent.session)?.catch?.(() => {})
+      this.finishTurn(wasActive)
     }
     this.scheduleRender()
+  }
+
+  finishTurn(wasActive = this.active) {
+    this.active = false
+    if (this.turnStartTime) {
+      const durationMs = Math.max(100, Date.now() - this.turnStartTime)
+      const generatedTokens = Math.max(0, (this.usage?.output ?? 0) - (this.turnStartOutputTokens ?? 0))
+      const speed = generatedTokens > 0 ? (generatedTokens / (durationMs / 1000)) : 0
+      this.turnStats = { speed, durationMs, active: false }
+      this.turnStartTime = undefined
+    }
+    this.commitUnprintedEvents()
+    this.streaming = { text: '', reasoning: '', tool: undefined }
+    this.message = ''
+    this.lastQueuedText = undefined
+    if (wasActive) {
+      void this.sessionsService?.flush?.(this.agent.session)?.catch?.(() => {})
+      void this.refreshGitStatus({ force: true })
+    }
   }
 
   attachRequestOverride(agent) {
@@ -868,8 +905,22 @@ export class TuiApp {
         this.message = `tool · ${event.data.name}`
         break
       case 'tool/result':
-        this.streaming.tool = undefined
-        this.message = event.data.error ? `tool error · ${event.data.error.code}` : 'tool complete'
+        {
+          const resultCallId = event.data?.callId ?? event.data?.id
+          let toolName = event.data?.name
+          if (!toolName && resultCallId !== undefined) {
+            const toolCall = [...(session.events ?? [])].reverse().find((entry) => {
+              if (entry.type !== 'tool/call') return false
+              const callId = entry.data?.callId ?? entry.data?.id
+              return callId === resultCallId
+            })
+            toolName = toolCall?.data?.name
+          }
+          toolName ??= this.streaming.tool?.name
+          this.streaming.tool = undefined
+          this.message = event.data.error ? `tool error · ${event.data.error.code}` : 'tool complete'
+          void this.refreshGitStatus({ force: this.toolMayChangeWorkspace(toolName) })
+        }
         break
       case 'request/context':
         if (event.data.contextWindow) this.usage.contextWindow = event.data.contextWindow
@@ -896,11 +947,9 @@ export class TuiApp {
   }
 
   onTurnEnd(reason) {
-    this.active = false
-    this.streaming = { text: '', reasoning: '', tool: undefined }
+    this.finishTurn()
     this.streamBuffer = ''
     this.reasoningAt = undefined
-    this.message = ''
     if (this.animationTimer) {
       clearInterval(this.animationTimer)
       this.animationTimer = undefined
@@ -1724,7 +1773,7 @@ export class TuiApp {
 
   async cycleSetting(direction = 1) {
     if (!this.settingsPicker || !this.settingsScope) return
-    const keys = ['theme', 'statusline', 'persistHistory']
+    const keys = SETTINGS_KEYS
     const key = keys[this.settingsPicker.selected]
     const current = this.preferences[key]
     let next
@@ -1735,6 +1784,28 @@ export class TuiApp {
       const modes = STATUSLINE_MODES
       const curIdx = Math.max(0, modes.indexOf(current ?? 'detailed'))
       next = modes[(curIdx + direction + modes.length) % modes.length]
+    } else if (key === 'contextMode') {
+      const modes = CONTEXT_DISPLAY_MODES
+      const curIdx = Math.max(0, modes.indexOf(current ?? 'both'))
+      next = modes[(curIdx + direction + modes.length) % modes.length]
+    } else if (key === 'contextWarnAt') {
+      const values = [50, 60, 70].filter((value) => value < (this.preferences.contextCriticalAt ?? 80))
+      const hasPreset = values.length > 0
+      const currentValue = Number.isInteger(current) ? current : undefined
+      if (currentValue !== undefined && currentValue < (this.preferences.contextCriticalAt ?? 80) && !values.includes(currentValue)) values.push(currentValue)
+      if (!hasPreset) values.push(Math.max(1, (this.preferences.contextCriticalAt ?? 80) - 1))
+      values.sort((a, b) => a - b)
+      const curIdx = Math.max(0, values.indexOf(currentValue ?? 60))
+      next = values[(curIdx + direction + values.length) % values.length]
+    } else if (key === 'contextCriticalAt') {
+      const values = [75, 80, 90].filter((value) => value > (this.preferences.contextWarnAt ?? 60))
+      const hasPreset = values.length > 0
+      const currentValue = Number.isInteger(current) ? current : undefined
+      if (currentValue !== undefined && currentValue > (this.preferences.contextWarnAt ?? 60) && !values.includes(currentValue)) values.push(currentValue)
+      if (!hasPreset) values.push(100)
+      values.sort((a, b) => a - b)
+      const curIdx = Math.max(0, values.indexOf(currentValue ?? 80))
+      next = values[(curIdx + direction + values.length) % values.length]
     } else {
       next = !current
     }
@@ -1745,7 +1816,7 @@ export class TuiApp {
 
   async refreshEnvironmentSummary() {
     try {
-      const [hooks, mcp] = await Promise.all([this.readHookConfig(), this.readMcpConfig()])
+      const [hooks, mcp] = await Promise.all([this.readHookConfig(), this.readMcpConfig(), this.refreshGitStatus()])
       this.hookCount = hooks.length
       this.mcpCount = mcp.length
     } catch {
@@ -1753,6 +1824,26 @@ export class TuiApp {
       this.mcpCount = 0
     }
     this.scheduleRender()
+  }
+
+  async refreshGitStatus({ force = false } = {}) {
+    try {
+      const cwd = this.agent?.session?.header?.cwd ?? process.cwd()
+      if (force) invalidateGitCache(cwd)
+      const next = await getGitStatus(cwd, { force })
+      const currentCwd = this.agent?.session?.header?.cwd ?? process.cwd()
+      if (currentCwd !== cwd) return
+      this.gitStatus = next
+      this.scheduleRender()
+    } catch {
+      this.gitStatus = { isGit: false, branch: '', dirty: false, ahead: 0, behind: 0 }
+      this.scheduleRender()
+    }
+  }
+
+  toolMayChangeWorkspace(name) {
+    const normalized = String(name ?? '').toLowerCase()
+    return /(?:edit|write|replace|patch|bash|shell|exec|command|run|delete|remove|move|rename|mkdir|touch)/.test(normalized)
   }
 
   async showHooks() {
@@ -2752,6 +2843,9 @@ export class TuiApp {
       this.streaming = { text: '', reasoning: '', tool: undefined }
       this.streamBuffer = ''
       this.reasoningAt = undefined
+      this.turnStats = { speed: 0, durationMs: 0, active: false }
+      this.turnStartTime = undefined
+      this.turnStartOutputTokens = 0
       this.usage = foldUsage(agent.session.events)
       this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
       this.viewClearedSeq = 0
@@ -2812,9 +2906,26 @@ export class TuiApp {
       label: `$ ${job.command}`,
       status: job.status,
       detail: job.command,
-      output: job.output
+      output: job.output,
+      startedAt: job.startedAt,
+      finishedAt: job.finishedAt,
+      elapsedMs: job.elapsedMs,
+      durationMs: job.durationMs
     }))
     return [...remote, ...local]
+  }
+
+  ensureJobStatusTimer() {
+    if (this.statuslineJobTimer) return
+    this.statuslineJobTimer = setInterval(() => {
+      const running = this.jobSnapshots().some((job) => job.status === 'running' || job.status === 'stopping')
+      if (!running) {
+        clearInterval(this.statuslineJobTimer)
+        this.statuslineJobTimer = undefined
+        return
+      }
+      this.scheduleRender()
+    }, 1000)
   }
 
   selectJob(index) {
@@ -2961,16 +3072,7 @@ export class TuiApp {
     return {
       tools: tools.slice(-3),
       toolDetails: (() => {
-        const lastCalls = []
-        const seen = new Set()
-        for (const call of [...calls].reverse()) {
-          const name = String(call.data?.name ?? 'tool')
-          if (seen.has(name)) continue
-          seen.add(name)
-          lastCalls.push(call)
-          if (lastCalls.length >= 3) break
-        }
-        return lastCalls.map((call) => {
+        const describeCall = (call) => {
           const callIndex = events.lastIndexOf(call)
           const callId = call.data?.callId ?? call.data?.id
           const result = events.slice(callIndex + 1).find((event) => {
@@ -2978,9 +3080,66 @@ export class TuiApp {
             const resultId = event.data?.callId ?? event.data?.id
             return callId === undefined || resultId === undefined || resultId === callId
           })
-          const state = result ? (result.data?.error ? '!' : '✓') : (this.active ? '…' : '✓')
-          return `${String(call.data?.name ?? 'tool')}${state}`
-        }).reverse()
+          const isError = result && result.data?.error
+          const isPending = !result && this.active
+          const icon = isError ? '!' : (isPending ? '◐' : '✓')
+
+          const rawName = String(call.data?.name ?? 'tool')
+          const normalizedName = rawName.toLowerCase()
+          let action = rawName
+          let target = ''
+          let args = {}
+          try {
+            const rawArgs = call.data?.arguments ?? call.data?.args
+            const parsed = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed
+          } catch {}
+
+          const targetPath = args.TargetFile ?? args.AbsolutePath ?? args.path ?? args.file ?? args.filePath ?? args.filename ?? args.DirectoryPath
+          const targetCmd = args.CommandLine ?? args.command ?? args.cmd
+          const targetQuery = args.Query ?? args.query ?? args.pattern
+
+          if (normalizedName.includes('replace') || normalizedName.includes('write') || normalizedName.includes('edit')) {
+            action = 'Edit'
+            if (typeof targetPath === 'string' && targetPath) target = `: ${targetPath.split(/[/\\]/).pop()}`
+          } else if (normalizedName.includes('read') || normalizedName.includes('view')) {
+            action = 'Read'
+            if (typeof targetPath === 'string' && targetPath) target = `: ${targetPath.split(/[/\\]/).pop()}`
+          } else if (normalizedName.includes('grep') || normalizedName.includes('search')) {
+            action = 'Grep'
+            if (targetQuery) target = `: "${String(targetQuery).slice(0, 12)}"`
+          } else if (normalizedName.includes('command') || normalizedName.includes('bash') || normalizedName.includes('exec') || normalizedName.includes('run')) {
+            action = 'Exec'
+            if (targetCmd) target = `: ${String(targetCmd).split(' ')[0]}`
+          } else if (normalizedName.includes('skill')) {
+            action = 'Skill'
+            const sName = args.name ?? args.skill ?? args.skillName
+            if (sName) target = `: ${sName}`
+          } else {
+            action = rawName.replace(/^dsh[-_]/, '').replace(/^tool[-_]/, '')
+            if (typeof targetPath === 'string' && targetPath) target = `: ${targetPath.split(/[/\\]/).pop()}`
+          }
+
+          return { icon, action, target }
+        }
+
+        const grouped = new Map()
+        for (const call of calls.slice(-12)) {
+          const detail = describeCall(call)
+          const existing = grouped.get(detail.action)
+          if (!existing) {
+            grouped.set(detail.action, { ...detail, count: 1 })
+          } else {
+            grouped.delete(detail.action)
+            grouped.set(detail.action, {
+              ...existing,
+              icon: detail.icon,
+              target: detail.target || existing.target,
+              count: existing.count + 1
+            })
+          }
+        }
+        return [...grouped.values()].slice(-3).map(({ icon, action, target, count }) => `${icon} ${action}${count > 1 ? ` ×${count}` : ''}${target}`)
       })(),
       skills: [...new Set(skills)].slice(-2),
       jobs: this.jobSnapshots().filter((job) => job.status === 'running' || job.status === 'stopping')
@@ -3140,6 +3299,9 @@ export class TuiApp {
       if (this.reasoningBlocks.length > 20) this.reasoningBlocks.length = 20
       this.streaming = { text: '', reasoning: '', tool: undefined }
       this.reasoningAt = undefined
+      this.turnStats = { speed: 0, durationMs: 0, active: false }
+      this.turnStartTime = undefined
+      this.turnStartOutputTokens = 0
       this.usage = foldUsage(agent.session.events)
       this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
       this.viewClearedSeq = 0
@@ -3510,6 +3672,7 @@ export class TuiApp {
       if (ended) return
       ended = true
       clearTimeout(timer)
+      active.finishedAt = Date.now()
       if (error) {
         active.status = 'failed'
         active.error = error.message
@@ -3527,6 +3690,7 @@ export class TuiApp {
           this.log(code === 0 ? 'ok' : 'error', `Background job ${active.id} ($ ${shorten(command, 40)}) finished (exit ${code})`, 'job')
         }
         if (this.jobPanel) void this.refreshJobsPanel()
+        this.scheduleRender()
       }
     }
     child.on('close', (code) => finish({ code }))
@@ -3915,6 +4079,7 @@ export class TuiApp {
         const job = this.activeBash
         if (!this.localBackgroundJobs) this.localBackgroundJobs = []
         this.localBackgroundJobs.push(job)
+        this.ensureJobStatusTimer()
         this.activeBash = undefined
         this.message = ''
         this.log('ok', `Backgrounded ${job.id} ($ ${shorten(job.command, 50)}) · type /jobs to inspect`, 'Ctrl+B')
@@ -4101,7 +4266,7 @@ export class TuiApp {
         this.skillsPanel.selected = Math.min((this.skills?.length ?? 1) - 1, this.skillsPanel.selected + 1)
         this.scheduleRender()
       } else if (this.settingsPicker) {
-        this.settingsPicker.selected = Math.min(2, this.settingsPicker.selected + 1); this.scheduleRender()
+        this.settingsPicker.selected = Math.min(SETTINGS_KEYS.length - 1, this.settingsPicker.selected + 1); this.scheduleRender()
       } else if (this.menu) {
         this.menu.selected = (this.menu.selected + 1) % this.menu.items.length
         this.scheduleRender()
@@ -4332,6 +4497,14 @@ export class TuiApp {
       localBackgroundJobs: this.localBackgroundJobs ?? [],
       recent,
       hasSystemPrompt,
+      git: this.gitStatus,
+      turnStats: this.turnStats,
+      hudGit: this.preferences?.hudGit ?? true,
+      hudSpeed: this.preferences?.hudSpeed ?? true,
+      hudTools: this.preferences?.hudTools ?? true,
+      contextMode: this.preferences?.contextMode ?? 'both',
+      contextWarnAt: this.preferences?.contextWarnAt ?? 60,
+      contextCriticalAt: this.preferences?.contextCriticalAt ?? 80,
       statusRowsCache: this.statusRowsCache,
       ANSI
     })
