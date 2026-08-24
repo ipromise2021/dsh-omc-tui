@@ -74,14 +74,10 @@ export function renderInlineApproval(pendingApproval, approvalChoice = 0, approv
 
   // 4. 3 Clean Claude Code English options
   let opt1Label = '1. Yes'
-  let opt2Label = '2. Yes, allow all edits during this session (shift+tab)'
+  let opt2Label = '2. Yes, switch to workspace-write for this session (shift+tab)'
   let opt3Label = '3. No'
 
-  if (isCmd) {
-    opt2Label = '2. Yes, allow all commands during this session (shift+tab)'
-  } else if (isEscalate) {
-    opt2Label = '2. Yes, allow workspace-write during this session (shift+tab)'
-  }
+  if (isEscalate) opt2Label = '2. Yes, allow workspace-write during this session (shift+tab)'
 
   const optionLabels = [opt1Label, opt2Label, opt3Label]
 

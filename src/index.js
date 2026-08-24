@@ -65,6 +65,10 @@ const ACTION_INTENT_PATTERNS = [
   ['browser', /\b(?:click|navigate|open|snapshot)\b|点击|打开|截图/i]
 ]
 
+function isRunningJob(job) {
+  return job?.status === 'running' || job?.status === 'stopping'
+}
+
 export function repeatedActionIntent(text, threshold = 6) {
   const counts = new Map()
   for (const sentence of String(text ?? '').split(/[\n。！？.!?]+/)) {
@@ -129,6 +133,8 @@ import {
   tokenizeInput,
   loadHistoryFile,
   appendHistoryFile,
+  loadShellHistoryFile,
+  appendShellHistoryFile,
   loadMruFile,
   saveMruFile,
   EXCLUDED_DIRS,
@@ -170,7 +176,8 @@ import {
   renderAddPresetPicker,
   renderProviderForm,
   renderDiscoverModelsModal,
-  renderDeleteConfirmModal
+  renderDeleteConfirmModal,
+  renderExitConfirm
 } from './panels/index.js'
 
 const PRESET_PROVIDERS = [
@@ -198,6 +205,8 @@ export class TuiApp {
     this.initializing = undefined
     this.history = []
     this.historyIndex = -1
+    this.shellHistory = []
+    this.shellCompletion = undefined // { base, matches, selected }
     this.queuedSubmissions = [] // { draft, images, messageId?, cancelled }
     this.skills = []
 
@@ -206,13 +215,15 @@ export class TuiApp {
     this.effortPicker = undefined // { efforts, selected }
     this.settingsPicker = undefined
     this.settingsScope = undefined
-    this.preferences = { theme: defaultTheme, showWelcome: true, persistHistory: true, contextMode: 'both', contextWarnAt: 60, contextCriticalAt: 80, autoCompact: true, hudGit: true, hudSpeed: true, hudTools: true, disabledSkills: [...DEFAULT_DISABLED_SKILLS] }
+    this.preferences = { theme: defaultTheme, showWelcome: true, persistHistory: true, contextMode: 'both', contextWarnAt: 60, contextCriticalAt: 80, autoCompact: true, promptSuggestions: false, hudGit: true, hudSpeed: true, hudTools: true, disabledSkills: [...DEFAULT_DISABLED_SKILLS] }
     this.presetPicker = undefined // { entries, selected }
     this.presetConfirm = undefined
+    this.exitConfirm = undefined // { code, selected, runningJobs }
     this.localBackgroundJobs = []
     this.localJobsCount = 0
+    this.jobOutputCache = new Map()
     this.statuslineJobTimer = undefined
-    this.jobPanel = undefined // { entries, selected, outputJobId, output, outputBusy, outputError }
+    this.jobPanel = undefined // { entries, selected, selectedJobId, outputJobId, output, outputBusy, outputError, outputFollow, outputNewLines, outputScroll }
     this.picker = undefined // { sessions, selected, loaded }
     this.filePicker = undefined // { baseDir, entries, selected }
     this.pendingApproval = undefined
@@ -233,6 +244,8 @@ export class TuiApp {
     this.reasoningBlocks = [] // { key, lines, ms, text } most recent first
     this.expandedKeys = new Set()
     this.historySearch = undefined // { query, matches, selected }
+    this.promptSuggestion = undefined // { text, controller, requestId }
+    this.promptSuggestionSeq = 0
     this.modelPicker = undefined // { entries, selected }
     this.variantPicker = undefined // { provider, model, name, entries, selected }
     this.providerPanel = undefined // { view, providers, selected, ... }
@@ -284,6 +297,23 @@ export class TuiApp {
     this.bracketing = false
     this.disposers = []
 
+    const origStdoutWrite = process.stdout.write.bind(process.stdout)
+    this.disposers.push(() => { process.stdout.write = origStdoutWrite })
+    process.stdout.write = (chunk, encoding, cb) => {
+      const callback = typeof encoding === 'function' ? encoding : cb
+      const text = String(chunk ?? '')
+      // chrome-devtools-mcp emits startup guidance on stdout in some versions.
+      // Route only those plain-text notices while the footer is active; all TUI
+      // output contains ANSI sequences and continues through the original writer.
+      if (!/\x1B/.test(text) && this.isExternalMcpOutput(text) && this.routeExternalOutput(text)) {
+        if (typeof callback === 'function') callback()
+        return true
+      }
+      return typeof callback === 'function'
+        ? origStdoutWrite(text, typeof encoding === 'string' ? encoding : 'utf8', callback)
+        : origStdoutWrite(text, typeof encoding === 'string' ? encoding : 'utf8')
+    }
+
     const origStderrWrite = process.stderr.write.bind(process.stderr)
     this.disposers.push(() => { process.stderr.write = origStderrWrite })
     process.stderr.write = (chunk, encoding, cb) => {
@@ -298,6 +328,10 @@ export class TuiApp {
         ? origStderrWrite(safe(text), writeEncoding, callback)
         : origStderrWrite(safe(text), writeEncoding)
       if (this.terminalOpen && this.lastFooterHeight > 0) {
+        if (this.isExternalMcpOutput(text) && this.routeExternalOutput(text)) {
+          if (typeof callback === 'function') callback()
+          return true
+        }
         this.clearFooter()
         const result = write()
         this.render()
@@ -379,9 +413,10 @@ export class TuiApp {
       const continueLast = launcherArgs.includes('-c') || launcherArgs.includes('--continue') || process.argv.includes('-c') || process.argv.includes('--continue')
       this.initializing.continuing = continueLast
 
-      const [,, resumeRecord] = await Promise.all([
+      const [,,, resumeRecord] = await Promise.all([
         this.loadHistory(),
         this.loadMru(),
+        this.loadShellHistory(cwd),
         continueLast ? this.findResumeRecord(cwd) : Promise.resolve(undefined)
       ])
 
@@ -557,8 +592,18 @@ export class TuiApp {
     this.history = await loadHistoryFile(this.stateDir(), this.preferences.persistHistory)
   }
 
+  async loadShellHistory(cwd = process.cwd()) {
+    this.shellHistory = await loadShellHistoryFile(this.stateDir(), cwd, this.preferences.persistHistory)
+  }
+
   appendHistory(entry) {
     appendHistoryFile(this.stateDir(), entry, this.preferences.persistHistory)
+  }
+
+  appendShellHistory(command) {
+    this.shellHistory = [...(this.shellHistory ?? []), command].slice(-200)
+    appendShellHistoryFile(this.stateDir(), process.cwd(), command, this.preferences.persistHistory)
+    this.clearShellCompletion()
   }
 
   installSettings() {
@@ -571,7 +616,11 @@ export class TuiApp {
   applySettings(next) {
     this.preferences = next
     applyTheme(next.theme)
-    if (!next.persistHistory) this.history = []
+    if (!next.persistHistory) {
+      this.history = []
+      this.shellHistory = []
+    }
+    if (next.promptSuggestions === false) this.clearPromptSuggestion()
     this.scheduleRender()
   }
 
@@ -598,7 +647,13 @@ export class TuiApp {
     this.disposers.push(() => process.off('SIGTERM', onSignal))
   }
 
-  async stop() {
+  async stop({ ignoreJobErrors = false } = {}) {
+    this.clearPromptSuggestion()
+    try {
+      await this.stopRunningJobs()
+    } catch (error) {
+      if (!ignoreJobErrors) throw error
+    }
     if (this.questionPanel) this.finishQuestion(new Error('user cancelled the question'))
     for (const dispose of this.disposers.splice(0).reverse()) {
       try {
@@ -639,7 +694,14 @@ export class TuiApp {
 
   async quit(code = 0) {
     const exit = this.ctx.get('appExit')
-    await this.stop()
+    try {
+      await this.stop()
+    } catch (error) {
+      this.log('error', error instanceof Error ? error.message : String(error), '/exit')
+      this.message = ''
+      this.scheduleRender(true)
+      return
+    }
     if (exit) {
       try {
         exit(code)
@@ -663,7 +725,7 @@ export class TuiApp {
             const durationMs = Math.max(100, Date.now() - this.turnStartTime)
             this.turnStats = { speed: this.turnStats.speed, durationMs, active: true }
           }
-          const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.providerPanel || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.skillsPanel
+          const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.providerPanel || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.exitConfirm || this.skillsPanel
           if (hasOverlay) return
           this.scheduleRender()
         }, 100)
@@ -1093,6 +1155,7 @@ export class TuiApp {
     this.finishTurn()
     this.refreshContextTokens?.()
     this.scheduleAutoCompact?.()
+    if (!reason || reason.kind !== 'error') this.schedulePromptSuggestion?.()
     this.streamBuffer = ''
     this.reasoningAt = undefined
     if (this.animationTimer) {
@@ -1102,6 +1165,181 @@ export class TuiApp {
     if (!reason) return
     if (reason.kind === 'error') {
       this.log('error', `${reason.error.code}: ${reason.error.message}`)
+    }
+  }
+
+  clearShellCompletion() {
+    this.shellCompletion = undefined
+  }
+
+  shellCompletionMatches(base = this.input.slice(1)) {
+    if (!this.inBashMode() || this.cursor !== this.input.length || this.input.includes('\n')) return []
+    base = String(base).replace(/^\s+/, '')
+    const seen = new Set()
+    const matches = []
+    for (const command of [...(this.shellHistory ?? [])].reverse()) {
+      if (command === base || !command.startsWith(base) || seen.has(command)) continue
+      seen.add(command)
+      matches.push(command)
+    }
+    return matches
+  }
+
+  shellCompletionGhost() {
+    if (!this.inBashMode() || this.cursor !== this.input.length || this.input.includes('\n')) return ''
+    const base = this.input.slice(1).replace(/^\s+/, '')
+    const matches = this.shellCompletion?.base === base
+      ? this.shellCompletion.matches
+      : this.shellCompletionMatches(base)
+    const candidate = matches?.[this.shellCompletion?.selected ?? 0]
+    return candidate?.startsWith(base) ? candidate.slice(base.length) : ''
+  }
+
+  acceptShellCompletion() {
+    if (!this.inBashMode() || this.cursor !== this.input.length || this.input.includes('\n')) return false
+    const rawBase = this.input.slice(1)
+    const leading = rawBase.slice(0, rawBase.length - rawBase.replace(/^\s+/, '').length)
+    const currentBase = rawBase.replace(/^\s+/, '')
+    const stateMatches = this.shellCompletion?.base === currentBase
+      ? this.shellCompletion.matches
+      : this.shellCompletion?.matches?.some((match) => match === currentBase)
+        ? this.shellCompletion.matches
+        : this.shellCompletionMatches(currentBase)
+    if (!stateMatches || stateMatches.length === 0) return false
+    const currentIndex = this.shellCompletion?.matches === stateMatches
+      ? stateMatches.indexOf(currentBase)
+      : -1
+    const selected = currentIndex >= 0 ? (currentIndex + 1) % stateMatches.length : 0
+    const base = this.shellCompletion?.base ?? currentBase
+    const match = stateMatches[selected]
+    this.shellCompletion = { base, matches: stateMatches, selected }
+    this.input = `!${leading}${match}`
+    this.cursor = this.input.length
+    this.pasteFolded = undefined
+    this.scheduleRender(true)
+    return true
+  }
+
+  clearPromptSuggestion() {
+    clearTimeout(this.promptSuggestionTimer)
+    this.promptSuggestionTimer = undefined
+    this.promptSuggestionSeq += 1
+    try { this.promptSuggestion?.controller?.abort() } catch {}
+    this.promptSuggestion = undefined
+  }
+
+  acceptPromptSuggestion() {
+    const text = this.promptSuggestion?.text
+    if (!text || this.input !== '' || this.pendingImages.length > 0) return false
+    this.clearPromptSuggestion()
+    this.input = text
+    this.cursor = text.length
+    this.historyIndex = -1
+    this.scheduleRender(true)
+    return true
+  }
+
+  suggestionContext() {
+    const events = this.agent?.session?.events ?? []
+    const recent = events
+      .filter((event) => event.type === 'user/message' || event.type === 'assistant/message')
+      .slice(-4)
+      .map((event) => {
+        const content = event.type === 'user/message' ? event.data?.content : event.data?.message?.content
+        const text = textOf(content).replace(/\s+/g, ' ').trim()
+        return text ? `${event.type === 'user/message' ? 'User' : 'Assistant'}: ${text.slice(0, 700)}` : ''
+      })
+      .filter(Boolean)
+    return recent.join('\n')
+  }
+
+  canSuggestPrompt() {
+    if (this.preferences?.promptSuggestions === false || !this.agent || this.active) return false
+    if (this.input !== '' || this.pendingImages.length > 0 || this.queuedSubmissions.length > 0) return false
+    if (!this.suggestionContext()) return false
+    if (this.inBashMode() || this.questionPanel || this.pendingApproval || this.jobPanel || this.menu || this.filePicker || this.commandPalette || this.historySearch || this.picker) return false
+    return typeof this.ctx.agents?.create === 'function'
+  }
+
+  schedulePromptSuggestion() {
+    this.clearPromptSuggestion()
+    if (!this.canSuggestPrompt()) return
+    const requestId = this.promptSuggestionSeq + 1
+    const controller = new AbortController()
+    this.promptSuggestion = { controller, requestId, text: undefined }
+    this.promptSuggestionTimer = setTimeout(() => {
+      this.promptSuggestionTimer = undefined
+      void this.generatePromptSuggestion(requestId, controller)
+    }, 250)
+  }
+
+  async generatePromptSuggestion(requestId, controller) {
+    if (controller.signal.aborted || requestId !== this.promptSuggestion?.requestId) return
+    const selection = this.activeModel ?? this.ctx.agentDefaultModel?.currentSelection?.()
+    if (!selection?.provider || !selection?.model) return
+    const sessionId = `suggestion-${randomUUID()}`
+    let tempAgent
+    let dispose
+    let removeEvent
+    let removeStatus
+    let timeout
+    let response = ''
+    try {
+      const created = await this.ctx.agents.create({
+        sessionId,
+        meta: { cwd: process.cwd(), ephemeral: true, origin: 'subagent', parentSession: this.agent.session.id },
+        agentOptions: { provider: selection.provider, model: selection.model },
+        setup(agentCtx) {
+          agentCtx.tools?.restrict?.({ allow: [] })
+          agentCtx.tools?.guard?.(() => 'prompt suggestions cannot call tools')
+        }
+      })
+      tempAgent = created.agent
+      dispose = created.dispose
+      if (controller.signal.aborted || requestId !== this.promptSuggestion?.requestId) return
+      const prompt = [
+        'Suggest exactly one concise next user message for the main coding session.',
+        'Return only the message text, with no quotes, bullets, explanation, or markdown.',
+        'Keep it actionable and under 120 characters. Do not invent files or facts.',
+        '',
+        this.suggestionContext()
+      ].join('\n')
+      await new Promise((resolve, reject) => {
+        let settled = false
+        const finish = (error) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timeout)
+          if (error) reject(error)
+          else resolve()
+        }
+        removeEvent = this.ctx.on('session/event', (session, event) => {
+          if (session.id !== sessionId || event.type !== 'assistant/message') return
+          const text = textOf(event.data?.message?.content).trim()
+          if (text) response = text
+        })
+        removeStatus = this.ctx.on('agent/status', ({ agent, status }) => {
+          if (agent === tempAgent && (status === 'idle' || status === 'error')) finish()
+        })
+        timeout = setTimeout(() => finish(new Error('prompt suggestion timed out')), 20_000)
+        controller.signal.addEventListener('abort', () => {
+          try { tempAgent.cancel?.({ kind: 'user' }) } catch {}
+          finish(new Error('prompt suggestion cancelled'))
+        }, { once: true })
+        Promise.resolve(tempAgent.followup(userMessage([{ type: 'text', text: prompt }]))).catch(finish)
+      })
+      if (controller.signal.aborted || requestId !== this.promptSuggestion?.requestId) return
+      const text = response.replace(/^```[\s\S]*?\n|```$/g, '').split('\n')[0].trim().slice(0, 160)
+      if (!text || this.input !== '' || this.active) return
+      this.promptSuggestion = { text, controller, requestId }
+      this.scheduleRender(true)
+    } catch {
+      // Suggestions are optional and must never surface as a session error.
+    } finally {
+      clearTimeout(timeout)
+      removeEvent?.()
+      removeStatus?.()
+      try { await dispose?.() } catch {}
     }
   }
 
@@ -1381,6 +1619,33 @@ export class TuiApp {
     if (this.localLog.length > 200) this.localLog.shift()
     const lines = this.formatLogEntry(entry)
     this.commitToScrollback(lines)
+  }
+
+  isExternalMcpOutput(text) {
+    return /chrome-devtools-mcp exposes content|avoid sharing sensitive or personal information|^\[chrome-devtools-mcp\]/im.test(String(text ?? ''))
+  }
+
+  routeExternalOutput(text) {
+    if (!this.terminalOpen || this.lastFooterHeight <= 0 || this.routingExternalOutput) return false
+    const columns = Math.max(60, process.stdout.columns || 100)
+    const externalLines = this.formatExternalStderr(text, columns)
+    if (externalLines.length === 0) return false
+    this.routingExternalOutput = true
+    try {
+      this.commitToScrollback([...externalLines, ''])
+    } finally {
+      this.routingExternalOutput = false
+    }
+    return true
+  }
+
+  formatExternalStderr(text, columns = Math.max(60, process.stdout.columns || 100)) {
+    return safe(text)
+      .replace(/\r/g, '')
+      .split('\n')
+      .filter((line, index, lines) => line || index < lines.length - 1)
+      .flatMap((line) => wrap(line, Math.max(24, columns - 4)))
+      .map((line) => `${ANSI.dim}│ ${line}${ANSI.reset}`)
   }
 
   formatLogEntry(entry) {
@@ -1851,6 +2116,8 @@ export class TuiApp {
 
   submit() {
     if (!this.agent) return
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     if (this.compacting || this.autoCompactTimer) {
       this.log('ok', 'Context is being compacted, please wait…', '/compact')
       return
@@ -1894,6 +2161,7 @@ export class TuiApp {
     this.pendingImages = []
 
     if (prompt.startsWith('!') && !prompt.startsWith('!!')) {
+      this.appendShellHistory?.(prompt.slice(1).trim())
       if (images.length > 0) this.pendingImages = [...images, ...this.pendingImages]
       this.runBash(prompt.slice(1).trim())
       return
@@ -3400,6 +3668,7 @@ export class TuiApp {
         this.ctx.permissionPresets.set(agent.session, permissionName)
       }
       if (previous) {
+        this.stopLocalBackgroundJobs?.()
         await Promise.race([
           this.sessionsService?.flush?.(previous.agent.session),
           new Promise((resolve) => setTimeout(resolve, 500))
@@ -3441,13 +3710,21 @@ export class TuiApp {
   async refreshJobsPanel() {
     if (!this.jobPanel) return
     try {
-      const entries = this.jobSnapshots()
+      const selectedId = this.jobPanel.selectedJobId ?? this.jobPanel.entries[this.jobPanel.selected]?.id
+      const entries = this.orderJobEntries(this.jobSnapshots())
       this.jobPanel.entries = entries
-      this.jobPanel.selected = Math.min(this.jobPanel.selected, Math.max(0, entries.length - 1))
+      const selectedIndex = selectedId ? entries.findIndex((entry) => entry.id === selectedId) : -1
+      this.jobPanel.selected = selectedIndex >= 0
+        ? selectedIndex
+        : Math.min(this.jobPanel.selected, Math.max(0, entries.length - 1))
+      this.jobPanel.selectedJobId = entries[this.jobPanel.selected]?.id
       if (this.jobPanel.outputJobId && !entries.some((entry) => entry.id === this.jobPanel.outputJobId)) {
         this.jobPanel.outputJobId = undefined
         this.jobPanel.output = undefined
         this.jobPanel.outputError = undefined
+      }
+      if (this.jobPanel.outputJobId) {
+        this.jobPanel.output = this.jobOutputCache.get(this.jobPanel.outputJobId) ?? this.jobPanel.output
       }
     } catch {
       this.jobPanel.entries = []
@@ -3457,8 +3734,19 @@ export class TuiApp {
   }
 
   openJobsPanel() {
-    const snapshots = this.jobSnapshots()
-    this.jobPanel = { entries: snapshots, selected: 0, outputJobId: undefined, output: undefined, outputBusy: false, outputError: undefined }
+    const snapshots = this.orderJobEntries(this.jobSnapshots())
+    this.jobPanel = {
+      entries: snapshots,
+      selected: 0,
+      selectedJobId: snapshots[0]?.id,
+      outputJobId: undefined,
+      output: undefined,
+      outputBusy: false,
+      outputError: undefined,
+      outputFollow: true,
+      outputNewLines: 0,
+      outputScroll: 0
+    }
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(true)
       process.stdin.resume()
@@ -3500,9 +3788,66 @@ export class TuiApp {
       startedAt: job.startedAt,
       finishedAt: job.finishedAt,
       elapsedMs: job.elapsedMs,
-      durationMs: job.durationMs
+      durationMs: job.durationMs,
+      local: true
     }))
     return [...normalizedRemote, ...local]
+  }
+
+  runningExitJobs() {
+    const jobs = this.jobSnapshots().filter(isRunningJob)
+    if (this.agent?.status === 'running') {
+      jobs.push({
+        id: 'current-agent-turn',
+        kind: 'agent',
+        detail: this.streaming.tool?.name ? `Current tool: ${this.streaming.tool.name}` : 'Current agent turn',
+        status: 'running'
+      })
+    }
+    if (this.activeBash && isRunningJob(this.activeBash)) {
+      jobs.push({
+        id: this.activeBash.id,
+        kind: 'bash',
+        detail: this.activeBash.command,
+        status: this.activeBash.status,
+        local: true
+      })
+    }
+    return jobs
+  }
+
+  requestQuit(code = 0) {
+    if (this.exitConfirm) return
+    const runningJobs = this.runningExitJobs()
+    if (runningJobs.length === 0) {
+      void this.quit(code)
+      return
+    }
+    this.exitConfirm = { code, selected: 0, runningJobs }
+    this.scheduleRender()
+  }
+
+  applyExitConfirm(action) {
+    const request = this.exitConfirm
+    this.exitConfirm = undefined
+    if (!request || action === 'cancel') {
+      this.scheduleRender()
+      return
+    }
+    void this.quit(request.code)
+  }
+
+  orderJobEntries(entries) {
+    const rank = (status) => {
+      if (status === 'running' || status === 'stopping') return 0
+      if (status === 'failed' || status === 'killed') return 1
+      if (status === 'completed') return 2
+      return 3
+    }
+    return entries
+      .map((entry, index) => ({ entry, index }))
+      .sort((a, b) => rank(a.entry.status) - rank(b.entry.status) || (a.entry.startedAt ?? a.index) - (b.entry.startedAt ?? b.index))
+      .map(({ entry }) => entry)
   }
 
   ensureJobStatusTimer() {
@@ -3518,14 +3863,97 @@ export class TuiApp {
     }, 1000)
   }
 
+  signalLocalJob(job, signal) {
+    if (!job?.child || job.child.killed || !isRunningJob(job)) return
+    try {
+      if (process.platform !== 'win32' && Number.isInteger(job.child.pid)) process.kill(-job.child.pid, signal)
+      else job.child.kill(signal)
+    } catch {
+      try { job.child.kill(signal) } catch {}
+    }
+  }
+
+  async stopLocalJob(job) {
+    if (!job?.child || job.child.killed || !isRunningJob(job)) return
+    job.stopRequested = true
+    job.status = 'stopping'
+    this.signalLocalJob(job, 'SIGTERM')
+    await Promise.race([
+      Promise.resolve(job.done).catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 1500))
+    ])
+    if (isRunningJob(job)) {
+      this.signalLocalJob(job, 'SIGKILL')
+      await Promise.race([
+        Promise.resolve(job.done).catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 250))
+      ])
+    }
+  }
+
+  async stopRunningJobs() {
+    const localJobs = []
+    if (this.activeBash) localJobs.push(this.activeBash)
+    localJobs.push(...(this.localBackgroundJobs ?? []))
+    const localIds = new Set(localJobs.map((job) => String(job.id)))
+    const remoteJobs = this.jobSnapshots().filter((job) => isRunningJob(job) && !localIds.has(String(job.id)))
+    const stopLocal = localJobs.map((job) => this.stopLocalJob(job))
+    const stopRemote = typeof this.jobsService?.kill === 'function'
+      ? remoteJobs.map(async (job) => {
+        let timeout
+        try {
+          await Promise.race([
+            Promise.resolve(this.jobsService.kill(job.id, this.agent, 'session exited')),
+            new Promise((_, reject) => {
+              timeout = setTimeout(() => reject(new Error(`timed out stopping job ${job.id}`)), 5000)
+            })
+          ])
+        } finally {
+          clearTimeout(timeout)
+        }
+      })
+      : []
+    if (this.agent?.status === 'running') {
+      try { this.agent.cancel({ kind: 'user' }) } catch {}
+    }
+    const results = await Promise.allSettled([...stopLocal, ...stopRemote])
+    const failed = results.filter((result) => result.status === 'rejected')
+    if (failed.length > 0) {
+      const reason = failed[0].reason
+      throw new Error(`Could not stop ${failed.length} background ${failed.length === 1 ? 'job' : 'jobs'}: ${reason instanceof Error ? reason.message : String(reason)}`)
+    }
+    this.activeBash = undefined
+    this.localBackgroundJobs = []
+    this.jobOutputCache.clear()
+  }
+
+  stopLocalBackgroundJobs() {
+    const jobs = []
+    if (this.activeBash) jobs.push(this.activeBash)
+    jobs.push(...(this.localBackgroundJobs ?? []))
+    for (const job of jobs) {
+      if (!job.child || job.child.killed || (job.status !== 'running' && job.status !== 'stopping')) continue
+      job.stopRequested = true
+      job.status = 'stopping'
+      this.signalLocalJob(job, 'SIGTERM')
+    }
+    this.activeBash = undefined
+    this.localBackgroundJobs = []
+    this.jobOutputCache.clear()
+  }
+
   selectJob(index) {
     if (!this.jobPanel) return
     const next = Math.max(0, Math.min(index, Math.max(0, this.jobPanel.entries.length - 1)))
     if (next !== this.jobPanel.selected) {
       this.jobPanel.selected = next
-      this.jobPanel.outputJobId = undefined
-      this.jobPanel.output = undefined
+      this.jobPanel.selectedJobId = this.jobPanel.entries[next]?.id
+      const outputJobId = this.jobPanel.selectedJobId
+      this.jobPanel.outputJobId = this.jobOutputCache.has(outputJobId) ? outputJobId : undefined
+      this.jobPanel.output = outputJobId ? this.jobOutputCache.get(outputJobId) : undefined
       this.jobPanel.outputError = undefined
+      this.jobPanel.outputNewLines = 0
+      this.jobPanel.outputScroll = 0
     }
     this.scheduleRender()
   }
@@ -3546,16 +3974,49 @@ export class TuiApp {
     }
   }
 
+  appendJobOutput(id, text) {
+    if (!(this.jobOutputCache instanceof Map)) this.jobOutputCache = new Map()
+    const delta = String(text ?? '')
+    if (!delta || delta === '(no new output)') return this.jobOutputCache.get(id) ?? ''
+    const previous = this.jobOutputCache.get(id) ?? ''
+    const joined = previous && !previous.endsWith('\n') ? `${previous}\n${delta}` : `${previous}${delta}`
+    const capped = joined.length > 65536 ? joined.slice(-65536) : joined
+    this.jobOutputCache.set(id, capped)
+    return capped
+  }
+
+  updateLocalJobOutput(job) {
+    if (!this.jobPanel || this.jobPanel.outputJobId !== job.id) return
+    const previous = this.jobOutputCache.get(job.id) ?? ''
+    const next = job.output ?? ''
+    this.jobOutputCache.set(job.id, next.length > 65536 ? next.slice(-65536) : next)
+    if (this.jobPanel.outputFollow === false) {
+      const added = Math.max(0, next.length - previous.length)
+      if (added > 0) this.jobPanel.outputNewLines = (this.jobPanel.outputNewLines ?? 0) + next.slice(previous.length).split(/\r?\n/).length - 1
+    } else {
+      this.jobPanel.output = this.jobOutputCache.get(job.id)
+    }
+    this.scheduleRender()
+  }
+
   async readSelectedJob() {
     const panel = this.jobPanel
     const entry = this.selectedJob()
     if (!panel || !entry) return
+    if (panel.outputBusy) return
+    const requestId = (panel.readRequestId ?? 0) + 1
+    panel.readRequestId = requestId
     const local = (this.localBackgroundJobs ?? []).find((j) => j.id === entry.id)
     if (local) {
       panel.outputJobId = local.id
-      panel.output = local.output || '(no output yet)'
+      const localOutput = local.output || ''
+      this.jobOutputCache.set(local.id, localOutput.length > 65536 ? localOutput.slice(-65536) : localOutput)
+      panel.output = this.jobOutputCache.get(local.id) || '(no output yet)'
       panel.outputBusy = false
       panel.outputError = undefined
+      panel.outputFollow = true
+      panel.outputNewLines = 0
+      panel.outputScroll = 0
       this.scheduleRender()
       return
     }
@@ -3573,18 +4034,28 @@ export class TuiApp {
     this.scheduleRender()
     try {
       const result = await this.jobsService.read(entry.id, this.agent)
-      panel.output = this.jobOutputText(result) || '(no new output)'
+      if (this.jobPanel !== panel || panel.readRequestId !== requestId) return
+      const outputText = this.jobOutputText(result)
+      panel.output = (typeof this.appendJobOutput === 'function'
+        ? this.appendJobOutput(entry.id, outputText)
+        : outputText) || '(no output yet)'
+      panel.outputFollow = true
+      panel.outputNewLines = 0
+      panel.outputScroll = 0
       const snapshot = result?.snapshot ?? result?.job
       if (snapshot) {
         const job = this.normalizeJobSnapshot(snapshot)
         if (job) panel.entries = panel.entries.map((item) => item.id === job.id ? job : item)
       }
     } catch (error) {
+      if (this.jobPanel !== panel || panel.readRequestId !== requestId) return
       panel.outputError = error instanceof Error ? error.message : String(error)
       panel.output = undefined
     } finally {
-      panel.outputBusy = false
-      this.scheduleRender()
+      if (this.jobPanel === panel && panel.readRequestId === requestId) {
+        panel.outputBusy = false
+        this.scheduleRender()
+      }
     }
   }
 
@@ -3595,10 +4066,11 @@ export class TuiApp {
     const local = (this.localBackgroundJobs ?? []).find((j) => j.id === entry.id)
     if (local) {
       if (local.child && !local.child.killed && local.status === 'running') {
-        local.child.kill('SIGTERM')
-        local.status = 'failed'
-        panel.entries = this.jobSnapshots()
-        this.log('ok', `Killed job ${local.id}`, 'k')
+        local.stopRequested = true
+        local.status = 'stopping'
+        this.signalLocalJob(local, 'SIGTERM')
+        panel.entries = this.orderJobEntries(this.jobSnapshots())
+        this.log('ok', `Stopping job ${local.id}`, 'k')
       } else {
         this.log('ok', `Job ${local.id} is already finished`, 'k')
       }
@@ -3984,7 +4456,7 @@ export class TuiApp {
       this.scheduleRender()
       return
     }
-    void this.quit(0)
+    this.requestQuit(0)
   }
 
   // ── input editing ──────────────────────────────────────────────────────
@@ -4057,6 +4529,8 @@ export class TuiApp {
   }
 
   insertText(text, { allowFilePicker = true, render = true } = {}) {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     if (this.bracketing) this.bracketLines += text.split('\n').length - 1
     else this.pasteFolded = undefined
     if (this.selection) {
@@ -4076,6 +4550,8 @@ export class TuiApp {
   }
 
   eraseBefore() {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     this.pasteFolded = undefined
     if (this.selection) {
       const start = this.alignCodePoint(Math.min(this.selection.start, this.selection.end), 1)
@@ -4105,6 +4581,8 @@ export class TuiApp {
   }
 
   eraseAt() {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     this.pasteFolded = undefined
     if (this.cursor >= this.input.length) return
     const start = this.alignCodePoint(this.cursor, -1)
@@ -4117,6 +4595,8 @@ export class TuiApp {
   }
 
   eraseToLineEnd() {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     const lineEnd = this.input.indexOf('\n', this.cursor)
     const end = lineEnd === -1 ? this.input.length : lineEnd
     if (end === this.cursor) return
@@ -4127,6 +4607,8 @@ export class TuiApp {
   }
 
   eraseWordBefore() {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     this.pasteFolded = undefined
     if (this.selection) {
       this.eraseBefore()
@@ -4145,6 +4627,8 @@ export class TuiApp {
   }
 
   moveLeft() {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
     this.cursor = this.alignCodePoint(this.cursor, -1)
@@ -4154,6 +4638,10 @@ export class TuiApp {
   }
 
   moveRight() {
+    if (this.acceptPromptSuggestion?.()) return
+    if (this.acceptShellCompletion?.()) return
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
     this.cursor = this.alignCodePoint(this.cursor, 1)
@@ -4163,6 +4651,8 @@ export class TuiApp {
   }
 
   moveToLineStart() {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
     this.cursor = this.input.lastIndexOf('\n', this.cursor - 1) + 1
@@ -4171,6 +4661,8 @@ export class TuiApp {
   }
 
   moveToLineEnd() {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
     const next = this.input.indexOf('\n', this.cursor)
@@ -4180,6 +4672,8 @@ export class TuiApp {
   }
 
   moveWordLeft() {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
     this.cursor = moveWordLeft(this.input, this.cursor)
@@ -4188,6 +4682,8 @@ export class TuiApp {
   }
 
   moveWordRight() {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
     this.cursor = moveWordRight(this.input, this.cursor)
@@ -4196,6 +4692,8 @@ export class TuiApp {
   }
 
   historyNav(direction, cursorAt = 'end') {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
     this.pasteFolded = undefined
     const entries = this.history
     if (entries.length === 0) return false
@@ -4283,46 +4781,62 @@ export class TuiApp {
     this.scheduleRender()
     const shell = process.env.SHELL || (process.platform === 'win32' ? (process.env.COMSPEC || 'cmd.exe') : '/bin/bash')
     const shellArgs = process.platform === 'win32' && !process.env.SHELL ? ['/d', '/s', '/c', command] : ['-c', command]
-    const child = spawn(shell, shellArgs, { cwd, env: process.env })
+    const child = spawn(shell, shellArgs, { cwd, env: process.env, detached: process.platform !== 'win32' })
+    let settleDone
     const active = {
-      id: `job-${(this.localJobsCount = this.localJobsCount + 1)}`,
+      id: `local-bash-${(this.localJobsCount = this.localJobsCount + 1)}`,
       command,
       child,
       status: 'running',
       output: '',
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      readOffset: 0,
+      done: new Promise((resolve) => { settleDone = resolve }),
+      settleDone,
+      stopRequested: false,
+      timeout: undefined
     }
     this.activeBash = active
     this.lastBashCommand = command
     let ended = false
     const timer = setTimeout(() => {
       if (!ended) {
-        child.kill('SIGKILL')
+        active.stopRequested = true
+        this.signalLocalJob(active, 'SIGKILL')
         active.output += '\n… (timed out after 60s)'
       }
     }, 60_000)
+    active.timeout = timer
     child.stdout.on('data', (chunk) => {
       const text = chunk.toString('utf8')
       active.output += text
       if (active.output.length > 32000) active.output = active.output.slice(-32000)
+      this.updateLocalJobOutput(active)
     })
     child.stderr.on('data', (chunk) => {
       const text = chunk.toString('utf8')
       active.output += text
       if (active.output.length > 32000) active.output = active.output.slice(-32000)
+      this.updateLocalJobOutput(active)
     })
     const finish = ({ code, error } = {}) => {
       if (ended) return
       ended = true
       clearTimeout(timer)
+      active.timeout = undefined
       active.finishedAt = Date.now()
       if (error) {
         active.status = 'failed'
         active.error = error.message
       } else {
-        active.status = code === 0 ? 'completed' : 'failed'
+        active.status = active.stopRequested ? 'killed' : code === 0 ? 'completed' : 'failed'
         active.exitCode = code
       }
+      active.settleDone?.({
+        status: active.status,
+        detail: error?.message ?? (active.stopRequested ? 'cancelled' : code === 0 ? undefined : `exit code: ${code}`),
+        output: active.output
+      })
       if (this.activeBash === active) {
         this.activeBash = undefined
         this.finishBash(error ? null : code, error ? `\n(spawn failed: ${error.message})` : active.output)
@@ -4330,7 +4844,9 @@ export class TuiApp {
         if (error) {
           this.log('error', `Background job ${active.id} failed: ${error.message}`, 'job')
         } else {
-          this.log(code === 0 ? 'ok' : 'error', `Background job ${active.id} ($ ${shorten(command, 40)}) finished (exit ${code})`, 'job')
+          const level = active.status === 'killed' ? 'ok' : code === 0 ? 'ok' : 'error'
+          const result = active.status === 'killed' ? 'cancelled' : `finished (exit ${code})`
+          this.log(level, `Background job ${active.id} ($ ${shorten(command, 40)}) ${result}`, 'job')
         }
         if (this.jobPanel) void this.refreshJobsPanel()
         this.scheduleRender()
@@ -4511,6 +5027,29 @@ export class TuiApp {
       return
     }
 
+    if (this.exitConfirm) {
+      const isUp = value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[D' || value === '\x1bOD'
+      const isDown = value === '\x1b[B' || value === '\x1bOB' || value === '\x1b[C' || value === '\x1bOC' || value === '\t'
+      if (isUp) {
+        this.exitConfirm.selected = (this.exitConfirm.selected + 1) % 2
+        this.scheduleRender()
+        return
+      }
+      if (isDown) {
+        this.exitConfirm.selected = (this.exitConfirm.selected + 1) % 2
+        this.scheduleRender()
+        return
+      }
+      if (value === '\r' || value === ' ') {
+        this.applyExitConfirm(['stop', 'cancel'][this.exitConfirm.selected])
+        return
+      }
+      const answer = value.trim().toLowerCase()
+      if (answer === 's') { this.applyExitConfirm('stop'); return }
+      if (answer === 'c' || value === '\x1b' || value === '\x03') { this.applyExitConfirm('cancel'); return }
+      return
+    }
+
     if (this.skillsPanel) {
       if (value === '\x1b' || value === '\x03' || value === 'q') {
         this.skillsPanel = undefined
@@ -4641,6 +5180,15 @@ export class TuiApp {
         void this.readSelectedJob()
       } else if (value === 'k' || value === 'K') {
         void this.killSelectedJob()
+      } else if (value === 'f' || value === 'F') {
+        this.jobPanel.outputFollow = this.jobPanel.outputFollow === false
+        this.jobPanel.outputNewLines = 0
+        if (this.jobPanel.outputFollow) this.jobPanel.outputScroll = 0
+        else {
+          const lineCount = String(this.jobPanel.output ?? '').split(/\r?\n/).length
+          this.jobPanel.outputScroll = Math.max(0, lineCount - 5)
+        }
+        this.scheduleRender()
       } else if (value === 'r' || value === 'R') {
         void this.refreshJobsPanel()
       } else if (value.startsWith('\x1b[')) this.onEscapeSequence(value)
@@ -4697,9 +5245,12 @@ export class TuiApp {
     if (value === '\x1b') {
       if (this.withdrawQueuedSubmission()) return
       if (this.agent?.status === 'running') {
+        this.clearPromptSuggestion()
         this.agent.cancel({ kind: 'user' })
         return
       }
+      this.clearPromptSuggestion()
+      this.clearShellCompletion()
       if (this.selection) {
         this.selection = undefined
         this.scheduleRender()
@@ -4723,18 +5274,52 @@ export class TuiApp {
       return this.cancelOrQuit()
     }
     if (value === '\x04') {
-      if (this.input === '') void this.quit(0)
+      if (this.input === '') this.requestQuit(0)
       return
     }
     if (value === '\x02') {
       if (this.activeBash) {
         const job = this.activeBash
-        if (!this.localBackgroundJobs) this.localBackgroundJobs = []
-        this.localBackgroundJobs.push(job)
+        let registered = false
+        try {
+          const id = this.jobsService?.start?.({
+            kind: 'bash',
+            label: job.command,
+            owner: this.agent,
+            run: () => ({
+              cancel: () => {
+                job.stopRequested = true
+                this.signalLocalJob(job, 'SIGTERM')
+              },
+              done: job.done,
+              readOutput: () => {
+                const delta = job.output.slice(job.readOffset)
+                job.readOffset = job.output.length
+                return delta
+              }
+            })
+          })
+          if (id !== undefined && id !== null) {
+            job.id = String(id)
+            registered = true
+          }
+        } catch {}
+        if (!registered) {
+          if (!this.localBackgroundJobs) this.localBackgroundJobs = []
+          this.localBackgroundJobs.push(job)
+        }
+        clearTimeout(job.timeout)
+        job.timeout = undefined
         this.ensureJobStatusTimer()
         this.activeBash = undefined
         this.message = ''
         this.log('ok', `Backgrounded ${job.id} ($ ${shorten(job.command, 50)}) · type /jobs to inspect`, 'Ctrl+B')
+        this.scheduleRender()
+        return
+      }
+      const toolName = this.streaming.tool?.name ?? ''
+      if (this.agent?.status === 'running' && /^(?:bash|shell|pwsh|powershell)$/i.test(String(toolName))) {
+        this.log('error', '当前 Agent Bash 已在前台执行，无法将已启动的工具进程转入后台；长任务请使用 run_in_background: true，然后通过 /jobs 查看。', 'Ctrl+B')
         this.scheduleRender()
         return
       }
@@ -4813,6 +5398,21 @@ export class TuiApp {
 
   onEscapeSequence(value) {
     if (this.providerPanel) return this.handleProviderEscape(value)
+    if (this.jobPanel && this.jobPanel.outputJobId && (value === '\x1b[5~' || value === '\x1b[6~')) {
+      const lineCount = String(this.jobPanel.output ?? '').split(/\r?\n/).length
+      const page = 5
+      const maxStart = Math.max(0, lineCount - page)
+      const scroll = Number(this.jobPanel.outputScroll)
+      const current = this.jobPanel.outputFollow === false
+        ? Math.min(maxStart, Number.isFinite(scroll) ? Math.max(0, scroll) : maxStart)
+        : maxStart
+      const next = value === '\x1b[5~' ? Math.max(0, current - page) : Math.min(maxStart, current + page)
+      this.jobPanel.outputScroll = next
+      this.jobPanel.outputFollow = next >= maxStart
+      this.jobPanel.outputNewLines = 0
+      this.scheduleRender()
+      return
+    }
     if (this.questionPanel) {
       const isVertical = value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[B' || value === '\x1bOB'
       const isHorizontal = value === '\x1b[C' || value === '\x1bOC' || value === '\x1b[D' || value === '\x1bOD'
@@ -4950,7 +5550,7 @@ export class TuiApp {
       }
       return this.moveLeft()
     }
-    if (value === '\x1b[C') {
+    if (value === '\x1b[C' || value === '\x1bOC') {
       if (this.settingsPicker) return void this.cycleSetting(1)
       if (this.presetPicker) {
         this.presetPicker.selected = (this.presetPicker.selected + 1) % this.presetPicker.entries.length
@@ -4972,6 +5572,10 @@ export class TuiApp {
       this.chooseMenuItem()
     } else if (this.presetPicker) {
       void this.choosePreset(this.presetPicker.entries[this.presetPicker.selected]?.id)
+    } else if (this.acceptPromptSuggestion()) {
+      return
+    } else {
+      this.acceptShellCompletion()
     }
   }
 
@@ -5243,12 +5847,17 @@ export class TuiApp {
           `${prompt}${imageTags} ${ANSI.muted}type a message, or / for commands${ANSI.reset}${status}`
         ]
       }
+      if (this.promptSuggestion?.text && this.preferences?.promptSuggestions !== false) {
+        const suggestion = truncateWidth(this.promptSuggestion.text, Math.max(10, columns - prefixWidth - 18))
+        return [`${prompt}${ANSI.muted}${safe(suggestion)}${ANSI.reset} ${ANSI.dim}· Tab applies${ANSI.reset}`]
+      }
       return [`${prompt}${ANSI.muted}type a message, or / for commands${ANSI.reset}`]
     }
 
     // In bash mode, the prompt prefix already shows "!", so strip the leading "!" from display
     const displayInput = bashMode && this.input.startsWith('!') ? this.input.slice(1) : this.input
     const displayCursor = bashMode && this.cursor > 0 ? Math.max(0, this.cursor - 1) : this.cursor
+    const shellGhost = this.shellCompletionGhost?.() ?? ''
 
     const firstLineWidth = Math.max(12, draftWidth - imageTagWidth)
     const beforeLines = displayInput.slice(0, displayCursor).split('\n')
@@ -5334,7 +5943,12 @@ export class TuiApp {
     const out = []
     for (let i = windowStart; i < Math.min(total, windowStart + limit); i++) {
       const prefix = (i === 0) ? (imageTags ? `${prompt}${imageTags} ` : prompt) : '  '
-      out.push(`${prefix}${formatLineText(block[i], offsets[i] ?? 0)}`)
+      const isLastInputLine = i === total - 1 && shellGhost && displayCursor === displayInput.length
+      const ghostBudget = Math.max(0, draftWidth - widthOf(visibleOf(block[i] ?? '')))
+      const ghost = isLastInputLine && ghostBudget > 0
+        ? `${ANSI.muted}${safe(truncateWidth(shellGhost, ghostBudget))}${ANSI.reset}`
+        : ''
+      out.push(`${prefix}${formatLineText(block[i], offsets[i] ?? 0)}${ghost}`)
     }
     this.caretRow = caretRow - windowStart
     this.caretCol = prefixWidth + (caretRow === 0 ? imageTagWidth : 0) + widthOf(caretWrapped[caretWrapped.length - 1] ?? '')
@@ -5379,7 +5993,7 @@ export class TuiApp {
     this.lastColumns = columns
 
     let cursorMove = ''
-    const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.skillsPanel
+    const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.skillsPanel
     const overlayCaret = this.overlayCaretRow !== undefined
     if (overlayCaret || (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasOverlay)) {
       const rowInFooter = overlayCaret
@@ -5515,10 +6129,14 @@ export class TuiApp {
     if (this.mcpPanel) return renderMcpPanel(this.mcpPanel, capacity, ANSI)
     if (this.questionPanel) return renderQuestionPanel(this.questionPanel, this.currentQuestion(), columns, rows, ANSI)
     if (this.presetConfirm) return renderPresetConfirm(this.presetConfirm, ANSI)
+    if (this.exitConfirm) return renderExitConfirm(this.exitConfirm, columns, ANSI)
     if (this.skillsPanel) return renderSkillsPanel(this.skillsPanel, this.skills ?? [], capacity, columns, ANSI)
     if (this.menu) return renderMenuPanel(this.menu, capacity, columns, ANSI)
     if (this.presetPicker) return renderPresetPicker(this.presetPicker, this.presetName, capacity, columns, ANSI)
-    if (this.jobPanel) return renderJobPanel(this.jobPanel, this.selectedJob(), capacity, columns, ANSI)
+    if (this.jobPanel) {
+      const jobsCapacity = Math.max(6, Math.min(16, rows - 7))
+      return renderJobPanel(this.jobPanel, this.selectedJob(), jobsCapacity, columns, ANSI)
+    }
     if (this.settingsPicker) return renderSettingsPicker(this.settingsPicker, this.preferences, ANSI)
     if (this.effortPicker) return renderEffortPicker(this.effortPicker, ANSI)
     if (this.commandPalette) return renderCommandPalette(this.commandPalette, capacity, columns, ANSI)
@@ -5586,7 +6204,7 @@ export class TuiApp {
     this.lastColumns = columns
 
     let cursorMove = ''
-    const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.skillsPanel
+    const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.skillsPanel
     const overlayCaret = this.overlayCaretRow !== undefined
     if (overlayCaret || (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasOverlay)) {
       const rowInFooter = overlayCaret
@@ -5617,19 +6235,24 @@ export function apply(ctx) {
     order: 109,
     text: 'When working, do not repeat plans, promises, or status lines. Make at most one concise progress statement before a tool call. After verification, either perform the requested action or give a final answer; never keep restating an intended action instead of calling its tool.'
   })
+  ctx.systemPrompt?.section?.({
+    name: 'tui-background-shell',
+    order: 110,
+    text: 'For long-running Bash commands such as npm install, dev servers, watchers, or builds, set run_in_background: true so the call returns immediately with a job id. Do not emulate this with nohup or a trailing & in a foreground call. The user can inspect and stop the job from /jobs.'
+  })
   const app = new TuiApp(ctx)
   const removeVisionRouter = registerVisionRouter(app)
   const removeBrowserLease = registerBrowserLease(ctx)
   void app.start().catch(async (error) => {
     await removeBrowserLease()
     removeVisionRouter()
-    await app.stop()
+    await app.stop({ ignoreJobErrors: true })
     process.stderr.write(`dsh-omc-tui: ${error instanceof Error ? error.message : String(error)}\n`)
     ctx.get('appExit')?.(1)
   })
   return async () => {
     await removeBrowserLease()
     removeVisionRouter()
-    await app.stop()
+    await app.stop({ ignoreJobErrors: true })
   }
 }

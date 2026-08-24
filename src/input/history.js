@@ -29,6 +29,36 @@ export function appendHistoryFile(stateDir, entry, persistHistory = true) {
     .catch(() => {})
 }
 
+export async function loadShellHistoryFile(stateDir, cwd, persistHistory = true, maxEntries = 200) {
+  if (!persistHistory) return []
+  try {
+    const data = await readFile(join(stateDir, 'shell-history.jsonl'), 'utf8')
+    const entries = []
+    for (const line of data.split('\n')) {
+      if (!line) continue
+      try {
+        const parsed = JSON.parse(line)
+        if (parsed && parsed.cwd === cwd && typeof parsed.command === 'string' && parsed.command.trim()) {
+          entries.push(parsed.command)
+        }
+      } catch {
+        // Ignore malformed shell history records.
+      }
+    }
+    return entries.slice(-maxEntries)
+  } catch {
+    return []
+  }
+}
+
+export function appendShellHistoryFile(stateDir, cwd, command, persistHistory = true) {
+  if (!persistHistory || typeof command !== 'string' || !command.trim()) return
+  const file = join(stateDir, 'shell-history.jsonl')
+  mkdir(dirname(file), { recursive: true })
+    .then(() => writeFile(file, `${JSON.stringify({ cwd, command })}\n`, { flag: 'a' }))
+    .catch(() => {})
+}
+
 export async function loadMruFile(stateDir) {
   try {
     const data = JSON.parse(await readFile(join(stateDir, 'last-used.json'), 'utf8'))

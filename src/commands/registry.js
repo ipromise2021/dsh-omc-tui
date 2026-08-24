@@ -178,7 +178,7 @@ export function handleLocalCommand(app, commandName, line = '') {
       void app.openJobsPanel()
       break
     case 'exit':
-      return void app.quit(0)
+      return app.requestQuit(0)
     default:
       break
   }

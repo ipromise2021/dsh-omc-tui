@@ -26,7 +26,8 @@ export function handleStatus(app) {
   const skillCount = app.skills?.length ?? 0
   const mcpCount = app.mcpCount ?? 0
   const hookCount = app.hookCount ?? 0
-  const runningJobs = (app.localBackgroundJobs?.filter((j) => j.status === 'running')?.length || 0)
+  const runningJobs = (app.jobSnapshots?.() ?? app.localBackgroundJobs ?? [])
+    .filter((job) => job.status === 'running' || job.status === 'stopping').length
 
   const lines = [
     `Model:        ${modelStr} · effort ${effortStr}`,

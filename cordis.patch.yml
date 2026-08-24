@@ -80,13 +80,18 @@
       config:
         serverName: chrome_devtools
         transport: stdio
-        command: npx
+        # chrome-devtools-mcp writes its legal and roots notices directly to
+        # stderr. Keep protocol stdout/stdin intact, but do not inherit stderr
+        # into the interactive TUI footer.
+        command: node
         args:
-          - -y
-          - chrome-devtools-mcp@1.7.0
-          - --browser-url=http://127.0.0.1:9222
-          - --no-performance-crux
-          - --no-usage-statistics
+          - -e
+          - >-
+            const { spawn } = require('node:child_process');
+            const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+            const child = spawn(npx, ['-y', 'chrome-devtools-mcp@1.7.0', '--browser-url=http://127.0.0.1:9222', '--no-performance-crux', '--no-usage-statistics'], { stdio: ['inherit', 'inherit', 'ignore'] });
+            child.once('error', (error) => { process.stderr.write(String(error)); process.exit(1); });
+            child.once('exit', (code) => process.exit(code ?? 1));
 
     - id: tui-runner
       name: 'dsh-omc-tui'

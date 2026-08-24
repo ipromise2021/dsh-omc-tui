@@ -8,6 +8,7 @@ import { handleCompact } from '../src/commands/compact.js'
 import { renderMarkdownRows } from '../src/renderer/markdown.js'
 import { renderStatusRows } from '../src/renderer/statusline.js'
 import { renderJobPanel } from '../src/panels/jobs-panel.js'
+import { renderExitConfirm } from '../src/panels/exit-confirm.js'
 import { renderModelPicker } from '../src/panels/model-picker.js'
 import { renderQuestionPanel } from '../src/panels/question-panel.js'
 import { renderSkillsPanel } from '../src/panels/skills-panel.js'
@@ -34,6 +35,33 @@ assert.deepEqual(tuiSkillOverride, {
 assert.equal(repeatedActionIntent('提交代码。提交代码。提交代码。提交代码。提交代码。提交代码。'), 'commit')
 assert.equal(repeatedActionIntent('先检查改动。然后执行测试。最后总结结果。'), undefined)
 assert.equal(repeatedActionIntent('Update the parser.\nUpdate the renderer.\nUpdate the tests.\nUpdate the docs.\nUpdate the fixtures.\nUpdate the changelog.'), undefined)
+
+const externalStderrRows = TuiApp.prototype.formatExternalStderr.call(
+  {},
+  'chrome-devtools-mcp exposes content\r\nof the browser instance',
+  60
+)
+assert.equal(externalStderrRows.every((row) => visibleOf(row).startsWith('│ ')), true)
+assert.deepEqual(externalStderrRows.map((row) => visibleOf(row)), [
+  '│ chrome-devtools-mcp exposes content',
+  '│ of the browser instance'
+])
+assert.equal(TuiApp.prototype.isExternalMcpOutput('chrome-devtools-mcp exposes content'), true)
+assert.equal(TuiApp.prototype.isExternalMcpOutput('ordinary tool output'), false)
+const routedExternalOutput = []
+const externalOutputApp = {
+  terminalOpen: true,
+  lastFooterHeight: 2,
+  routingExternalOutput: false,
+  formatExternalStderr: TuiApp.prototype.formatExternalStderr,
+  commitToScrollback(lines) { routedExternalOutput.push(lines) }
+}
+assert.equal(TuiApp.prototype.routeExternalOutput.call(externalOutputApp, 'chrome-devtools-mcp exposes content'), true)
+assert.equal(routedExternalOutput.length, 1)
+assert.match(visibleOf(routedExternalOutput[0][0]), /^│ /)
+const cordisPatch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+assert.match(cordisPatch, /stdio: \['inherit', 'inherit', 'ignore'\]/)
+assert.match(cordisPatch, /chrome-devtools-mcp@1\.7\.0/)
 
 let visionTool
 registerVisionRouter({ ctx: { tools: { register(tool) { visionTool = tool } } } })
@@ -78,7 +106,7 @@ const managedLease = {
   async ensure(session) { this.ensureCalls.push(session); this.connectionApproved = true },
   async stop(session) { this.stopCalls.push(session); this.connectionApproved = false }
 }
-const disposeBrowserLease = registerBrowserLease(registeredContext, { endpointReady: async () => false, lease: managedLease })
+const disposeBrowserLease = registerBrowserLease(registeredContext, { endpointReady: async () => true, lease: managedLease })
 assert.deepEqual(
   await browserLeaseHooks.get('tools/pre-execute')({ name: chromeReadTool }, async () => ({ kind: 'allow' })),
   { kind: 'allow' }
@@ -87,12 +115,9 @@ assert.deepEqual(
   await browserLeaseHooks.get('tools/pre-execute')({ name: chromeWriteTool }, async () => ({ kind: 'allow' })),
   { kind: 'ask', reason: chromeApprovalReason(chromeWriteTool) }
 )
-assert.equal(browserLeaseHooks.has('session/event'), true)
-const browserSession = { events: [] }
-await browserLeaseHooks.get('session/event')(browserSession, { type: 'turn/end' })
-assert.deepEqual(managedLease.stopCalls, [browserSession])
+assert.equal(browserLeaseHooks.has('session/event'), false)
 await disposeBrowserLease()
-assert.deepEqual(managedLease.stopCalls, [browserSession, undefined])
+assert.deepEqual(managedLease.stopCalls, [])
 
 const workspaceReadHooks = new Map()
 const workspaceLease = {
@@ -112,7 +137,30 @@ assert.deepEqual(
   await workspaceReadHooks.get('tools/pre-execute')({ name: chromeReadTool, agent: { session: { events: [] } } }, async () => ({ kind: 'ask', reason: 'base policy' })),
   { kind: 'ask', reason: 'base policy' }
 )
+assert.deepEqual(
+  await workspaceReadHooks.get('tools/pre-execute')({ name: chromeWriteTool, agent: { session: { events: [] } } }, async () => ({ kind: 'allow' })),
+  { kind: 'allow' }
+)
 await disposeWorkspaceReadLease()
+
+const closedBrowserHooks = new Map()
+const closedBrowserLease = {
+  options: { port: 9222 },
+  connectionApproved: true,
+  async ensure() {}
+}
+const disposeClosedBrowserLease = registerBrowserLease({
+  on(name, handler) {
+    closedBrowserHooks.set(name, handler)
+    return () => closedBrowserHooks.delete(name)
+  }
+}, { endpointReady: async () => false, lease: closedBrowserLease })
+assert.deepEqual(
+  await closedBrowserHooks.get('tools/pre-execute')({ name: chromeReadTool }, async () => ({ kind: 'allow' })),
+  { kind: 'ask', reason: chromeConnectionApprovalReason() }
+)
+assert.equal(closedBrowserLease.connectionApproved, false)
+await disposeClosedBrowserLease()
 
 const connectionHooks = new Map()
 const disposeConnectionLease = registerBrowserLease({
@@ -131,11 +179,15 @@ assert.deepEqual(
 )
 await disposeConnectionLease()
 
-const externalChromeLease = new BrowserLease({ endpointReady: async () => true })
+const externalChromeLease = new BrowserLease({ endpointReady: async () => true, isManagedEndpoint: async () => false })
 await assert.rejects(
   externalChromeLease.ensure({ id: 'external-chrome-session' }),
   /already in use/
 )
+const reusableChromeLease = new BrowserLease({ endpointReady: async () => true, isManagedEndpoint: async () => true })
+const reusableSession = { id: 'managed-chrome-session' }
+await reusableChromeLease.ensure(reusableSession)
+assert.equal(reusableChromeLease.ownerSession, reusableSession)
 
 const bundlePatch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
 assert.match(bundlePatch, /name: '@deepseek-ai\/dsh-mcp-client'/)
@@ -189,6 +241,31 @@ assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKe
 historyKeyboardApp.cursor = historyKeyboardApp.input.length
 TuiApp.prototype.onEscapeSequence.call(historyKeyboardApp, '\x1b[B')
 assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['middle entry', 'middle entry'.length, 1])
+
+const shellCompletionApp = {
+  input: '! git p',
+  cursor: '! git p'.length,
+  shellHistory: ['git status', 'git push origin main', 'git pull --rebase', 'git push --force'],
+  inBashMode: TuiApp.prototype.inBashMode,
+  shellCompletionMatches: TuiApp.prototype.shellCompletionMatches,
+  scheduleRender: noop
+}
+assert.equal(TuiApp.prototype.shellCompletionGhost.call(shellCompletionApp), 'ush --force')
+assert.equal(TuiApp.prototype.acceptShellCompletion.call(shellCompletionApp), true)
+assert.equal(shellCompletionApp.input, '! git push --force')
+assert.equal(TuiApp.prototype.acceptShellCompletion.call(shellCompletionApp), true)
+assert.equal(shellCompletionApp.input, '! git pull --rebase')
+
+const promptSuggestionApp = {
+  input: '',
+  pendingImages: [],
+  promptSuggestion: { text: '继续运行测试并修复失败项' },
+  clearPromptSuggestion: TuiApp.prototype.clearPromptSuggestion,
+  scheduleRender: noop
+}
+assert.equal(TuiApp.prototype.acceptPromptSuggestion.call(promptSuggestionApp), true)
+assert.equal(promptSuggestionApp.input, '继续运行测试并修复失败项')
+assert.equal(promptSuggestionApp.cursor, promptSuggestionApp.input.length)
 
 const queuedMessageId = 'queued-message'
 const queuedWithdrawalApp = new TuiApp({})
@@ -294,10 +371,18 @@ process.stderr.write = (_chunk, encoding, callback) => {
   return true
 }
 const stderrApp = new TuiApp({})
+let stderrFooterCleared = false
+let stderrFooterRendered = false
+stderrApp.terminalOpen = true
+stderrApp.lastFooterHeight = 2
+stderrApp.clearFooter = () => { stderrFooterCleared = true }
+stderrApp.render = () => { stderrFooterRendered = true }
 process.stderr.write('stderr callback probe', () => { stderrCallbackCalled = true })
 for (const dispose of [...stderrApp.disposers].reverse()) dispose()
 process.stderr.write = originalStderrWrite
 assert.equal(stderrCallbackCalled, true)
+assert.equal(stderrFooterCleared, true)
+assert.equal(stderrFooterRendered, true)
 
 let oldDisposed = false
 let repaintCleared = false
@@ -1057,6 +1142,7 @@ assert.equal(settingsParsed.contextMode, 'both')
 assert.equal(settingsParsed.contextWarnAt, 60)
 assert.equal(settingsParsed.contextCriticalAt, 80)
 assert.equal(settingsParsed.autoCompact, true)
+assert.equal(settingsParsed.promptSuggestions, false)
 assert.deepEqual(settingsParsed.disabledSkills, ['image-recognize'])
 assert.deepEqual(tuiSettingsSchema({ visionProvider: 'deepseek', visionModel: 'deepseek-v4-vision-exp' }).visionModel, 'deepseek-v4-vision-exp')
 assert.deepEqual(tuiSettingsSchema({ disabledSkills: [] }).disabledSkills, [])
@@ -1331,6 +1417,117 @@ const jobPanelRows = renderJobPanel(
   ANSI
 )
 assert.match(visibleOf(jobPanelRows.join('\n')), /npm test.*2\.0s/)
+
+const groupedJobPanelRows = renderJobPanel(
+  {
+    entries: [
+      { id: 'job-running', status: 'running', kind: 'bash', detail: 'npm run dev' },
+      { id: 'job-failed', status: 'failed', kind: 'agent', detail: 'lint failed' },
+      { id: 'job-done', status: 'completed', kind: 'test', detail: 'unit tests' }
+    ],
+    selected: 0,
+    outputJobId: 'job-running',
+    output: Array.from({ length: 10 }, (_, index) => `line-${index}`).join('\n'),
+    outputFollow: false,
+    outputScroll: 0
+  },
+  undefined,
+  16,
+  100,
+  ANSI
+)
+const groupedJobPanelText = visibleOf(groupedJobPanelRows.join('\n'))
+assert.match(groupedJobPanelText, /ACTIVE/)
+assert.match(groupedJobPanelText, /NEEDS ATTENTION/)
+assert.match(groupedJobPanelText, /line-0/)
+assert.equal(groupedJobPanelText.includes('line-9'), false)
+assert.ok(groupedJobPanelRows.length <= 16)
+
+const exitConfirmRows = renderExitConfirm(
+  { selected: 1, runningJobs: [{ id: 'job-dev', detail: 'npm run dev' }] },
+  100,
+  ANSI
+)
+const exitConfirmText = visibleOf(exitConfirmRows.join('\n'))
+assert.match(exitConfirmText, /EXIT WITH RUNNING JOBS/)
+assert.match(exitConfirmText, /npm run dev/)
+assert.match(exitConfirmText, /Stop all jobs and exit/)
+
+const exitRequestApp = {
+  exitConfirm: undefined,
+  runningExitJobs() {
+    return [
+      { id: 'job-build', status: 'running' },
+      { id: 'job-dev', status: 'running', detail: 'npm run dev' }
+    ]
+  },
+  scheduleRender() { this.rendered = true },
+  quit() { this.quitCalled = true }
+}
+TuiApp.prototype.requestQuit.call(exitRequestApp, 0)
+assert.equal(exitRequestApp.exitConfirm.runningJobs.length, 2)
+assert.equal(exitRequestApp.quitCalled, undefined)
+assert.equal(exitRequestApp.rendered, true)
+
+const directExitApp = {
+  exitConfirm: undefined,
+  runningExitJobs: () => [],
+  scheduleRender: noop,
+  quit(code) { this.quitCode = code }
+}
+TuiApp.prototype.requestQuit.call(directExitApp, 7)
+assert.equal(directExitApp.quitCode, 7)
+
+const stopExitApp = {
+  exitConfirm: { code: 0, runningJobs: [], selected: 1 },
+  scheduleRender: noop,
+  quit(code) { this.quitArgs = [code] }
+}
+TuiApp.prototype.applyExitConfirm.call(stopExitApp, 'stop')
+assert.deepEqual(stopExitApp.quitArgs, [0])
+
+const failedStopApp = {
+  activeBash: undefined,
+  localBackgroundJobs: [],
+  agent: { status: 'idle' },
+  jobsService: { kill: async () => { throw new Error('cancel unavailable') } },
+  jobSnapshots: () => [{ id: 'remote-job', status: 'running' }],
+  stopLocalJob: TuiApp.prototype.stopLocalJob,
+  jobOutputCache: new Map()
+}
+await assert.rejects(
+  TuiApp.prototype.stopRunningJobs.call(failedStopApp),
+  /Could not stop 1 background job: cancel unavailable/
+)
+
+const failedQuitApp = {
+  ctx: { get: () => undefined },
+  stop: async () => { throw new Error('job still running') },
+  log(_kind, text) { this.exitError = text },
+  scheduleRender() { this.exitRendered = true }
+}
+await TuiApp.prototype.quit.call(failedQuitApp, 0)
+assert.equal(failedQuitApp.exitError, 'job still running')
+assert.equal(failedQuitApp.exitRendered, true)
+
+const jobOutputPagingApp = {
+  providerPanel: undefined,
+  questionPanel: undefined,
+  jobPanel: {
+    outputJobId: 'job-running',
+    output: Array.from({ length: 10 }, (_, index) => `line-${index}`).join('\n'),
+    outputFollow: true,
+    outputScroll: 0,
+    outputNewLines: 2
+  },
+  scheduleRender() {}
+}
+TuiApp.prototype.onEscapeSequence.call(jobOutputPagingApp, '\x1b[5~')
+assert.equal(jobOutputPagingApp.jobPanel.outputFollow, false)
+assert.equal(jobOutputPagingApp.jobPanel.outputScroll, 0)
+TuiApp.prototype.onEscapeSequence.call(jobOutputPagingApp, '\x1b[6~')
+assert.equal(jobOutputPagingApp.jobPanel.outputFollow, true)
+assert.equal(jobOutputPagingApp.jobPanel.outputScroll, 5)
 
 for (const columns of [40, 60, 80, 100, 120]) {
   const longJobPanelRows = renderJobPanel(

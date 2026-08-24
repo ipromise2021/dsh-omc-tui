@@ -1,9 +1,10 @@
-import { spawn } from 'node:child_process'
-import { access } from 'node:fs/promises'
+import { spawn, spawnSync } from 'node:child_process'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const CHROME_TOOL_PREFIX = 'mcp__chrome_devtools__'
+const MANAGED_BROWSER_MARKER = '.dsh-omc-tui-browser.json'
 const READ_ONLY_TOOLS = new Set([
   'list_pages',
   'select_page',
@@ -66,6 +67,34 @@ export function chromeLaunchArgs({ port, dataDir }) {
   ]
 }
 
+function managedBrowserMarkerPath(dataDir) {
+  return join(dataDir, MANAGED_BROWSER_MARKER)
+}
+
+async function isManagedBrowserEndpoint(port, dataDir) {
+  let marker
+  try {
+    marker = JSON.parse(await readFile(managedBrowserMarkerPath(dataDir), 'utf8'))
+  } catch {
+    return false
+  }
+  if (marker?.port !== port || !Number.isInteger(marker?.pid)) return false
+  try {
+    process.kill(marker.pid, 0)
+  } catch {
+    return false
+  }
+  if (process.platform === 'win32') return false
+  const result = spawnSync('ps', ['-p', String(marker.pid), '-o', 'command='], { encoding: 'utf8' })
+  const command = result.status === 0 ? result.stdout : ''
+  return command.includes(`--remote-debugging-port=${port}`) && command.includes(`--user-data-dir=${dataDir}`)
+}
+
+async function saveManagedBrowserMarker({ pid, port, dataDir }) {
+  await mkdir(dataDir, { recursive: true })
+  await writeFile(managedBrowserMarkerPath(dataDir), JSON.stringify({ pid, port }), 'utf8')
+}
+
 function activateChromeWindow() {
   if (process.platform !== 'darwin') return
   const activation = spawn('osascript', ['-e', 'tell application id "com.google.Chrome" to activate'], { stdio: 'ignore' })
@@ -98,6 +127,8 @@ export class BrowserLease {
   constructor(options = {}) {
     this.options = { ...defaultOptions, ...options }
     this.isEndpointReady = options.endpointReady ?? endpointReady
+    this.isManagedEndpoint = options.isManagedEndpoint ?? isManagedBrowserEndpoint
+    this.saveManagedEndpoint = options.saveManagedEndpoint ?? saveManagedBrowserMarker
     this.child = undefined
     this.starting = undefined
     this.ownerSession = undefined
@@ -110,6 +141,10 @@ export class BrowserLease {
       return
     }
     if (await this.isEndpointReady(this.options.port)) {
+      if (await this.isManagedEndpoint(this.options.port, this.options.dataDir)) {
+        this.ownerSession = session
+        return
+      }
       throw new Error(`Chrome DevTools port ${this.options.port} is already in use; close the existing debug browser before starting a managed browser`)
     }
     if (!this.starting) this.starting = this.start(session)
@@ -136,12 +171,14 @@ export class BrowserLease {
       if (this.child === child) {
         this.child = undefined
         this.ownerSession = undefined
+        this.connectionApproved = false
       }
     })
     try {
       for (let attempt = 0; attempt < 30; attempt += 1) {
         if (launchError) throw launchError
         if (await this.isEndpointReady(port)) {
+          await this.saveManagedEndpoint({ pid: child.pid, port, dataDir })
           activateChromeWindow()
           return
         }
@@ -184,14 +221,21 @@ export function registerBrowserLease(ctx, options = {}) {
   ctx.systemPrompt?.section?.({
     name: 'browser-lease',
     order: 108,
-    text: 'Chrome browser tools open a visible dedicated browser using a persistent profile for the current turn. If the DevTools port is already in use, report the conflict instead of attaching to another browser. When a site redirects to login, ask the user to complete sign-in in that browser window and confirm when ready. Never ask for passwords or credentials in chat, and never search files, databases, or other sources for credentials. select_page only changes the MCP target; it does not bring a macOS window to the front.'
+    text: 'Chrome browser tools open a visible dedicated browser using a persistent profile. The browser remains open after a task or session ends so the user can complete sign-in there. If the DevTools port is already in use, report the conflict instead of attaching to another browser. When a site redirects to login, ask the user to complete sign-in in that browser window and confirm when ready. Never ask for passwords or credentials in chat, and never search files, databases, or other sources for credentials. select_page only changes the MCP target; it does not bring a macOS window to the front.'
   })
   const offPreExecute = ctx.on('tools/pre-execute', async (exec, next) => {
     if (!isChromeTool(exec.name)) return next()
     const decision = await next()
     if (decision.kind !== 'allow' && decision.kind !== 'ask') return decision
+    if (lease.connectionApproved && !(await isEndpointReady(lease.options?.port ?? defaultOptions.port))) {
+      lease.connectionApproved = false
+    }
+    let workspaceWrite = false
+    try {
+      workspaceWrite = ctx.permissionPresets?.current?.(exec.agent?.session?.events) === 'workspace-write'
+    } catch {}
     const connectionNeeded = !lease.connectionApproved
-    const actionNeeded = chromeToolRisk(exec.name) !== 'read'
+    const actionNeeded = chromeToolRisk(exec.name) !== 'read' && !workspaceWrite
     const reasons = [
       ...(actionNeeded ? [chromeApprovalReason(exec.name)] : []),
       ...(connectionNeeded ? [chromeConnectionApprovalReason()] : [])
@@ -214,13 +258,8 @@ export function registerBrowserLease(ctx, options = {}) {
     }
     return next()
   })
-  const offSessionEvent = ctx.on('session/event', (session, event) => {
-    if (event.type === 'turn/end') void lease.stop(session)
-  })
   return async () => {
     offPreExecute()
     offExecute()
-    offSessionEvent()
-    await lease.stop()
   }
 }
