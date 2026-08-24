@@ -15,8 +15,10 @@ export const LOCAL_COMMANDS = [
   { name: 'context', description: 'show context window usage and token distribution' },
   { name: 'help', description: 'show keyboard shortcuts' },
   { name: 'clear', description: 'clear the local transcript view' },
+  { name: 'new', description: 'start a new session with the current setup' },
   { name: 'resume', description: 'pick a past session to resume' },
   { name: 'model', description: 'pick the default model' },
+  { name: 'vision', description: 'configure the sidecar vision model' },
   { name: 'provider', description: 'manage model providers and custom endpoints' },
   { name: 'effort', description: 'set the model-specific reasoning effort' },
   { name: 'status', description: 'show full session and environment status' },
@@ -96,6 +98,9 @@ export function handleLocalCommand(app, commandName, line = '') {
       app.log('ok', 'view cleared (model context unchanged)', '/clear')
       break
     }
+    case 'new':
+      app.openNewSessionConfirm()
+      break
     case 'resume':
       void app.openPicker()
       break
@@ -103,6 +108,9 @@ export function handleLocalCommand(app, commandName, line = '') {
       void app.openModelPicker()
       break
     }
+    case 'vision':
+      void app.configureVisionRoute(line)
+      break
     case 'provider':
     case 'providers': {
       void app.openProviderPanel()

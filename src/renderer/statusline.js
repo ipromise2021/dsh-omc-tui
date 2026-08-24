@@ -60,7 +60,7 @@ export function renderStatusRows(options) {
   }
   const jobTicker = activeJobs.length > 0 ? Math.floor(Date.now() / 1000) : 'idle'
   const contextKey = `${contextMode}:${contextWarnAt}:${contextCriticalAt}`
-  const cacheKey = `${columns}|${density}|${mode}|${pending}|${liveModel}|${cwdName}|${presetName}|${effort}|${permissionName}|${usage.input}|${usage.output}|${usage.cacheRead}|${usage.recentInput}|${usage.contextWindow}|${skills.length}|${mcpCount}|${hookCount}|${hasSystemPrompt}|${toolsKey}|${recentJobsKey}|${localJobsKey}|${titleKey}|${gitKey}|${speedKey}|${contextKey}|${jobTicker}|${runningAnimStep}|${runningWordStep}|${ansiKey}`
+  const cacheKey = `${columns}|${density}|${mode}|${pending}|${liveModel}|${cwdName}|${presetName}|${effort}|${permissionName}|${usage.input}|${usage.output}|${usage.cacheRead}|${usage.contextWindow}|${skills.length}|${mcpCount}|${hookCount}|${hasSystemPrompt}|${toolsKey}|${recentJobsKey}|${localJobsKey}|${titleKey}|${gitKey}|${speedKey}|${contextKey}|${jobTicker}|${runningAnimStep}|${runningWordStep}|${ansiKey}`
 
   const fitRows = (rows) => rows.map((row) => {
     const maxWidth = Math.max(1, columns - 2)
@@ -71,14 +71,14 @@ export function renderStatusRows(options) {
     return { rows: statusRowsCache.rows, cache: statusRowsCache }
   }
 
-  const contextText = usage.contextWindow && usage.recentInput !== undefined
-    ? `${formatTokens(usage.recentInput)} / ${formatTokens(usage.contextWindow)}`
+  const sessionContextTokens = usage.input + usage.output
+  const contextText = usage.contextWindow
+    ? `${formatTokens(sessionContextTokens)} / ${formatTokens(usage.contextWindow)}`
     : 'awaiting first response'
-  const percent = usage.contextWindow && usage.recentInput !== undefined
-    ? Math.round((usage.recentInput / usage.contextWindow) * 100)
+  const percent = usage.contextWindow
+    ? Math.round((sessionContextTokens / usage.contextWindow) * 100)
     : 0
 
-  // 3-Tier Dynamic Color-Grading for Context Meter
   let barColor = ANSI.barFill ?? ANSI.teal ?? ANSI.bash
   let percentColor = ANSI.blueSoft ?? ANSI.teal
   let percentAlert = ''
@@ -99,8 +99,8 @@ export function renderStatusRows(options) {
 
   const cacheTotal = usage.input + usage.cacheRead
   const cachePercent = cacheTotal > 0 ? Math.round((usage.cacheRead / cacheTotal) * 100) : 0
-  const remainingTokens = usage.contextWindow && usage.recentInput !== undefined
-    ? Math.max(0, usage.contextWindow - usage.recentInput)
+  const remainingTokens = usage.contextWindow
+    ? Math.max(0, usage.contextWindow - sessionContextTokens)
     : undefined
   const contextDisplay = contextMode === 'percent'
     ? `${percent}%${percentAlert}`
@@ -193,11 +193,11 @@ export function renderStatusRows(options) {
 
   let row2 = ''
   if (columns >= 95) {
-    row2 = `  ${ANSI.muted}Context${ANSI.reset} ${meter} ${percentColor}${contextDisplay}${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${ANSI.muted}in ${ANSI.bold}${ANSI.ink}${formatTokens(usage.input)}${ANSI.reset}${ANSI.muted} · out ${ANSI.bold}${ANSI.ink}${formatTokens(usage.output)}${ANSI.reset}${ANSI.muted} · cache ${ANSI.bold}${ANSI.bash}${cachePercent}%${ANSI.reset}${speedText}`
+    row2 = `  ${ANSI.muted}Context${ANSI.reset} ${meter} ${percentColor}${contextDisplay}${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${ANSI.muted}session in ${ANSI.bold}${ANSI.ink}${formatTokens(usage.input)}${ANSI.reset}${ANSI.muted} · out ${ANSI.bold}${ANSI.ink}${formatTokens(usage.output)}${ANSI.reset}${ANSI.muted} · cache ${ANSI.bold}${ANSI.bash}${cachePercent}%${ANSI.reset}${speedText}`
   } else if (columns >= 75) {
-    row2 = `  ${ANSI.muted}Context${ANSI.reset} ${meter} ${percentColor}${contextDisplay}${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${ANSI.muted}in ${ANSI.bold}${ANSI.ink}${formatTokens(usage.input)}${ANSI.reset}${ANSI.muted} · out ${ANSI.bold}${ANSI.ink}${formatTokens(usage.output)}${ANSI.reset}${ANSI.muted} · cache ${ANSI.bold}${ANSI.bash}${cachePercent}%${ANSI.reset}`
+    row2 = `  ${ANSI.muted}Context${ANSI.reset} ${meter} ${percentColor}${contextDisplay}${ANSI.reset}${ANSI.dim} | ${ANSI.reset}${ANSI.muted}session in ${ANSI.bold}${ANSI.ink}${formatTokens(usage.input)}${ANSI.reset}${ANSI.muted} · out ${ANSI.bold}${ANSI.ink}${formatTokens(usage.output)}${ANSI.reset}${ANSI.muted} · cache ${ANSI.bold}${ANSI.bash}${cachePercent}%${ANSI.reset}`
   } else {
-    row2 = `  ${ANSI.muted}Context${ANSI.reset} ${meter} ${percentColor}${contextDisplay}${ANSI.reset} ${ANSI.dim}(in ${formatTokens(usage.input)} · out ${formatTokens(usage.output)})${ANSI.reset}`
+    row2 = `  ${ANSI.muted}Context${ANSI.reset} ${meter} ${percentColor}${contextDisplay}${ANSI.reset} ${ANSI.dim}(session in ${formatTokens(usage.input)} · out ${formatTokens(usage.output)})${ANSI.reset}`
   }
 
   const permRow = columns >= 60
@@ -206,7 +206,7 @@ export function renderStatusRows(options) {
 
   if (density === 'compact') {
     const row2CompactRight = permRow.trim()
-    const row2CompactLeft = `${ANSI.muted}Context${ANSI.reset} ${meter} ${percentColor}${contextDisplay}${ANSI.reset} ${ANSI.dim}(in ${formatTokens(usage.input)} · out ${formatTokens(usage.output)})${ANSI.reset}`
+    const row2CompactLeft = `${ANSI.muted}Context${ANSI.reset} ${meter} ${percentColor}${contextDisplay}${ANSI.reset} ${ANSI.dim}(session in ${formatTokens(usage.input)} · out ${formatTokens(usage.output)})${ANSI.reset}`
     const r2Gap = Math.max(1, effectiveColumns - widthOf(visibleOf(row2CompactLeft)) - widthOf(visibleOf(row2CompactRight)))
     const result = fitRows([row1, `  ${row2CompactLeft}${' '.repeat(r2Gap)}${row2CompactRight}`])
     return { rows: result, cache: { key: cacheKey, rows: result } }

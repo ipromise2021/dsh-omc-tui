@@ -35,7 +35,9 @@
 
 ### 图片粘贴与多模态
 
-支持 iTerm2 OSC 1337、Kitty Graphics 和 macOS 剪贴板图片。图片经过 Harness Attachment 管道保存，并根据当前模型的 `inputModalities` 判断是否使用原生视觉输入。
+支持 iTerm2 OSC 1337、Kitty Graphics 和 macOS 剪贴板图片。图片经过 Harness Attachment 管道保存：当前模型支持视觉时直接发送；否则主 Agent 可自主调用已配置的 `analyze_image` 旁路视觉工具，主会话模型保持不变。
+
+使用一次 `/vision <provider>/<model>` 配置视觉模型，模型 ID 使用已配置提供方实际暴露的视觉模型名称。此后，主 Agent 会在需要识别图片时调用临时视觉 Agent，并将识别结果作为工具结果继续处理。
 
 ### 行内审批与问题面板
 
@@ -46,7 +48,7 @@
 状态栏可以显示：
 
 - 当前模型、Plan/Build 模式和权限档位
-- Context 使用量与水位预警
+- 会话累计 Context 进度与水位预警
 - Git 分支、工作区变更和 ahead/behind 状态
 - 最近工具、Skills、MCP、Hooks 和 Jobs
 - 最近一次响应速度与耗时
@@ -124,10 +126,12 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | 命令 | 功能 |
 | :--- | :--- |
 | `/model` | 选择模型，并根据模型能力选择 reasoning effort |
+| `/vision <provider>/<model>` | 配置 `analyze_image` 使用的旁路视觉模型 |
 | `/provider` | 管理模型提供方、自定义端点和模型列表 |
 | `/plan [off\|message]` | 进入或退出 Harness Plan 模式，可携带规划说明和图片 |
 | `/status` | 查看会话、模型、Token 和扩展状态 |
 | `/settings` | 设置主题、状态栏密度和 Context 预警 |
+| `/new` | 使用当前模型、权限和预设创建新会话 |
 | `/btw <问题>` | 在独立临时会话中提问，不加入主会话历史 |
 | `/compact` | 压缩当前会话上下文 |
 | `/jobs` | 查看后台任务、读取输出或取消任务 |

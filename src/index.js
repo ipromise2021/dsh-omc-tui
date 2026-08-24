@@ -4,7 +4,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, realpath, unlink, writeFile } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
-import { ImageParser, formatImageBytes } from './image-protocol.js'
+import { ImageParser, formatImageBytes, pngDimensions } from './image-protocol.js'
+import { registerVisionRouter } from './vision-router.js'
 import {
   THEMES,
   defaultTheme,
@@ -40,7 +41,12 @@ import {
 } from './renderer/index.js'
 
 export const name = 'dsh-omc-tui'
-export const inject = ['agentDefaultModel', 'agentPresets', 'agents', 'permissionPresets', 'commands', 'sessionQuery', 'settings']
+export const inject = ['agentDefaultModel', 'agentPresets', 'agents', 'permissionPresets', 'commands', 'sessionQuery', 'settings', 'tools']
+
+function isSubagentSession(record) {
+  const sessionId = record?.header?.id ?? ''
+  return record?.header?.origin === 'subagent' || /^(?:vision|side)-/.test(sessionId)
+}
 
 import {
   userMessage,
@@ -127,6 +133,7 @@ export class TuiApp {
 
     this.input = ''
     this.cursor = 0
+    this.initializing = undefined
     this.history = []
     this.historyIndex = -1
     this.skills = []
@@ -149,6 +156,7 @@ export class TuiApp {
     this.approvalQueue = []
     this.questionPanel = undefined // { questions, index, selected, selectedOptions, answers, resolve, reject, abortCleanup }
     this.pendingImages = [] // ImageDraft[] waiting for the next submit
+    this.imageAttachments = new Map() // attachment ID -> Harness image reference for analyze_image
     this.imageParser = new ImageParser()
     this.currentFileQuery = undefined
 
@@ -282,27 +290,26 @@ export class TuiApp {
     }
     this.probeRequiredServices()
 
-    // 1. Instantly open terminal and render welcome card (0ms latency!)
+    // Keep initialization separate from the interactive UI so resumed history
+    // appears only after the session is ready.
+    this.initializing = { startedAt: Date.now(), continuing: false }
     this.openTerminal()
     this.installSettings()
     const cwd = process.cwd()
     const columns = Math.max(60, process.stdout.columns || 100)
-    const contentWidth = Math.max(24, columns - 2)
-    const workspace = truncateWidth(safe(cwd), Math.max(24, contentWidth - 24))
-    const initialSelection = this.ctx.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
-    const initialModel = truncateWidth(`${initialSelection.provider}/${initialSelection.model}`, Math.max(20, contentWidth - 28))
-    const welcome = welcomeCardRows(columns, workspace, initialModel, (initialSelection.reasoningEffort ?? 'default').toUpperCase())
-    this.commitToScrollback(welcome)
     this.render()
+    const initTimer = setInterval(() => this.render(), 80)
 
     let resolveInit
     this.sessionInitPromise = new Promise((resolve) => { resolveInit = resolve })
+    let initialHistoryRows = []
 
     try {
       // 2. Parallel background data loading
       void this.loadSystemEnv()
       const launcherArgs = this.ctx.get('cmdlineArgs')?.get?.() ?? []
       const continueLast = launcherArgs.includes('-c') || launcherArgs.includes('--continue') || process.argv.includes('-c') || process.argv.includes('--continue')
+      this.initializing.continuing = continueLast
 
       const [,, resumeRecord] = await Promise.all([
         this.loadHistory(),
@@ -354,6 +361,7 @@ export class TuiApp {
       this.usage = foldUsage(agent.session.events)
       this.viewClearedSeq = isResumed ? 0 : agent.session.seq
       if (isResumed) {
+        this.restoreImageAttachments(agent.session.events)
         this.reasoningBlocks = []
         for (const event of agent.session.events) {
           if (event.type === 'assistant/message') {
@@ -403,9 +411,7 @@ export class TuiApp {
 
       if (isResumed) {
         const pastRows = this.formatEvents(this.agent.session.events, columns)
-        if (pastRows.length > 0) {
-          this.commitToScrollback(pastRows)
-        }
+        initialHistoryRows = pastRows
         this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
       } else {
         this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
@@ -414,9 +420,15 @@ export class TuiApp {
       void this.refreshSkills()
       void this.refreshEnvironmentSummary()
     } finally {
+      clearInterval(initTimer)
       this.sessionInitPromise = undefined
       if (resolveInit) resolveInit()
-      this.render()
+      this.initializing = undefined
+      this.lastFooterHeight = 0
+      this.lastCursorRowInFooter = 0
+      process.stdout.write('\x1b[2J\x1b[H')
+      if (initialHistoryRows.length > 0) this.commitToScrollback(initialHistoryRows)
+      else this.render()
     }
   }
 
@@ -425,13 +437,13 @@ export class TuiApp {
     for (const [candidateId] of mruEntries) {
       try {
         const snapshot = await this.ctx.sessionQuery.readSession(candidateId)
-        if ((snapshot?.header?.cwd ?? snapshot?.cwd) === cwd) {
+        if (!isSubagentSession(snapshot) && (snapshot?.header?.cwd ?? snapshot?.cwd) === cwd) {
           return snapshot
         }
       } catch {}
     }
     const records = (await this.ctx.sessionQuery.listSessions())
-      .filter((record) => (record.header?.cwd ?? record.cwd) === cwd)
+      .filter((record) => !isSubagentSession(record) && (record.header?.cwd ?? record.cwd) === cwd)
       .sort((a, b) => ((this.mru?.[b.header.id] ?? b.header.createdAt) - (this.mru?.[a.header.id] ?? a.header.createdAt)))
     if (records.length === 0) throw new Error(`no previous Harness session found for ${cwd}; start once without -c`)
     return records[0]
@@ -445,6 +457,7 @@ export class TuiApp {
       'sessionQuery',
       'agentDefaultModel',
       'agentPresets',
+      'tools',
       'settings'
     ]
     const problems = required.filter((service) => !this.ctx[service]).map((service) => `ctx.${service}`)
@@ -897,6 +910,7 @@ export class TuiApp {
         break
       }
       case 'user/message': {
+        this.rememberImageAttachments(event.data?.content)
         this.turnHeaderCommitted = false
         this.streamHeaderCommitted = false
         this.commitUnprintedEvents()
@@ -1048,7 +1062,8 @@ export class TuiApp {
 
   // ── actions ────────────────────────────────────────────────────────────
 
-  maybeOpenFilePicker() {
+  maybeOpenFilePicker(allowOpen = false) {
+    if (!allowOpen && !this.filePicker) return
     const atIndex = this.input.lastIndexOf('@', this.cursor - 1)
     if (atIndex === -1 || (atIndex > 0 && !/[\s@]/.test(this.input[atIndex - 1]))) {
       this.closeFilePicker()
@@ -1188,6 +1203,7 @@ export class TuiApp {
     }
     const filePath = image.filePath || image.path
     const data = image.data ? Buffer.from(image.data) : undefined
+    const dimensions = image.mediaType === 'image/png' ? pngDimensions(data) : undefined
     const base64 = typeof image.base64 === 'string'
       ? image.base64
       : data ? data.toString('base64') : undefined
@@ -1197,8 +1213,8 @@ export class TuiApp {
       name: image.name || 'clipboard.png',
       bytes,
       mediaType: image.mediaType || 'image/png',
-      width: image.width,
-      height: image.height,
+      width: image.width ?? dimensions?.width,
+      height: image.height ?? dimensions?.height,
       filePath,
       path: filePath
     })
@@ -1386,24 +1402,29 @@ export class TuiApp {
       if (index >= 0) selectedOptions.add(index)
     }
     panel.selectedOptions = selectedOptions
-    panel.selected = [...selectedOptions][0] ?? 0
     panel.customs[panel.index] = answer?.custom ?? panel.customs[panel.index] ?? ''
     panel.customEditing = panel.customModes[panel.index] ?? options.length === 0
+    panel.selected = panel.customEditing && options.length > 0
+      ? options.length
+      : [...selectedOptions][0] ?? 0
     this.input = panel.customEditing ? (panel.customs[panel.index] ?? '') : ''
     this.cursor = this.input.length
   }
 
-  toggleCustomQuestionInput() {
+  enterCustomQuestionInput() {
     const panel = this.questionPanel
     const question = this.currentQuestion()
     if (!panel || !question) return
-    panel.customs ??= []
-    panel.customModes ??= []
-    if (panel.customEditing) panel.customs[panel.index] = this.input
-    panel.customEditing = !panel.customEditing
-    panel.customModes[panel.index] = panel.customEditing
-    this.input = panel.customEditing ? panel.customs[panel.index] ?? '' : ''
-    this.cursor = this.input.length
+    const options = Array.isArray(question.options) ? question.options : []
+    if (!panel.customEditing) {
+      panel.customs ??= []
+      panel.customModes ??= []
+      panel.customEditing = true
+      panel.customModes[panel.index] = true
+      this.input = panel.customs[panel.index] ?? ''
+      this.cursor = this.input.length
+    }
+    panel.selected = options.length
     this.scheduleRender()
   }
 
@@ -1513,11 +1534,6 @@ export class TuiApp {
       return
     }
 
-    if (!isConfirmTab && value === '\x0f') {
-      this.toggleCustomQuestionInput()
-      return
-    }
-
     if (!isConfirmTab && panel.customEditing) {
       if (value === '\r') {
         this.answerQuestion()
@@ -1541,6 +1557,16 @@ export class TuiApp {
         this.scheduleRender()
         return
       }
+      if ((value === '\x1b[A' || value === '\x1bOA') && options.length > 0) {
+        panel.customs[panel.index] = this.input
+        panel.customEditing = false
+        panel.customModes[panel.index] = false
+        panel.selected = options.length - 1
+        this.input = ''
+        this.cursor = 0
+        this.scheduleRender()
+        return
+      }
       if (value === '\t') {
         this.saveCurrentQuestionAnswer()
         panel.index = (panel.index + 1) % totalTabs
@@ -1552,11 +1578,6 @@ export class TuiApp {
         this.insertQuestionText(value)
         return
       }
-    }
-
-    if (!isConfirmTab && value === 'o') {
-      this.toggleCustomQuestionInput()
-      return
     }
 
     if (isConfirmTab) {
@@ -1635,6 +1656,10 @@ export class TuiApp {
     }
 
     if (value === '\r') {
+      if (panel.selected === options.length) {
+        this.enterCustomQuestionInput()
+        return
+      }
       this.answerQuestion()
       return
     }
@@ -1653,16 +1678,21 @@ export class TuiApp {
       return
     }
     if (value === ' ') {
+      if (panel.selected === options.length) {
+        this.enterCustomQuestionInput()
+        return
+      }
       this.toggleQuestionOption(panel.selected)
       return
     }
-    if (value === 'j' && options.length > 0) {
-      panel.selected = (panel.selected + 1) % options.length
+    const choiceCount = options.length + 1
+    if (value === 'j') {
+      panel.selected = (panel.selected + 1) % choiceCount
       this.scheduleRender()
       return
     }
-    if (value === 'k' && options.length > 0) {
-      panel.selected = (panel.selected - 1 + options.length) % options.length
+    if (value === 'k') {
+      panel.selected = (panel.selected - 1 + choiceCount) % choiceCount
       this.scheduleRender()
       return
     }
@@ -1794,10 +1824,10 @@ export class TuiApp {
       } catch {}
     }
 
-    if (supportsNativeVision && images.length > 0) {
-      let persisted
+    let persistedImages = []
+    if (images.length > 0) {
       try {
-        persisted = await this.persistImageDrafts(images)
+        persistedImages = await this.persistImageDrafts(images)
       } catch (error) {
         this.pendingImages = [...images, ...(this.pendingImages ?? [])]
         if (prompt) {
@@ -1811,9 +1841,10 @@ export class TuiApp {
         this.scheduleRender()
         return
       }
-      for (const { ref } of persisted) {
-        content.push({ type: 'image', attachment: ref })
-      }
+    }
+
+    for (const { ref } of persistedImages) {
+      content.push({ type: 'image', attachment: ref })
     }
 
     let fullText = text
@@ -1827,29 +1858,16 @@ export class TuiApp {
       fullText = fullText ? `${ctxBlock}\n\n${fullText}` : ctxBlock
       this.pendingBashContext = undefined
     }
-    if (!supportsNativeVision && images.length > 0) {
-      const paths = []
-      for (const image of images) {
-        const path = image.filePath || image.path || await this.materializeImageDraft(image)
-        if (!path) {
-          this.pendingImages = [...images, ...(this.pendingImages ?? [])]
-          if (prompt) {
-            this.input = this.input
-              ? `${prompt}\n${this.input}`
-              : prompt
-          }
-          this.cursor = this.input.length
-          this.message = ''
-          this.log('error', 'unable to prepare image fallback for this model', 'image attachment')
-          this.scheduleRender()
-          return
-        }
-        paths.push(path)
-      }
-      if (paths.length > 0) {
-        const imageInfo = paths.map((p) => `[Attached Image: ${p}]`).join('\n')
-        fullText = fullText ? `${imageInfo}\n${fullText}` : imageInfo
-      }
+    if (!supportsNativeVision && persistedImages.length > 0) {
+      const configured = this.preferences?.visionProvider && this.preferences?.visionModel
+      const imageInfo = persistedImages.map(({ ref }) => {
+        const id = ref.attachmentId
+        if (id) this.imageAttachments.set(id, ref)
+        return configured && id
+          ? `[Image attachment ${id} is available. Use analyze_image with attachment_id="${id}" when visual inspection is needed.]`
+          : `[Image attachment ${id ?? 'unknown'} is available, but no vision route is configured. Ask the user to run /vision <provider>/<model>.]`
+      }).join('\n')
+      fullText = fullText ? `${imageInfo}\n${fullText}` : imageInfo
     }
     if (fullText) content.push({ type: 'text', text: fullText })
     if (this.agent?.status === 'running' && fullText) {
@@ -1924,7 +1942,40 @@ export class TuiApp {
     if (!Array.isArray(refs) || refs.length !== images.length) {
       throw new Error('image attachment storage returned an incomplete batch')
     }
-    return images.map((draft, index) => ({ draft, ref: refs[index] }))
+    return images.map((draft, index) => {
+      const ref = refs[index]
+      if (Number.isInteger(ref?.width) && Number.isInteger(ref?.height) && Number.isInteger(ref?.bytes) && ref?.mediaType) {
+        return { draft, ref }
+      }
+      const dimensions = draft.mediaType === 'image/png' ? pngDimensions(draft.data) : undefined
+      if (!dimensions || !draft.data?.length) {
+        throw new Error('image attachment metadata is unavailable for vision routing')
+      }
+      return {
+        draft,
+        ref: {
+          attachmentId: ref?.attachmentId,
+          mediaType: draft.mediaType,
+          bytes: draft.data.length,
+          ...dimensions,
+          ...(draft.name ? { name: draft.name } : {})
+        }
+      }
+    })
+  }
+
+  rememberImageAttachments(content = []) {
+    for (const block of content) {
+      const attachment = block?.type === 'image' ? block.attachment : undefined
+      if (attachment?.attachmentId) this.imageAttachments?.set(String(attachment.attachmentId), attachment)
+    }
+  }
+
+  restoreImageAttachments(events = []) {
+    this.imageAttachments?.clear()
+    for (const event of events) {
+      if (event.type === 'user/message') this.rememberImageAttachments(event.data?.content)
+    }
   }
 
   async runCommand(line, images = []) {
@@ -2411,6 +2462,63 @@ export class TuiApp {
       this.log('error', error instanceof Error ? error.message : String(error), '/model')
       this.scheduleRender()
     }
+  }
+
+  async configureVisionRoute(line) {
+    const target = line.replace(/^\/vision\s*/i, '').trim()
+    if (!target) {
+      await this.showVisionModels()
+      return
+    }
+    const separator = target.indexOf('/')
+    const provider = separator > 0 ? target.slice(0, separator).trim() : ''
+    const model = separator > 0 ? target.slice(separator + 1).trim() : ''
+    if (!provider || !model) {
+      this.log('error', 'usage: /vision <provider>/<model>', '/vision')
+      this.scheduleRender()
+      return
+    }
+    try {
+      if (!this.settingsScope) throw new Error('settings are not available')
+      const info = await this.llmService?.resolveModelInfo?.(provider, model)
+      if (Array.isArray(info?.inputModalities) && !info.inputModalities.includes('image')) {
+        throw new Error(`${provider}/${model} does not advertise image input support`)
+      }
+      await this.settingsScope.update({ visionProvider: provider, visionModel: model })
+      this.preferences = { ...this.preferences, visionProvider: provider, visionModel: model }
+      this.log('ok', `vision route · ${provider}/${model}`, '/vision')
+    } catch (error) {
+      this.log('error', error instanceof Error ? error.message : String(error), '/vision')
+    }
+    this.scheduleRender()
+  }
+
+  async showVisionModels() {
+    try {
+      const models = []
+      for (const provider of this.llmService?.listProviders?.() ?? []) {
+        let entries = []
+        try {
+          entries = await (this.llmService?.listModels?.(provider.id) ?? [])
+        } catch {}
+        for (const entry of entries) {
+          if (!Array.isArray(entry.inputModalities) || !entry.inputModalities.includes('image')) continue
+          const model = entry.id ?? entry.name ?? entry.model
+          if (model) models.push(`${provider.id}/${model}`)
+        }
+      }
+      const configured = this.preferences?.visionProvider && this.preferences?.visionModel
+        ? `${this.preferences.visionProvider}/${this.preferences.visionModel}`
+        : 'not configured'
+      const unique = [...new Set(models)].sort()
+      const body = unique.length > 0
+        ? unique.map((model) => `  /vision ${model}`).join('\n')
+        : '  No provider currently advertises image input. You can still enter a known visual model ID manually.'
+      this.log('ok', `vision route · ${configured}\nAvailable vision models:\n${body}`, '/vision')
+    } catch (error) {
+      this.log('error', error instanceof Error ? error.message : String(error), '/vision')
+    }
+    this.scheduleRender()
   }
 
   async chooseModel() {
@@ -3088,18 +3196,34 @@ export class TuiApp {
     this.scheduleRender()
   }
 
+  openNewSessionConfirm() {
+    if (!this.agent) return
+    this.presetConfirm = {
+      kind: 'new-session',
+      requestedId: this.presetName ?? this.ctx.agentPresets.defaultId,
+      selected: 0
+    }
+    this.scheduleRender()
+  }
+
   async applyPresetConfirm(confirm) {
-    const id = this.presetConfirm?.requestedId
+    const request = this.presetConfirm
+    const id = request?.requestedId
+    const isNewSession = request?.kind === 'new-session'
     this.presetConfirm = undefined
     if (!confirm || !id) {
-      if (!confirm && id) {
+      if (!confirm && id && isNewSession) {
+        this.log('ok', 'New session cancelled.', '/new')
+      } else if (!confirm && id) {
         this.log('ok', `Preset change cancelled. Start a new session to use preset "${id}".`, '/preset')
       }
       this.scheduleRender()
       return
     }
-    // User confirmed: create a fresh Harness session with the requested preset.
-    this.message = `switching preset · ${id}…`
+    // User confirmed: create a fresh Harness session through the official API.
+    const source = isNewSession ? '/new' : '/preset'
+    const permissionName = isNewSession ? this.permissionName : undefined
+    this.message = isNewSession ? 'starting new session…' : `switching preset · ${id}…`
     this.scheduleRender()
     try {
       const previous = this.handle
@@ -3118,6 +3242,9 @@ export class TuiApp {
       this.reasoningEffort = selection.reasoningEffort
       this.activeModel = undefined
       this.attachRequestOverride(agent)
+      if (permissionName) {
+        this.ctx.permissionPresets.set(agent.session, permissionName)
+      }
       if (previous) {
         await Promise.race([
           this.sessionsService?.flush?.(previous.agent.session),
@@ -3141,15 +3268,16 @@ export class TuiApp {
       this.localLog = []
       this.expandedKeys = new Set()
       this.pendingImages = []
+      this.imageAttachments?.clear()
       this.turnHeaderCommitted = false
       this.streamHeaderCommitted = false
       this.lastQueuedText = undefined
       this.active = false
       void this.refreshSkills()
-      this.log('ok', `New session started with preset "${id}"`, '/preset')
+      this.log('ok', isNewSession ? 'New session started.' : `New session started with preset "${id}"`, source)
       this.repaint(true)
     } catch (error) {
-      this.log('error', error instanceof Error ? error.message : String(error), '/preset')
+      this.log('error', error instanceof Error ? error.message : String(error), source)
     }
     this.message = ''
     this.scheduleRender()
@@ -3503,7 +3631,7 @@ export class TuiApp {
       const cwd = this.agent?.session.header.cwd ?? process.cwd()
       const sessions = records
         .filter((record) => {
-          if (!record.persisted || record.live) return false
+          if (!record.persisted || record.live || isSubagentSession(record)) return false
           const sessionCwd = record.header?.cwd ?? record.cwd
           return sessionCwd === undefined || sessionCwd === cwd
         })
@@ -3613,6 +3741,7 @@ export class TuiApp {
       }
       if (this.reasoningBlocks.length > 20) this.reasoningBlocks.length = 20
       this.streaming = { text: '', reasoning: '', tool: undefined }
+      this.restoreImageAttachments(agent.session.events)
       this.reasoningAt = undefined
       this.turnStats = { speed: 0, durationMs: 0, active: false }
       this.turnStartTime = undefined
@@ -3728,7 +3857,7 @@ export class TuiApp {
     this.bracketTimer = undefined
   }
 
-  insertText(text) {
+  insertText(text, { allowFilePicker = true } = {}) {
     if (this.bracketing) this.bracketLines += text.split('\n').length - 1
     else this.pasteFolded = undefined
     if (this.selection) {
@@ -3743,7 +3872,7 @@ export class TuiApp {
     }
     this.help = false
     this.updateMenu()
-    this.maybeOpenFilePicker()
+    this.maybeOpenFilePicker(allowFilePicker && text.includes('@'))
     this.scheduleRender(true)
   }
 
@@ -4352,7 +4481,7 @@ export class TuiApp {
       } else {
         // Strip ANSI escape sequences: text copied from the terminal's
         // native selection carries color codes that would render as garbage.
-        this.insertText(safe(visibleOf(String(value))).replace(/\r/g, ''))
+        this.insertText(safe(visibleOf(String(value))).replace(/\r/g, ''), { allowFilePicker: false })
         this.scheduleBracketTimeout()
         return
       }
@@ -4419,7 +4548,7 @@ export class TuiApp {
             const { promisify } = await import('node:util')
             const execFileAsync = promisify(execFile)
             const { stdout } = await execFileAsync(process.platform === 'darwin' ? 'pbpaste' : 'xclip', process.platform === 'darwin' ? [] : ['-selection', 'clipboard', '-o'], { timeout: 2000 })
-            if (stdout) this.insertText(stdout)
+            if (stdout) this.insertText(stdout, { allowFilePicker: false })
           } catch {}
         }
       })()
@@ -4491,9 +4620,20 @@ export class TuiApp {
         }
         const question = this.currentQuestion()
         const optionCount = Array.isArray(question?.options) ? question.options.length : 0
-        if (optionCount > 0) {
+        const choiceCount = optionCount + 1
+        if (panel.customEditing && (value === '\x1b[A' || value === '\x1bOA') && optionCount > 0) {
+          panel.customs[panel.index] = this.input
+          panel.customEditing = false
+          panel.customModes[panel.index] = false
+          panel.selected = optionCount - 1
+          this.input = ''
+          this.cursor = 0
+          this.scheduleRender()
+          return
+        }
+        if (choiceCount > 0) {
           const delta = (value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[D' || value === '\x1bOD') ? -1 : 1
-          panel.selected = (panel.selected + delta + optionCount) % optionCount
+          panel.selected = (panel.selected + delta + choiceCount) % choiceCount
           this.scheduleRender()
         }
         return
@@ -4843,8 +4983,8 @@ export class TuiApp {
     }
     if (this.questionPanel) {
       const hint = this.questionPanel.customEditing
-        ? 'type a custom answer · Ctrl+O close custom · Shift+Enter newline · Enter submit'
-        : 'choose an option · o custom answer · ↑↓ navigate · Enter submit'
+        ? 'type your answer · ↑ return to options · Shift+Enter newline · Enter submit'
+        : '↑↓ choose · Enter select or type your own answer · Tab next'
       return [`${prompt}${ANSI.muted}${truncateWidth(hint, Math.max(10, columns - prefixWidth - 1))}${ANSI.reset}`]
     }
     if (this.commandPalette) {
@@ -4922,36 +5062,54 @@ export class TuiApp {
     const slashPrefix = slashName !== undefined ? `/${slashName}` : undefined
     const slashColor = bashMode ? ANSI.bash : slashItem?.kind === 'skill' ? `${ANSI.blue}${ANSI.bold}` : `${ANSI.blueSoft}${ANSI.bold}`
     const fileColor = `${(ANSI.cyan ?? ANSI.teal ?? ANSI.blueSoft)}${ANSI.bold}`
+    const urlColor = `${ANSI.blueSoft}${ANSI.bold}`
+    const semanticSpans = []
+    const addSpan = (start, end, style, priority) => {
+      if (end > start) semanticSpans.push({ start, end, style, priority })
+    }
+    if (slashPrefix) addSpan(0, slashPrefix.length, slashColor, 1)
+    for (const match of displayInput.matchAll(/(?:https?|ftp):\/\/[^\s<>()]+/g)) {
+      addSpan(match.index, match.index + match[0].length, urlColor, 3)
+    }
+    for (const match of displayInput.matchAll(/(^|[\s])(@[^\s@]+)/g)) {
+      const prefixLength = match[1].length
+      addSpan(match.index + prefixLength, match.index + match[0].length, fileColor, 2)
+    }
+    semanticSpans.sort((a, b) => a.start - b.start || b.priority - a.priority)
+    const selectionStart = this.selection ? Math.min(this.selection.start, this.selection.end) : undefined
+    const selectionEnd = this.selection ? Math.max(this.selection.start, this.selection.end) : undefined
 
     const formatLineText = (text, offset) => {
       if (bashMode) return `${ANSI.bash}${safe(text)}${ANSI.reset}`
-      let remaining = text
-      let prefixPart = ''
-      if (offset === 0 && slashPrefix && remaining.startsWith(slashPrefix)) {
-        prefixPart = `${slashColor}${safe(slashPrefix)}${ANSI.reset}`
-        remaining = remaining.slice(slashPrefix.length)
+      if (text === '') return ''
+      const start = offset
+      const end = offset + text.length
+      const boundaries = new Set([start, end])
+      for (const span of semanticSpans) {
+        if (span.end <= start || span.start >= end) continue
+        boundaries.add(Math.max(start, span.start))
+        boundaries.add(Math.min(end, span.end))
       }
-      if (remaining.includes('@')) {
-        const parts = remaining.split(/(@[^\s]+)/g)
-        let body = ''
-        for (const part of parts) {
-          if (part.startsWith('@') && part.length > 1) {
-            body += `${fileColor}${safe(part)}${ANSI.reset}`
-          } else if (part) {
-            body += `${ANSI.ink}${safe(part)}${ANSI.reset}`
-          }
-        }
-        return `${prefixPart}${body}`
+      if (selectionStart !== undefined && selectionEnd !== undefined && selectionEnd > start && selectionStart < end) {
+        boundaries.add(Math.max(start, selectionStart))
+        boundaries.add(Math.min(end, selectionEnd))
       }
-      return `${prefixPart}${ANSI.ink}${safe(remaining)}${ANSI.reset}`
-    }
-
-    const renderSelected = (text, offset) => {
-      if (!this.selection || text === '') return formatLineText(text, offset)
-      const start = Math.max(0, this.selection.start - offset)
-      const end = Math.min(text.length, this.selection.end - offset)
-      if (end <= start || start >= text.length) return formatLineText(text, offset)
-      return `${ANSI.ink}${safe(text.slice(0, start))}\x1b[7m${safe(text.slice(start, end))}\x1b[27m${safe(text.slice(end))}${ANSI.reset}`
+      const points = [...boundaries].sort((a, b) => a - b)
+      let output = ''
+      for (let index = 0; index < points.length - 1; index++) {
+        const partStart = points[index]
+        const partEnd = points[index + 1]
+        const value = safe(text.slice(partStart - start, partEnd - start))
+        if (!value) continue
+        const style = semanticSpans
+          .filter((span) => span.start <= partStart && span.end >= partEnd)
+          .sort((a, b) => b.priority - a.priority)[0]?.style ?? ANSI.ink
+        const selected = selectionStart !== undefined && selectionEnd !== undefined && selectionStart < partEnd && selectionEnd > partStart
+        output += selected
+          ? `${style}\x1b[7m${value}\x1b[27m${ANSI.reset}`
+          : `${style}${value}${ANSI.reset}`
+      }
+      return output
     }
 
     const limit = this.inputMaxRows ?? block.length
@@ -4963,7 +5121,7 @@ export class TuiApp {
     const out = []
     for (let i = windowStart; i < Math.min(total, windowStart + limit); i++) {
       const prefix = (i === 0) ? (imageTags ? `${prompt}${imageTags} ` : prompt) : '  '
-      out.push(`${prefix}${renderSelected(block[i], offsets[i] ?? 0)}`)
+      out.push(`${prefix}${formatLineText(block[i], offsets[i] ?? 0)}`)
     }
     this.caretRow = caretRow - windowStart
     this.caretCol = prefixWidth + (caretRow === 0 ? imageTagWidth : 0) + widthOf(caretWrapped[caretWrapped.length - 1] ?? '')
@@ -5163,8 +5321,35 @@ export class TuiApp {
     return renderFilePicker(this.filePicker, capacity, columns, ANSI)
   }
 
+  renderInitialization() {
+    const columns = Math.max(60, process.stdout.columns || 100)
+    const rows = Math.max(16, process.stdout.rows || 30)
+    const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    const frame = frames[Math.floor(Date.now() / 80) % frames.length]
+    const elapsed = Math.max(0, Math.floor((Date.now() - this.initializing.startedAt) / 1000))
+    const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+    const model = truncateWidth(`${selection.provider}/${selection.model}`, Math.max(20, columns - 24))
+    const title = this.initializing.continuing ? 'Restoring previous session' : 'Starting DSH OMC TUI'
+    const detail = this.initializing.continuing
+      ? 'Loading conversation, model, and workspace state'
+      : 'Loading model and workspace state'
+    const lines = [
+      `${ANSI.blue}✻${ANSI.reset} ${ANSI.bold}DSH OMC${ANSI.reset}`,
+      '',
+      `${ANSI.blueSoft}${frame}${ANSI.reset} ${ANSI.ink}${title}${ANSI.reset} ${ANSI.dim}(${elapsed}s)${ANSI.reset}`,
+      `${ANSI.dim}${detail}${ANSI.reset}`,
+      `${ANSI.muted}${model}${ANSI.reset}`
+    ]
+    const padding = '\n'.repeat(Math.max(0, Math.floor((rows - lines.length) / 2)))
+    process.stdout.write(`\x1b[?25l\x1b[2J\x1b[H${padding}${lines.map((line) => truncateAnsi(line, columns)).join('\n')}\x1b[J`)
+  }
+
   render() {
     if (!this.terminalOpen || this.isCommittingScrollback) return
+    if (this.initializing) {
+      this.renderInitialization()
+      return
+    }
     const columns = Math.max(60, process.stdout.columns || 100)
     const rows = Math.max(16, process.stdout.rows || 30)
     const footerLines = this.buildFooter(columns, rows)
@@ -5213,10 +5398,15 @@ export class TuiApp {
 
 export function apply(ctx) {
   const app = new TuiApp(ctx)
+  const removeVisionRouter = registerVisionRouter(app)
   void app.start().catch(async (error) => {
+    removeVisionRouter()
     await app.stop()
     process.stderr.write(`dsh-omc-tui: ${error instanceof Error ? error.message : String(error)}\n`)
     ctx.get('appExit')?.(1)
   })
-  return () => app.stop()
+  return async () => {
+    removeVisionRouter()
+    await app.stop()
+  }
 }

@@ -86,9 +86,10 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
   }
 
   const options = Array.isArray(question?.options) ? question.options : []
+  const choiceCount = options.length + 1
   const optionCapacity = Math.max(2, Math.min(6, Math.floor((rows - 10) / 2)))
-  const start = Math.min(Math.max(0, panel.selected - optionCapacity + 1), Math.max(0, options.length - optionCapacity))
-  const shown = options.slice(start, start + optionCapacity)
+  const start = Math.min(Math.max(0, panel.selected - optionCapacity + 1), Math.max(0, choiceCount - optionCapacity))
+  const end = Math.min(choiceCount, start + optionCapacity)
 
   const lines = [
     tabRow,
@@ -101,10 +102,21 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
     lines.push(...detailLines.map((line) => `  ${ANSI.dim}${line}${ANSI.reset}`))
     lines.push('')
   }
-  for (let index = 0; index < shown.length; index++) {
-    const option = shown[index]
-    const optionIndex = start + index
+  for (let optionIndex = start; optionIndex < end; optionIndex++) {
+    const isCustomOption = optionIndex === options.length
     const current = optionIndex === panel.selected
+    if (isCustomOption) {
+      const custom = panel.customs?.[panel.index] ?? ''
+      const marker = panel.customEditing || custom.trim() ? '✎' : '○'
+      const label = 'Type your own answer…'
+      if (current) {
+        lines.push(`  ${ANSI.blue}⌨ ${ANSI.teal ?? ANSI.blue}${marker}${ANSI.reset} ${ANSI.userBg ?? '\x1b[48;5;237m'}${ANSI.ink}${ANSI.bold} ${label} ${ANSI.reset}`)
+      } else {
+        lines.push(`  ${ANSI.dim}⌨ ${marker} ${ANSI.answer}${label}${ANSI.reset}`)
+      }
+      continue
+    }
+    const option = options[optionIndex]
     const chosen = panel.selectedOptions.has(optionIndex)
     const marker = isMulti ? (chosen ? '[x]' : '[ ]') : (chosen ? '(•)' : '( )')
     const num = `${optionIndex + 1}.`
@@ -123,26 +135,25 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
       }
     }
   }
-  if (options.length > shown.length) {
-    lines.push(`  ${ANSI.dim}… ${options.length - shown.length} more options${ANSI.reset}`)
+  if (choiceCount > end - start) {
+    lines.push(`  ${ANSI.dim}… ${choiceCount - (end - start)} more choices${ANSI.reset}`)
   }
   const custom = panel.customs?.[panel.index] ?? ''
   lines.push('')
   if (panel.customEditing) {
-    lines.push(`  ${ANSI.teal ?? ANSI.blue}✎ Other / custom answer${ANSI.reset}`)
+    lines.push(`  ${ANSI.teal ?? ANSI.blue}✎ Your answer${ANSI.reset}`)
     const customLines = String(custom || 'type a free-form answer…').split('\n')
       .flatMap((line) => wrap(safe(line), Math.max(20, columns - 8)))
       .slice(-3)
     for (const line of customLines) {
       lines.push(`    ${ANSI.ink}${safe(line)}${ANSI.reset}`)
     }
-  } else {
-    lines.push(`  ${ANSI.dim}✎ Other / custom answer · press o to edit${ANSI.reset}`)
   }
   lines.push('')
+  const quickSelect = options.length > 0 ? ` · 1-${Math.min(9, options.length)} quick select` : ''
   const hint = isMulti
-    ? 'Space/1-9 toggle · o custom · Ctrl+O close custom · Shift+Enter newline · Tab submit · Esc cancel'
-    : `Space/Enter select · 1-${Math.min(9, options.length)} quick select · o custom · Ctrl+O close custom · Shift+Enter newline · Tab submit · Esc cancel`
+    ? '↑↓ choose · Space toggle · Enter type own answer · Tab next · Esc cancel'
+    : `↑↓ choose · Enter select/type own answer${quickSelect} · Tab next · Esc cancel`
   lines.push(...wrap(hint, Math.max(20, columns - 4)).map((line) => `  ${ANSI.muted}${line}${ANSI.reset}`))
   return lines
 }

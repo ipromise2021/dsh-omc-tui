@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { TuiApp } from '../src/index.js'
+import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
+import { pngDimensions } from '../src/image-protocol.js'
 import { alignCodePoint, moveCursorLine } from '../src/input/editor.js'
 import { handleCompact } from '../src/commands/compact.js'
 import { renderMarkdownRows } from '../src/renderer/markdown.js'
@@ -12,6 +14,16 @@ import { ANSI, applyTheme } from '../src/renderer/themes.js'
 import { safe, visibleOf, widthOf } from '../src/renderer/ansi.js'
 
 const noop = () => {}
+
+let visionTool
+registerVisionRouter({ ctx: { tools: { register(tool) { visionTool = tool } } } })
+assert.equal(visionTool.parameters.type, 'object')
+assert.deepEqual(visionTool.parameters.required, ['attachment_id'])
+assert.equal(visionTool.parameters.properties.attachment_id.type, 'string')
+assert.match(visionTool.output.render({}, { model: 'deepseek/vision', analysis: 'Detected text' })[0].text, /Detected text/)
+
+const pngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 16, 0, 0, 0, 8])
+assert.deepEqual(pngDimensions(pngHeader), { width: 16, height: 8 })
 
 assert.equal(moveCursorLine('你a\n12345', 2, 1), 6)
 
@@ -33,6 +45,19 @@ assert.equal(widthOf('👨‍👩‍👧‍👦'), 2)
 assert.equal(widthOf('🇨🇳'), 2)
 assert.equal(widthOf('❤️'), 2)
 assert.equal(widthOf('1️⃣'), 2)
+
+let filePickerRefreshes = 0
+const recalledPrompt = {
+  input: '@src/index.js',
+  cursor: '@src/index.js'.length,
+  filePicker: undefined,
+  closeFilePicker: noop,
+  refreshFilePicker() { filePickerRefreshes += 1 }
+}
+TuiApp.prototype.maybeOpenFilePicker.call(recalledPrompt)
+assert.equal(filePickerRefreshes, 0)
+TuiApp.prototype.maybeOpenFilePicker.call(recalledPrompt, true)
+assert.equal(filePickerRefreshes, 1)
 
 const originalStderrWrite = process.stderr.write
 let stderrCallbackCalled = false
@@ -87,6 +112,42 @@ assert.equal(presetApp.expandedKeys.size, 0)
 assert.equal(presetApp.pendingImages.length, 0)
 assert.equal(presetApp.active, false)
 assert.equal(repaintCleared, true)
+
+let newSessionDisposed = false
+let newSessionPermission
+const newSessionAgent = { ctx: {}, session: { events: [], seq: 0 } }
+const newSessionApp = {
+  presetConfirm: { kind: 'new-session', requestedId: 'deepseek' },
+  handle: { agent: { session: { events: [], seq: 3 } }, dispose: async () => { newSessionDisposed = true } },
+  ctx: {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock-v2', reasoningEffort: 'DEFAULT' }) },
+    agents: { create: async ({ setup }) => { await setup({}); return { agent: newSessionAgent, dispose: noop } } },
+    agentPresets: { mount: async () => {}, composedPreset: () => 'deepseek' },
+    permissionPresets: { current: () => newSessionPermission, set: (_session, name) => { newSessionPermission = name } }
+  },
+  message: '',
+  scheduleRender: noop,
+  attachRequestOverride: noop,
+  refreshSkills: async () => {},
+  sessionsService: { flush: async () => {} },
+  localLog: [],
+  expandedKeys: new Set(),
+  pendingImages: [],
+  reasoningBlocks: [],
+  streaming: { text: '', reasoning: '', tool: undefined },
+  streamBuffer: '',
+  usage: {},
+  permissionName: 'workspace-write',
+  viewClearedSeq: 3,
+  lastCommittedSeq: 3,
+  active: false,
+  log(kind, text, command) { this.localLog.push({ kind, text, command }) },
+  repaint: noop
+}
+await TuiApp.prototype.applyPresetConfirm.call(newSessionApp, true)
+assert.equal(newSessionDisposed, true)
+assert.equal(newSessionPermission, 'workspace-write')
+assert.deepEqual(newSessionApp.localLog, [{ kind: 'ok', text: 'New session started.', command: '/new' }])
 
 const questionApp = {
   questionPanel: {
@@ -162,6 +223,38 @@ TuiApp.prototype.handleQuestionToken.call(customQuestionApp, '\r')
 TuiApp.prototype.handleQuestionToken.call(customQuestionApp, '\r')
 assert.deepEqual(customQuestionResult, { answers: [{ id: 'q-custom', selected: [], custom: 'a\nb' }] })
 
+const customChoiceApp = {
+  input: '',
+  cursor: 0,
+  questionPanel: {
+    questions: [{ id: 'q-choice', options: ['preset one', 'preset two'] }],
+    index: 0,
+    selected: 2,
+    selectedOptions: new Set(),
+    answers: [],
+    customs: [],
+    customModes: [],
+    customEditing: false
+  },
+  currentQuestion: TuiApp.prototype.currentQuestion,
+  enterCustomQuestionInput: TuiApp.prototype.enterCustomQuestionInput,
+  insertQuestionText: TuiApp.prototype.insertQuestionText,
+  scheduleRender: noop
+}
+TuiApp.prototype.handleQuestionToken.call(customChoiceApp, '\r')
+assert.equal(customChoiceApp.questionPanel.customEditing, true)
+assert.equal(customChoiceApp.questionPanel.selected, 2)
+TuiApp.prototype.handleQuestionToken.call(customChoiceApp, 'custom response')
+TuiApp.prototype.handleQuestionToken.call(customChoiceApp, '\x1b[A')
+assert.deepEqual([
+  customChoiceApp.questionPanel.customEditing,
+  customChoiceApp.questionPanel.selected,
+  customChoiceApp.questionPanel.customs[0],
+  customChoiceApp.input
+], [false, 1, 'custom response', ''])
+const customChoiceRows = renderQuestionPanel(customChoiceApp.questionPanel, customChoiceApp.questionPanel.questions[0], 100, 30)
+assert.match(visibleOf(customChoiceRows.join('\n')), /Type your own answer/)
+
 const emojiQuestionApp = {
   input: '😀x',
   cursor: '😀x'.length,
@@ -177,15 +270,12 @@ const emojiQuestionApp = {
   },
   currentQuestion: TuiApp.prototype.currentQuestion,
   eraseQuestionText: TuiApp.prototype.eraseQuestionText,
-  toggleCustomQuestionInput: TuiApp.prototype.toggleCustomQuestionInput,
   scheduleRender: noop
 }
 TuiApp.prototype.eraseQuestionText.call(emojiQuestionApp)
 assert.deepEqual([emojiQuestionApp.input, emojiQuestionApp.cursor], ['😀', 2])
 TuiApp.prototype.insertQuestionText.call(emojiQuestionApp, '🚀')
 assert.deepEqual([emojiQuestionApp.input, emojiQuestionApp.cursor], ['😀🚀', 4])
-TuiApp.prototype.handleQuestionToken.call(emojiQuestionApp, '\x0f')
-assert.equal(emojiQuestionApp.questionPanel.customEditing, false)
 
 const emptyCustomRestoreApp = {
   input: '',
@@ -306,6 +396,106 @@ assert.equal('base64' in submittedImageMessage.content[0].attachment, false)
 assert.equal('filePath' in submittedImageMessage.content[0].attachment, false)
 assert.deepEqual(submittedImageMessage.content[1], { type: 'text', text: 'inspect' })
 assert.equal(JSON.stringify(submittedImageMessage).includes('/tmp/private-image.png'), false)
+
+let routedImageMessage
+const routedAttachment = { attachmentId: 'att-route' }
+const routedImageSubmitApp = {
+  preferences: { visionProvider: 'deepseek', visionModel: 'deepseek-v4-vision-exp' },
+  imageAttachments: new Map(),
+  ctx: {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-v4-pro' }) },
+    get(name) {
+      return name === 'attachments' ? routedImageSubmitApp.attachmentsService : name === 'llm' ? routedImageSubmitApp.llmService : undefined
+    }
+  },
+  llmService: { resolveModelInfo: async () => ({ inputModalities: ['text'] }) },
+  attachmentsService: { saveImages: async () => [routedAttachment] },
+  expandFileReferences: async (text) => ({ text, missing: [] }),
+  persistImageDrafts: TuiApp.prototype.persistImageDrafts,
+  agent: { status: 'idle', followup(message) { routedImageMessage = message } },
+  pendingImages: [],
+  scheduleRender: noop,
+  log: noop,
+  streamBuffer: '',
+  streamHeaderCommitted: false,
+  turnHeaderCommitted: false
+}
+await TuiApp.prototype.submitUserMessage.call(routedImageSubmitApp, 'check the layout', [], [{ data: pngHeader, mediaType: 'image/png' }])
+assert.deepEqual(routedImageSubmitApp.imageAttachments.get('att-route'), {
+  attachmentId: 'att-route', mediaType: 'image/png', bytes: pngHeader.length, width: 16, height: 8
+})
+assert.deepEqual(routedImageMessage.content, [{
+  type: 'image',
+  attachment: { attachmentId: 'att-route', mediaType: 'image/png', bytes: pngHeader.length, width: 16, height: 8 }
+}, {
+  type: 'text',
+  text: '[Image attachment att-route is available. Use analyze_image with attachment_id="att-route" when visual inspection is needed.]\ncheck the layout'
+}])
+
+const restoredImageApp = { imageAttachments: new Map(), rememberImageAttachments: TuiApp.prototype.rememberImageAttachments }
+TuiApp.prototype.restoreImageAttachments.call(restoredImageApp, [{
+  type: 'user/message',
+  data: { content: routedImageMessage.content }
+}])
+assert.deepEqual(restoredImageApp.imageAttachments.get('att-route'), {
+  attachmentId: 'att-route', mediaType: 'image/png', bytes: pngHeader.length, width: 16, height: 8
+})
+
+let registeredEvent
+let registeredStatus
+let sidecarInput
+let visionCreateOptions
+let visionDisposed = false
+const mainAgent = { id: 'main-agent', session: { header: { id: 'session-main', delegationDepth: 0 } } }
+let visionToolRestriction
+let visionToolGuard
+const sidecarAgent = {
+  followup(message) {
+    sidecarInput = message
+    registeredEvent({ id: visionCreateOptions.sessionId }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'The button is disabled.' }] } } })
+    registeredStatus({ agent: sidecarAgent, status: 'idle' })
+  }
+}
+const visionRouteApp = {
+  agent: mainAgent,
+  preferences: { visionProvider: 'deepseek', visionModel: 'deepseek-v4-vision-exp' },
+  imageAttachments: new Map([['att-route', routedImageSubmitApp.imageAttachments.get('att-route')]]),
+  message: '',
+  scheduleRender: noop,
+  ctx: {
+    agents: {
+      currentInitiator: () => mainAgent,
+      async create(options) {
+        visionCreateOptions = options
+        await options.setup({
+          tools: {
+            restrict(filter) { visionToolRestriction = filter },
+            guard(handler) { visionToolGuard = handler }
+          }
+        })
+        return { agent: sidecarAgent, dispose: async () => { visionDisposed = true } }
+      }
+    },
+    on(event, handler) {
+      if (event === 'session/event') registeredEvent = handler
+      if (event === 'agent/status') registeredStatus = handler
+      return noop
+    }
+  }
+}
+const routedResult = await runVisionRoute(visionRouteApp, { attachment_id: 'att-route', prompt: 'Is the button enabled?' })
+assert.deepEqual(visionCreateOptions.agentOptions, { provider: 'deepseek', model: 'deepseek-v4-vision-exp' })
+assert.deepEqual(visionToolRestriction, { allow: [] })
+assert.equal(visionToolGuard({}), 'vision analysis sidecar cannot call tools')
+assert.deepEqual(visionCreateOptions.meta, {
+  cwd: process.cwd(), parentSession: 'session-main', origin: 'subagent', delegationDepth: 1
+})
+assert.equal(visionRouteApp.agent, mainAgent)
+assert.deepEqual(sidecarInput.content[1].attachment, {
+  attachmentId: 'att-route', mediaType: 'image/png', bytes: pngHeader.length, width: 16, height: 8
+})
+assert.deepEqual(routedResult, { model: 'deepseek/deepseek-v4-vision-exp', analysis: 'The button is disabled.' })
+assert.equal(visionDisposed, true)
 
 const failedImageSubmitApp = {
   activeModel: { provider: 'deepseek', model: 'deepseek-v4-vision' },
@@ -434,6 +624,29 @@ const narrowQuestionRows = renderQuestionPanel({
   customEditing: false
 }, narrowQuestion, 60, 30)
 assert.ok(narrowQuestionRows.every((row) => widthOf(visibleOf(row)) <= 60))
+
+const inputUrl = 'https://example.com/a-very-long-path-that-wraps-across-lines'
+const inputFile = '@src/a-very-long-file-reference-that-wraps-across-lines.js'
+const highlightedInputApp = {
+  agent: {},
+  input: `${inputUrl} ${inputFile}`,
+  cursor: inputUrl.length,
+  selection: { start: 0, end: inputUrl.length },
+  pendingImages: [],
+  pasteFolded: undefined,
+  questionPanel: undefined,
+  commandPalette: undefined,
+  active: false,
+  message: '',
+  inBashMode: () => false,
+  commandItems: () => []
+}
+const highlightedInputRows = TuiApp.prototype.inputFrame.call(highlightedInputApp, 44)
+const highlightedInput = highlightedInputRows.join('\n')
+const fileStyle = `${ANSI.cyan ?? ANSI.teal ?? ANSI.blueSoft}${ANSI.bold}`
+const urlSelectedStyle = `${ANSI.blueSoft}${ANSI.bold}\x1b[7m`
+assert.ok(highlightedInput.split(fileStyle).length - 1 >= 2)
+assert.ok(highlightedInput.split(urlSelectedStyle).length - 1 >= 2)
 
 const normalizedJob = TuiApp.prototype.normalizeJobSnapshot.call({}, { jobId: 7, type: 'subagent', status: 'running', title: 'worker' })
 assert.deepEqual(normalizedJob, { jobId: 7, type: 'subagent', status: 'running', title: 'worker', id: '7', kind: 'subagent', label: 'worker', detail: 'worker' })
@@ -573,9 +786,26 @@ assert.equal(settingsParsed.hudTools, true)
 assert.equal(settingsParsed.contextMode, 'both')
 assert.equal(settingsParsed.contextWarnAt, 60)
 assert.equal(settingsParsed.contextCriticalAt, 80)
+assert.deepEqual(tuiSettingsSchema({ visionProvider: 'deepseek', visionModel: 'deepseek-v4-vision-exp' }).visionModel, 'deepseek-v4-vision-exp')
 assert.throws(() => tuiSettingsSchema({ contextMode: 'invalid' }), /contextMode must be one of/)
 assert.throws(() => tuiSettingsSchema({ contextWarnAt: 80, contextCriticalAt: 80 }), /contextCriticalAt must be an integer greater than contextWarnAt/)
+assert.throws(() => tuiSettingsSchema({ visionProvider: 'deepseek' }), /must be configured together/)
 assert.throws(() => tuiSettingsSchema({ hudGit: 'invalid' }), /hudGit must be boolean/)
+
+let visionModelsLog
+const visionModelsApp = {
+  preferences: { visionProvider: 'deepseek-official', visionModel: 'deepseek-v4-flash-vision-exp' },
+  llmService: {
+    listProviders: () => [{ id: 'deepseek-official' }, { id: 'text-only' }],
+    listModels: async (provider) => provider === 'deepseek-official'
+      ? [{ id: 'deepseek-v4-flash-vision-exp', inputModalities: ['text', 'image'] }]
+      : [{ id: 'text-model', inputModalities: ['text'] }]
+  },
+  log(_kind, text) { visionModelsLog = text },
+  scheduleRender: noop
+}
+await TuiApp.prototype.showVisionModels.call(visionModelsApp)
+assert.match(visionModelsLog, /\/vision deepseek-official\/deepseek-v4-flash-vision-exp/)
 
 // Settings panel rendering assertion
 const settingsRows = renderSettingsPicker({ selected: 0 }, { theme: 'claude', statusline: 'detailed', hudGit: true, hudSpeed: true, persistHistory: true })
@@ -609,7 +839,7 @@ const hudText = visibleOf(hudStatus.rows.join('\n'))
 assert.match(hudText, /git:\(main\* ↑1\)/)
 assert.match(hudText, /48\.5 tok\/s/)
 assert.match(hudText, /2\.2s/)
-assert.match(hudText, /85% ⚠️/)
+assert.match(hudText, /Context.*15k \/ 100k · 14% \| session in 12k · out 2\.5k/)
 assert.match(hudText, /Read: index\.js/)
 assert.match(hudText, /Edit: statusline\.js/)
 
@@ -618,7 +848,7 @@ const percentContext = renderStatusRows({
   contextMode: 'percent',
   usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, recentInput: 85000, contextWindow: 100000 }
 })
-assert.match(visibleOf(percentContext.rows.join('\n')), /Context.*85% ⚠️/)
+assert.match(visibleOf(percentContext.rows.join('\n')), /Context.*14%/)
 assert.equal(visibleOf(percentContext.rows.join('\n')).includes('85k \/ 100k'), false)
 
 const remainingContext = renderStatusRows({
@@ -626,7 +856,7 @@ const remainingContext = renderStatusRows({
   contextMode: 'remaining',
   usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, recentInput: 85000, contextWindow: 100000 }
 })
-assert.match(visibleOf(remainingContext.rows.join('\n')), /15k left/)
+assert.match(visibleOf(remainingContext.rows.join('\n')), /86k left/)
 
 const customContextThreshold = renderStatusRows({
   columns: 120,
@@ -634,7 +864,7 @@ const customContextThreshold = renderStatusRows({
   contextCriticalAt: 90,
   usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, recentInput: 85000, contextWindow: 100000 }
 })
-assert.equal(visibleOf(customContextThreshold.rows.join('\n')).includes('85% ⚠️'), false)
+assert.equal(visibleOf(customContextThreshold.rows.join('\n')).includes('14% ⚠️'), false)
 
 const toolAggregationApp = {
   active: false,

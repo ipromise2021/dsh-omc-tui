@@ -6,7 +6,7 @@ export function renderSettingsPicker(settingsPicker, preferences, ANSI = default
   const descriptions = {
     theme: 'color theme (claude / deepseek / mono / light)',
     statusline: 'density: detailed (4 rows), compact (2 rows), minimal (1 row)',
-    'context display': 'context format: both / percent / tokens / remaining',
+    'context display': 'cumulative session context: both / percent / tokens / remaining',
     'context warning': 'amber warning threshold (percent full)',
     'context critical': 'coral critical threshold (percent full)',
     'statusline git': 'show git branch & dirty status in statusline',

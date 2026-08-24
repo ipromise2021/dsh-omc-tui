@@ -133,6 +133,17 @@ export function tuiSettingsSchema(value) {
   if (!Number.isInteger(contextCriticalAt) || contextCriticalAt < 2 || contextCriticalAt > 100 || contextCriticalAt <= contextWarnAt) {
     throw new TypeError('dsh-omc-tui.settings.contextCriticalAt must be an integer greater than contextWarnAt and at most 100')
   }
+  const visionProvider = source.visionProvider
+  const visionModel = source.visionModel
+  if (visionProvider !== undefined && (typeof visionProvider !== 'string' || !visionProvider.trim())) {
+    throw new TypeError('dsh-omc-tui.settings.visionProvider must be a non-empty string')
+  }
+  if (visionModel !== undefined && (typeof visionModel !== 'string' || !visionModel.trim())) {
+    throw new TypeError('dsh-omc-tui.settings.visionModel must be a non-empty string')
+  }
+  if ((visionProvider === undefined) !== (visionModel === undefined)) {
+    throw new TypeError('dsh-omc-tui.settings.visionProvider and visionModel must be configured together')
+  }
   if (source.persistHistory !== undefined && typeof source.persistHistory !== 'boolean') {
     throw new TypeError('dsh-omc-tui.settings.persistHistory must be boolean')
   }
@@ -151,6 +162,8 @@ export function tuiSettingsSchema(value) {
     contextMode,
     contextWarnAt,
     contextCriticalAt,
+    visionProvider,
+    visionModel,
     persistHistory: source.persistHistory ?? true,
     hudGit: source.hudGit ?? true,
     hudSpeed: source.hudSpeed ?? true,
@@ -166,6 +179,8 @@ tuiSettingsSchema.toJSON = () => ({
     contextMode: { type: 'string', enum: CONTEXT_DISPLAY_MODES, default: 'both' },
     contextWarnAt: { type: 'integer', minimum: 1, maximum: 99, default: 60 },
     contextCriticalAt: { type: 'integer', minimum: 2, maximum: 100, default: 80 },
+    visionProvider: { type: 'string' },
+    visionModel: { type: 'string' },
     persistHistory: { type: 'boolean', default: true },
     hudGit: { type: 'boolean', default: true },
     hudSpeed: { type: 'boolean', default: true },

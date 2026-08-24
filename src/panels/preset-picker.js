@@ -3,20 +3,33 @@ import { ANSI as defaultAnsi } from '../renderer/themes.js'
 
 export function renderPresetConfirm(presetConfirm, ANSI = defaultAnsi) {
   const id = presetConfirm.requestedId
+  const isNewSession = presetConfirm.kind === 'new-session'
   const selected = presetConfirm.selected ?? 0
   const yesCursor = selected === 0 ? `${ANSI.blue}>${ANSI.reset}` : ' '
   const yesDot = selected === 0 ? `${ANSI.blue}●${ANSI.reset}` : `${ANSI.dim}○${ANSI.reset}`
-  const yesLabel = selected === 0 ? `${ANSI.ink}${ANSI.bold}Start new session with preset "${id}"${ANSI.reset}` : `${ANSI.dim}Start new session with preset "${id}"${ANSI.reset}`
+  const yesText = isNewSession ? 'Start a new session' : `Start new session with preset "${id}"`
+  const yesLabel = selected === 0 ? `${ANSI.ink}${ANSI.bold}${yesText}${ANSI.reset}` : `${ANSI.dim}${yesText}${ANSI.reset}`
 
   const noCursor = selected === 1 ? `${ANSI.blue}>${ANSI.reset}` : ' '
   const noDot = selected === 1 ? `${ANSI.coral}●${ANSI.reset}` : `${ANSI.dim}○${ANSI.reset}`
-  const noLabel = selected === 1 ? `${ANSI.ink}${ANSI.bold}Cancel — keep current session and preset${ANSI.reset}` : `${ANSI.dim}Cancel — keep current session and preset${ANSI.reset}`
+  const noText = isNewSession ? 'Cancel — keep current session' : 'Cancel — keep current session and preset'
+  const noLabel = selected === 1 ? `${ANSI.ink}${ANSI.bold}${noText}${ANSI.reset}` : `${ANSI.dim}${noText}${ANSI.reset}`
+
+  const heading = isNewSession
+    ? `${ANSI.muted}NEW SESSION${ANSI.reset}`
+    : `${ANSI.muted}SWITCH PRESET${ANSI.reset} ${ANSI.dim}· ${ANSI.amber}${id}${ANSI.reset}`
+  const detail = isNewSession
+    ? `${ANSI.dim}A fresh DSH session will be created with the current model, permission mode, and preset.${ANSI.reset}`
+    : `${ANSI.dim}Switching presets requires starting a fresh session.${ANSI.reset}`
+  const notice = isNewSession
+    ? `${ANSI.ink}The current session will remain available to resume later.${ANSI.reset}`
+    : `${ANSI.ink}This session already has conversation history.${ANSI.reset}`
 
   return [
-    `${ANSI.muted}SWITCH PRESET${ANSI.reset} ${ANSI.dim}· ${ANSI.amber}${id}${ANSI.reset}`,
+    heading,
     '',
-    `${ANSI.ink}This session already has conversation history.${ANSI.reset}`,
-    `${ANSI.dim}Switching presets requires starting a fresh session.${ANSI.reset}`,
+    notice,
+    detail,
     '',
     `${yesCursor} ${yesDot}  ${ANSI.blueSoft}Y${ANSI.reset} · ${yesLabel}`,
     `${noCursor} ${noDot}  ${ANSI.coral}N${ANSI.reset} · ${noLabel}`,
