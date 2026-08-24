@@ -37,7 +37,7 @@
 
 支持 iTerm2 OSC 1337、Kitty Graphics 和 macOS 剪贴板图片。图片经过 Harness Attachment 管道保存：当前模型支持视觉时直接发送；否则主 Agent 可自主调用已配置的 `analyze_image` 旁路视觉工具，主会话模型保持不变。
 
-使用一次 `/vision <provider>/<model>` 配置视觉模型，模型 ID 使用已配置提供方实际暴露的视觉模型名称。此后，主 Agent 会在需要识别图片时调用临时视觉 Agent，并将识别结果作为工具结果继续处理。
+执行 `/vision` 可查看精简的常用视觉路由；再使用 `/vision <provider>/<model>` 配置其中一个模型。此后，主 Agent 会在需要识别图片时调用临时视觉 Agent，并将识别结果作为工具结果继续处理。
 
 ### 行内审批与问题面板
 
@@ -135,7 +135,7 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `/btw <问题>` | 在独立临时会话中提问，不加入主会话历史 |
 | `/compact` | 压缩当前会话上下文 |
 | `/jobs` | 查看后台任务、读取输出或取消任务 |
-| `/skills` | 浏览当前 Harness profile 中的 Skills |
+| `/skills` | 浏览并在 TUI Profile 中切换 Skill 的 on/off 状态 |
 | `/resume` | 恢复当前工作目录下的历史会话 |
 | `/mcp` / `/hooks` | 查看已挂载的 MCP 与 Hook 状态 |
 | `/export` | 将当前会话导出为 Markdown |

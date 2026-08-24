@@ -21,6 +21,9 @@ export const THEMES = {
     bash: '\x1b[1;38;5;214m',     // Warm golden amber #ffaf00 (bold)
     bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds #626262
     barFill: '\x1b[38;5;108m',    // Deeper sage green meter fill
+    contextFill: '\x1b[38;5;65m', // Muted green for normal context pressure
+    contextWarning: '\x1b[38;5;172m', // Deep amber for elevated context pressure
+    contextCritical: '\x1b[38;5;167m', // Deep red for critical context pressure
     userBg: '\x1b[48;5;237m',
     diffRemoveBg: '\x1b[48;5;52m',
     diffAddBg: '\x1b[48;5;236m'
@@ -44,6 +47,9 @@ export const THEMES = {
     bash: '\x1b[1;38;5;220m',     // Lighter golden amber (bold)
     bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds
     barFill: '\x1b[38;5;80m',     // Lighter blue fill
+    contextFill: '\x1b[38;5;31m',
+    contextWarning: '\x1b[38;5;130m',
+    contextCritical: '\x1b[38;5;124m',
     userBg: '\x1b[48;5;236m',     // Slightly lighter bg
     diffRemoveBg: '\x1b[48;5;52m',
     diffAddBg: '\x1b[48;5;236m'
@@ -66,6 +72,9 @@ export const THEMES = {
     bash: '\x1b[1;38;5;214m',     // Warm golden amber (bold)
     bar: '\x1b[38;5;238m',
     barFill: '\x1b[38;5;249m',
+    contextFill: '\x1b[38;5;246m',
+    contextWarning: '\x1b[38;5;245m',
+    contextCritical: '\x1b[1;37m',
     userBg: '\x1b[48;5;238m',
     diffRemoveBg: '\x1b[48;5;238m',
     diffAddBg: '\x1b[48;5;236m'
@@ -88,6 +97,9 @@ export const THEMES = {
     bash: '\x1b[1;38;5;172m',     // Warm rich amber for light bg
     bar: '\x1b[38;5;250m',
     barFill: '\x1b[38;5;28m',
+    contextFill: '\x1b[38;5;28m',
+    contextWarning: '\x1b[38;5;130m',
+    contextCritical: '\x1b[38;5;124m',
     userBg: '\x1b[48;5;252m',
     diffRemoveBg: '\x1b[48;5;224m',
     diffAddBg: '\x1b[48;5;253m'
@@ -107,6 +119,7 @@ export const TERMINAL_MOUSE_OFF = '\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l\
 
 export const STATUSLINE_MODES = ['detailed', 'compact', 'minimal']
 export const CONTEXT_DISPLAY_MODES = ['both', 'percent', 'tokens', 'remaining']
+export const DEFAULT_DISABLED_SKILLS = ['image-recognize']
 
 export function tuiSettingsSchema(value) {
   if (value !== undefined && (typeof value !== 'object' || value === null || Array.isArray(value))) {
@@ -156,6 +169,16 @@ export function tuiSettingsSchema(value) {
   if (source.hudTools !== undefined && typeof source.hudTools !== 'boolean') {
     throw new TypeError('dsh-omc-tui.settings.hudTools must be boolean')
   }
+  if (source.autoCompact !== undefined && typeof source.autoCompact !== 'boolean') {
+    throw new TypeError('dsh-omc-tui.settings.autoCompact must be boolean')
+  }
+  const disabledSkills = source.disabledSkills ?? DEFAULT_DISABLED_SKILLS
+  if (!Array.isArray(disabledSkills) || disabledSkills.some((name) => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))) {
+    throw new TypeError('dsh-omc-tui.settings.disabledSkills must be an array of skill names')
+  }
+  if (new Set(disabledSkills).size !== disabledSkills.length) {
+    throw new TypeError('dsh-omc-tui.settings.disabledSkills must not contain duplicates')
+  }
   return {
     theme,
     statusline,
@@ -167,7 +190,9 @@ export function tuiSettingsSchema(value) {
     persistHistory: source.persistHistory ?? true,
     hudGit: source.hudGit ?? true,
     hudSpeed: source.hudSpeed ?? true,
-    hudTools: source.hudTools ?? true
+    hudTools: source.hudTools ?? true,
+    autoCompact: source.autoCompact ?? true,
+    disabledSkills: [...disabledSkills]
   }
 }
 
@@ -184,7 +209,9 @@ tuiSettingsSchema.toJSON = () => ({
     persistHistory: { type: 'boolean', default: true },
     hudGit: { type: 'boolean', default: true },
     hudSpeed: { type: 'boolean', default: true },
-    hudTools: { type: 'boolean', default: true }
+    hudTools: { type: 'boolean', default: true },
+    autoCompact: { type: 'boolean', default: true },
+    disabledSkills: { type: 'array', items: { type: 'string' }, default: DEFAULT_DISABLED_SKILLS }
   }
 })
 

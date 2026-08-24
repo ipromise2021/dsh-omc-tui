@@ -1,6 +1,6 @@
 import { ANSI as defaultAnsi } from '../renderer/themes.js'
 
-export const SETTINGS_KEYS = ['theme', 'statusline', 'contextMode', 'contextWarnAt', 'contextCriticalAt', 'hudGit', 'hudSpeed', 'hudTools', 'persistHistory']
+export const SETTINGS_KEYS = ['theme', 'statusline', 'contextMode', 'contextWarnAt', 'contextCriticalAt', 'autoCompact', 'hudGit', 'hudSpeed', 'hudTools', 'persistHistory']
 
 export function renderSettingsPicker(settingsPicker, preferences, ANSI = defaultAnsi) {
   const descriptions = {
@@ -9,6 +9,7 @@ export function renderSettingsPicker(settingsPicker, preferences, ANSI = default
     'context display': 'cumulative session context: both / percent / tokens / remaining',
     'context warning': 'amber warning threshold (percent full)',
     'context critical': 'coral critical threshold (percent full)',
+    'auto compact': 'run /compact after a turn reaches the critical threshold',
     'statusline git': 'show git branch & dirty status in statusline',
     'statusline speed': 'show token speed & turn timing in statusline',
     'statusline tools': 'show recent tool activity in statusline',
@@ -20,6 +21,7 @@ export function renderSettingsPicker(settingsPicker, preferences, ANSI = default
     ['context display', preferences.contextMode ?? 'both', descriptions['context display']],
     ['context warning', `${preferences.contextWarnAt ?? 60}%`, descriptions['context warning']],
     ['context critical', `${preferences.contextCriticalAt ?? 80}%`, descriptions['context critical']],
+    ['auto compact', (preferences.autoCompact ?? true) ? 'on' : 'off', descriptions['auto compact']],
     ['statusline git', (preferences.hudGit ?? true) ? 'on' : 'off', descriptions['statusline git']],
     ['statusline speed', (preferences.hudSpeed ?? true) ? 'on' : 'off', descriptions['statusline speed']],
     ['statusline tools', (preferences.hudTools ?? true) ? 'on' : 'off', descriptions['statusline tools']],

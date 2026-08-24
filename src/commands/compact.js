@@ -71,8 +71,9 @@ export async function handleCompact(app, line) {
     app.scheduleRender()
   }, 100)
 
-  // Track token usage before compaction
-  const beforeTokens = app.agent?.session?.usage?.input ?? app.agent?.session?.events?.length ?? 0
+  // The Harness token meter represents the current model-visible surface and
+  // drops immediately when a compaction summary replaces older messages.
+  const beforeContextTokens = Number.isFinite(app.contextTokens) ? app.contextTokens : undefined
 
   try {
     const ctrl = new AbortController()
@@ -81,6 +82,7 @@ export async function handleCompact(app, line) {
 
     clearInterval(timer)
     const totalSec = ((Date.now() - startedAt) / 1000).toFixed(1)
+    app.refreshContextTokens?.()
 
     if (result?.kind === 'success' || result?.text) {
       const text = safe(String(result.text ?? 'Conversation compacted successfully'))
@@ -91,9 +93,9 @@ export async function handleCompact(app, line) {
         ]
         app.commitToScrollback(summaryLines)
       } else {
-        const afterTokens = app.agent?.session?.usage?.input ?? 0
-        const tokenDiff = beforeTokens > afterTokens && afterTokens > 0
-          ? ` · ${formatTokens(beforeTokens)} → ${formatTokens(afterTokens)} tokens`
+        const afterContextTokens = Number.isFinite(app.contextTokens) ? app.contextTokens : undefined
+        const tokenDiff = beforeContextTokens !== undefined && afterContextTokens !== undefined && beforeContextTokens > afterContextTokens
+          ? ` · Context ${formatTokens(beforeContextTokens)} → ${formatTokens(afterContextTokens)}`
           : ''
         
         const summaryLines = [

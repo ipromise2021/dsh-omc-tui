@@ -11,6 +11,7 @@ export function renderStatusRows(options) {
     planPending = false,
     effort = 'DEFAULT',
     usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextTokens = undefined,
     active = false,
     presetName = 'standard',
     permissionName = 'workspace-write',
@@ -59,7 +60,7 @@ export function renderStatusRows(options) {
     activeJobs.push(job)
   }
   const jobTicker = activeJobs.length > 0 ? Math.floor(Date.now() / 1000) : 'idle'
-  const contextKey = `${contextMode}:${contextWarnAt}:${contextCriticalAt}`
+  const contextKey = `${contextTokens ?? 'fallback'}:${contextMode}:${contextWarnAt}:${contextCriticalAt}`
   const cacheKey = `${columns}|${density}|${mode}|${pending}|${liveModel}|${cwdName}|${presetName}|${effort}|${permissionName}|${usage.input}|${usage.output}|${usage.cacheRead}|${usage.contextWindow}|${skills.length}|${mcpCount}|${hookCount}|${hasSystemPrompt}|${toolsKey}|${recentJobsKey}|${localJobsKey}|${titleKey}|${gitKey}|${speedKey}|${contextKey}|${jobTicker}|${runningAnimStep}|${runningWordStep}|${ansiKey}`
 
   const fitRows = (rows) => rows.map((row) => {
@@ -71,7 +72,7 @@ export function renderStatusRows(options) {
     return { rows: statusRowsCache.rows, cache: statusRowsCache }
   }
 
-  const sessionContextTokens = usage.input + usage.output
+  const sessionContextTokens = Number.isFinite(contextTokens) ? Math.max(0, contextTokens) : usage.input + usage.output
   const contextText = usage.contextWindow
     ? `${formatTokens(sessionContextTokens)} / ${formatTokens(usage.contextWindow)}`
     : 'awaiting first response'
@@ -79,16 +80,16 @@ export function renderStatusRows(options) {
     ? Math.round((sessionContextTokens / usage.contextWindow) * 100)
     : 0
 
-  let barColor = ANSI.barFill ?? ANSI.teal ?? ANSI.bash
-  let percentColor = ANSI.blueSoft ?? ANSI.teal
+  let barColor = ANSI.contextFill ?? ANSI.barFill ?? ANSI.teal ?? ANSI.bash
+  let percentColor = ANSI.contextFill ?? ANSI.blueSoft ?? ANSI.teal
   let percentAlert = ''
   if (percent >= contextCriticalAt) {
-    barColor = ANSI.coral ?? '\x1b[38;5;203m'
-    percentColor = ANSI.coral ?? '\x1b[38;5;203m'
+    barColor = ANSI.contextCritical ?? ANSI.coral ?? '\x1b[38;5;167m'
+    percentColor = ANSI.contextCritical ?? ANSI.coral ?? '\x1b[38;5;167m'
     percentAlert = ' ⚠️'
   } else if (percent >= contextWarnAt) {
-    barColor = ANSI.amber ?? '\x1b[38;5;214m'
-    percentColor = ANSI.amber ?? '\x1b[38;5;214m'
+    barColor = ANSI.contextWarning ?? ANSI.amber ?? '\x1b[38;5;172m'
+    percentColor = ANSI.contextWarning ?? ANSI.amber ?? '\x1b[38;5;172m'
   }
 
   const meterWidth = columns >= 80 ? 14 : 8

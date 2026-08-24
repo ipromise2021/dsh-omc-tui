@@ -14,6 +14,7 @@ import {
   TERMINAL_MOUSE_OFF,
   STATUSLINE_MODES,
   CONTEXT_DISPLAY_MODES,
+  DEFAULT_DISABLED_SKILLS,
   tuiSettingsSchema,
   activityWords,
   idleWords,
@@ -48,6 +49,42 @@ function isSubagentSession(record) {
   return record?.header?.origin === 'subagent' || /^(?:vision|side)-/.test(sessionId)
 }
 
+const IMAGE_ATTACHMENT_NOTICE = /\[Image attachment ([^\s\]]+) \[ref: ([^,\]]+), (\d+) bytes, (\d+)×(\d+)\] is available\./g
+
+const VISION_ROUTE_OPTIONS = [
+  'deepseek-official/deepseek-v4-flash-vision-exp',
+  'openai/gpt-5.6-luna',
+  'opencode-go/qwen3.7-plus',
+  'opencode-go/deepseek-v4-flash-vision-exp'
+]
+
+export function registerTuiSkillOverrides(agentCtx, names = DEFAULT_DISABLED_SKILLS) {
+  const disposers = new Map()
+  const skills = typeof agentCtx.get === 'function' ? agentCtx.get('skills') : agentCtx.skills
+  for (const name of names) {
+    const dispose = skills?.register?.({
+      name,
+      description: 'Disabled in dsh-omc-tui.',
+      content: '',
+      invocation: { modelInvocable: false, userInvocable: false }
+    })
+    if (typeof dispose === 'function') disposers.set(name, dispose)
+  }
+  return disposers
+}
+
+function imageAttachmentNotice(ref, configured) {
+  const id = String(ref?.attachmentId ?? '').trim()
+  if (!id) return '[Image attachment is available, but its reference is incomplete. Ask the user to attach it again.]'
+
+  const metadata = ref?.mediaType && Number.isInteger(ref?.bytes) && Number.isInteger(ref?.width) && Number.isInteger(ref?.height)
+    ? ` [ref: ${ref.mediaType}, ${ref.bytes} bytes, ${ref.width}×${ref.height}]`
+    : ''
+  return configured
+    ? `[Image attachment ${id}${metadata} is available. Use analyze_image with attachment_id="${id}" when visual inspection is needed.]`
+    : `[Image attachment ${id}${metadata} is available, but no vision route is configured. Ask the user to run /vision <provider>/<model>.]`
+}
+
 import {
   userMessage,
   foldUsage,
@@ -59,6 +96,7 @@ import {
 import {
   LOCAL_COMMANDS,
   handleLocalCommand,
+  handleCompact,
   handleRecap,
   handleStatus
 } from './commands/index.js'
@@ -143,7 +181,7 @@ export class TuiApp {
     this.effortPicker = undefined // { efforts, selected }
     this.settingsPicker = undefined
     this.settingsScope = undefined
-    this.preferences = { theme: defaultTheme, showWelcome: true, persistHistory: true, contextMode: 'both', contextWarnAt: 60, contextCriticalAt: 80, hudGit: true, hudSpeed: true, hudTools: true }
+    this.preferences = { theme: defaultTheme, showWelcome: true, persistHistory: true, contextMode: 'both', contextWarnAt: 60, contextCriticalAt: 80, autoCompact: true, hudGit: true, hudSpeed: true, hudTools: true, disabledSkills: [...DEFAULT_DISABLED_SKILLS] }
     this.presetPicker = undefined // { entries, selected }
     this.presetConfirm = undefined
     this.localBackgroundJobs = []
@@ -191,6 +229,7 @@ export class TuiApp {
     this.reasoningEffort = undefined
     this.activeModel = undefined // { provider, model } live override for the current session
     this.usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextWindow: undefined, recentInput: undefined }
+    this.contextTokens = undefined
     this.gitStatus = { isGit: false, branch: '', dirty: false, ahead: 0, behind: 0 }
     this.turnStats = { speed: 0, durationMs: 0, active: false }
     this.turnStartTime = undefined
@@ -207,6 +246,8 @@ export class TuiApp {
     this.sessionTitleCache = new Map() // sessionId -> Title object
     this.renderTimer = undefined
     this.renderPending = false
+    this.backgroundInitTimer = undefined
+    this.autoCompactTimer = undefined
     this.animationTimer = undefined
     this.caretRow = undefined
     this.caretCol = undefined
@@ -296,13 +337,11 @@ export class TuiApp {
     this.openTerminal()
     this.installSettings()
     const cwd = process.cwd()
-    const columns = Math.max(60, process.stdout.columns || 100)
     this.render()
     const initTimer = setInterval(() => this.render(), 80)
 
     let resolveInit
     this.sessionInitPromise = new Promise((resolve) => { resolveInit = resolve })
-    let initialHistoryRows = []
 
     try {
       // 2. Parallel background data loading
@@ -320,12 +359,14 @@ export class TuiApp {
       const selection = this.ctx.agentDefaultModel.currentSelection()
       const requestedPreset = this.ctx.agentPresets.defaultId
 
+      let skillOverrideDisposers
       const createOptions = {
         sessionId: `session-${randomUUID()}`,
         meta: { cwd: process.cwd(), agentPreset: requestedPreset },
         agentOptions: { provider: selection.provider, model: selection.model },
         setup: async (agentCtx) => {
           await this.ctx.agentPresets.mount(agentCtx, resumeRecord?.header.agentPreset ?? requestedPreset)
+          skillOverrideDisposers = registerTuiSkillOverrides(agentCtx, this.preferences?.disabledSkills ?? DEFAULT_DISABLED_SKILLS)
         }
       }
       let agent, dispose, isResumed = false
@@ -354,11 +395,13 @@ export class TuiApp {
 
       this.handle = { agent, dispose }
       this.agent = agent
+      this.skillOverrideDisposers = skillOverrideDisposers ?? new Map()
       this.presetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? (isResumed ? resumeRecord?.header.agentPreset : requestedPreset)
       this.reasoningEffort = selection.reasoningEffort
       this.attachRequestOverride(agent)
       this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
       this.usage = foldUsage(agent.session.events)
+      this.refreshContextTokens?.()
       this.viewClearedSeq = isResumed ? 0 : agent.session.seq
       if (isResumed) {
         this.restoreImageAttachments(agent.session.events)
@@ -410,26 +453,35 @@ export class TuiApp {
       }
 
       if (isResumed) {
-        const pastRows = this.formatEvents(this.agent.session.events, columns)
-        initialHistoryRows = pastRows
         this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
       } else {
         this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
       }
 
-      void this.refreshSkills()
-      void this.refreshEnvironmentSummary()
     } finally {
       clearInterval(initTimer)
       this.sessionInitPromise = undefined
       if (resolveInit) resolveInit()
-      this.initializing = undefined
-      this.lastFooterHeight = 0
-      this.lastCursorRowInFooter = 0
-      process.stdout.write('\x1b[2J\x1b[H')
-      if (initialHistoryRows.length > 0) this.commitToScrollback(initialHistoryRows)
-      else this.render()
+      this.finishInitialization()
+      this.startBackgroundInitialization()
     }
+  }
+
+  finishInitialization() {
+    this.initializing = undefined
+    this.lastFooterHeight = 0
+    this.lastCursorRowInFooter = 0
+    this.repaint(true)
+  }
+
+  startBackgroundInitialization() {
+    clearTimeout(this.backgroundInitTimer)
+    this.backgroundInitTimer = setTimeout(() => {
+      this.backgroundInitTimer = undefined
+      if (!this.terminalOpen || !this.agent) return
+      void this.refreshSkills()
+      void this.refreshEnvironmentSummary()
+    }, 0)
   }
 
   async findResumeRecord(cwd) {
@@ -505,7 +557,7 @@ export class TuiApp {
 
   openTerminal() {
     this.terminalOpen = true
-    process.stdout.write(`\x1b[2J\x1b[H${TERMINAL_MOUSE_OFF}\x1b[?2004h\x1b[?25h`)
+    process.stdout.write(`${TERMINAL_MOUSE_OFF}\x1b[?2004h\x1b[?25h`)
     process.stdin.setRawMode(true)
     process.stdin.resume()
     process.stdin.on('data', this.onData)
@@ -529,6 +581,10 @@ export class TuiApp {
     if (!this.terminalOpen) return
     this.terminalOpen = false
     clearTimeout(this.renderTimer)
+    clearTimeout(this.backgroundInitTimer)
+    this.backgroundInitTimer = undefined
+    clearTimeout(this.autoCompactTimer)
+    this.autoCompactTimer = undefined
     clearTimeout(this.imageFlushTimer)
     clearInterval(this.animationTimer)
     this.animationTimer = undefined
@@ -613,6 +669,34 @@ export class TuiApp {
     }
   }
 
+  refreshContextTokens() {
+    if (!this.agent?.session) return
+    try {
+      const total = this.ctx.get('tokenMeter')?.measure?.(this.agent.session)?.totalTokens
+      this.contextTokens = Number.isFinite(total) ? Math.max(0, total) : undefined
+    } catch {
+      this.contextTokens = undefined
+    }
+  }
+
+  shouldAutoCompact() {
+    if (this.preferences?.autoCompact === false || this.compacting || this.autoCompactTimer || !this.agent) return false
+    const contextWindow = this.usage?.contextWindow
+    const threshold = this.preferences?.contextCriticalAt ?? 80
+    return Number.isFinite(contextWindow) && contextWindow > 0 && Number.isFinite(this.contextTokens) && (this.contextTokens / contextWindow) * 100 >= threshold
+  }
+
+  scheduleAutoCompact() {
+    if (!this.shouldAutoCompact()) return
+    this.autoCompactTimer = setTimeout(() => {
+      this.autoCompactTimer = undefined
+      if (!this.shouldAutoCompact()) return
+      const percent = Math.round((this.contextTokens / this.usage.contextWindow) * 100)
+      this.log('ok', `Context reached ${percent}%; compacting automatically.`, 'auto compact')
+      void handleCompact(this, '/compact')
+    }, 0)
+  }
+
   attachRequestOverride(agent) {
     this.disposers.push(agent.ctx.on('agent/request', async (_payload, next) => {
       const request = await next()
@@ -621,7 +705,6 @@ export class TuiApp {
 
       const provider = result?.provider ?? this.ctx.agentDefaultModel?.currentSelection?.()?.provider ?? ''
       const model = result?.model ?? this.ctx.agentDefaultModel?.currentSelection?.()?.model ?? ''
-      const isDeepSeek = /deepseek/i.test(provider) || /deepseek/i.test(model)
       let modelInfo
       try {
         modelInfo = await this.llmService?.resolveModelInfo?.(provider, model)
@@ -634,31 +717,6 @@ export class TuiApp {
         result = { ...result, reasoningEffort: this.reasoningEffort }
       }
 
-      const supportsImages = Array.isArray(modelInfo?.inputModalities)
-        ? modelInfo.inputModalities.includes('image')
-        : undefined
-      const shouldDowngradeImages = supportsImages === false || (
-        supportsImages === undefined && isDeepSeek && !/vision/i.test(model)
-      )
-
-      if (shouldDowngradeImages && Array.isArray(result.messages)) {
-        result = {
-          ...result,
-          messages: result.messages.map((msg) => {
-            if (!Array.isArray(msg.content)) return msg
-            const sanitized = []
-            for (const item of msg.content) {
-              if (item && item.type === 'image') {
-                const imageLabel = item.attachment?.name || item.attachment?.attachmentId || 'attached image'
-                sanitized.push({ type: 'text', text: `[Attached Image: ${imageLabel}]` })
-              } else {
-                sanitized.push(item)
-              }
-            }
-            return { ...msg, content: sanitized }
-          })
-        }
-      }
       return result
     }))
   }
@@ -974,11 +1032,16 @@ export class TuiApp {
       default:
         break
     }
+    if (['user/message', 'assistant/message', 'tool/call', 'tool/result', 'compaction/summary', 'compaction/prune'].includes(event.type)) {
+      this.refreshContextTokens?.()
+    }
     this.scheduleRender()
   }
 
   onTurnEnd(reason) {
     this.finishTurn()
+    this.refreshContextTokens?.()
+    this.scheduleAutoCompact?.()
     this.streamBuffer = ''
     this.reasoningAt = undefined
     if (this.animationTimer) {
@@ -1737,6 +1800,10 @@ export class TuiApp {
 
   submit() {
     if (!this.agent) return
+    if (this.compacting || this.autoCompactTimer) {
+      this.log('ok', 'Context is being compacted, please wait…', '/compact')
+      return
+    }
     if (this.picker) {
       void this.resumeSelected()
       return
@@ -1787,7 +1854,7 @@ export class TuiApp {
         LOCAL_COMMANDS.some((entry) => entry.name === name) ||
         this.ctx.commands?.find(this.agent, name)
       )
-      const isSkill = this.skills.some((skill) => skill.name === name)
+      const isSkill = this.skills.some((skill) => skill.name === name && skill.enabled !== false)
       if (isSkill && !isCommand) {
         this.message = 'queued'
         this.scheduleRender()
@@ -1843,8 +1910,8 @@ export class TuiApp {
       }
     }
 
-    for (const { ref } of persistedImages) {
-      content.push({ type: 'image', attachment: ref })
+    if (supportsNativeVision) {
+      for (const { ref } of persistedImages) content.push({ type: 'image', attachment: ref })
     }
 
     let fullText = text
@@ -1863,9 +1930,7 @@ export class TuiApp {
       const imageInfo = persistedImages.map(({ ref }) => {
         const id = ref.attachmentId
         if (id) this.imageAttachments.set(id, ref)
-        return configured && id
-          ? `[Image attachment ${id} is available. Use analyze_image with attachment_id="${id}" when visual inspection is needed.]`
-          : `[Image attachment ${id ?? 'unknown'} is available, but no vision route is configured. Ask the user to run /vision <provider>/<model>.]`
+        return imageAttachmentNotice(ref, configured)
       }).join('\n')
       fullText = fullText ? `${imageInfo}\n${fullText}` : imageInfo
     }
@@ -1968,6 +2033,18 @@ export class TuiApp {
     for (const block of content) {
       const attachment = block?.type === 'image' ? block.attachment : undefined
       if (attachment?.attachmentId) this.imageAttachments?.set(String(attachment.attachmentId), attachment)
+      if (block?.type !== 'text' || typeof block.text !== 'string') continue
+      for (const match of block.text.matchAll(IMAGE_ATTACHMENT_NOTICE)) {
+        const [, attachmentId, mediaType, bytes, width, height] = match
+        if (!mediaType.startsWith('image/')) continue
+        this.imageAttachments?.set(attachmentId, {
+          attachmentId,
+          mediaType,
+          bytes: Number(bytes),
+          width: Number(width),
+          height: Number(height)
+        })
+      }
     }
   }
 
@@ -2495,26 +2572,11 @@ export class TuiApp {
 
   async showVisionModels() {
     try {
-      const models = []
-      for (const provider of this.llmService?.listProviders?.() ?? []) {
-        let entries = []
-        try {
-          entries = await (this.llmService?.listModels?.(provider.id) ?? [])
-        } catch {}
-        for (const entry of entries) {
-          if (!Array.isArray(entry.inputModalities) || !entry.inputModalities.includes('image')) continue
-          const model = entry.id ?? entry.name ?? entry.model
-          if (model) models.push(`${provider.id}/${model}`)
-        }
-      }
       const configured = this.preferences?.visionProvider && this.preferences?.visionModel
         ? `${this.preferences.visionProvider}/${this.preferences.visionModel}`
         : 'not configured'
-      const unique = [...new Set(models)].sort()
-      const body = unique.length > 0
-        ? unique.map((model) => `  /vision ${model}`).join('\n')
-        : '  No provider currently advertises image input. You can still enter a known visual model ID manually.'
-      this.log('ok', `vision route · ${configured}\nAvailable vision models:\n${body}`, '/vision')
+      const body = VISION_ROUTE_OPTIONS.map((model) => `  /vision ${model}`).join('\n')
+      this.log('ok', `vision route · ${configured}\nVision route options:\n${body}`, '/vision')
     } catch (error) {
       this.log('error', error instanceof Error ? error.message : String(error), '/vision')
     }
@@ -3228,16 +3290,19 @@ export class TuiApp {
     try {
       const previous = this.handle
       const selection = this.ctx.agentDefaultModel.currentSelection()
+      let skillOverrideDisposers
       const { agent, dispose } = await this.ctx.agents.create({
         sessionId: `session-${randomUUID()}`,
         meta: { cwd: process.cwd(), agentPreset: id },
         agentOptions: { provider: selection.provider, model: selection.model },
         setup: async (agentCtx) => {
           await this.ctx.agentPresets.mount(agentCtx, id)
+          skillOverrideDisposers = registerTuiSkillOverrides(agentCtx, this.preferences?.disabledSkills ?? DEFAULT_DISABLED_SKILLS)
         }
       })
       this.handle = { agent, dispose }
       this.agent = agent
+      this.skillOverrideDisposers = skillOverrideDisposers ?? new Map()
       this.presetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? id
       this.reasoningEffort = selection.reasoningEffort
       this.activeModel = undefined
@@ -3625,6 +3690,44 @@ export class TuiApp {
     this.scheduleRender()
   }
 
+  async toggleSelectedSkill() {
+    const skill = this.skills?.[this.skillsPanel?.selected]
+    if (!skill || !this.settingsScope) return
+    const disabled = new Set(this.preferences.disabledSkills ?? [])
+    const isDisabled = disabled.has(skill.name)
+    if (isDisabled) disabled.delete(skill.name)
+    else disabled.add(skill.name)
+    const next = [...disabled].sort()
+
+    if (isDisabled) {
+      try {
+        await this.settingsScope.update({ disabledSkills: next })
+        this.skillOverrideDisposers.get(skill.name)?.()
+        this.skillOverrideDisposers.delete(skill.name)
+        this.preferences = { ...this.preferences, disabledSkills: next }
+        this.log('ok', `skill on · ${skill.name}`, '/skills')
+      } catch (error) {
+        this.log('error', error instanceof Error ? error.message : String(error), '/skills')
+      }
+    } else {
+      const disposer = registerTuiSkillOverrides(this.agent?.ctx ?? {}, [skill.name]).get(skill.name)
+      if (!disposer) {
+        this.log('error', `unable to disable skill ${skill.name}`, '/skills')
+      } else {
+        try {
+          await this.settingsScope.update({ disabledSkills: next })
+          this.skillOverrideDisposers.set(skill.name, disposer)
+          this.preferences = { ...this.preferences, disabledSkills: next }
+          this.log('ok', `skill off · ${skill.name}`, '/skills')
+        } catch (error) {
+          disposer()
+          this.log('error', error instanceof Error ? error.message : String(error), '/skills')
+        }
+      }
+    }
+    await this.refreshSkills()
+  }
+
   async openPicker() {
     try {
       const records = (await this.ctx.sessionQuery?.listSessions()) ?? []
@@ -3695,6 +3798,7 @@ export class TuiApp {
     try {
       const previous = this.handle
       const selection = this.ctx.agentDefaultModel.currentSelection()
+      let skillOverrideDisposers
       let requestedPreset = record.header.agentPreset ?? this.ctx.agentPresets.defaultId
       try {
         const snapshot = await this.ctx.sessionQuery.readSession(record.header.id)
@@ -3708,10 +3812,12 @@ export class TuiApp {
         agentOptions: { provider: selection.provider, model: selection.model },
         setup: async (agentCtx) => {
           await this.ctx.agentPresets.mount(agentCtx, requestedPreset)
+          skillOverrideDisposers = registerTuiSkillOverrides(agentCtx, this.preferences?.disabledSkills ?? DEFAULT_DISABLED_SKILLS)
         }
       })
       this.handle = { agent, dispose }
       this.agent = agent
+      this.skillOverrideDisposers = skillOverrideDisposers ?? new Map()
       this.presetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? requestedPreset
       this.reasoningEffort = agent.session.requestHeader()?.config.reasoningEffort ?? selection.reasoningEffort
       this.activeModel = undefined
@@ -3822,15 +3928,18 @@ export class TuiApp {
         cwd: this.agent.session.header.cwd ?? process.cwd(),
         scope: this.agent
       }) ?? [])
+      const disabled = new Set(this.preferences.disabledSkills ?? [])
       this.skills = skills
-        .filter((skill) => skill.invocation?.userInvocable !== false)
+        .filter((skill) => skill.invocation?.userInvocable !== false || disabled.has(skill.name))
         .map((skill) => ({
           name: skill.name,
           description: skill.description || 'load reusable instructions',
-          kind: 'skill'
+          kind: 'skill',
+          enabled: !disabled.has(skill.name)
         }))
     } catch {
-      this.skills = []
+    this.skills = []
+    this.skillOverrideDisposers = new Map()
     }
     if (this.menu) this.updateMenu()
     this.scheduleRender()
@@ -3841,7 +3950,7 @@ export class TuiApp {
     this.clearBracketTimeout()
     if (this.bracketLines > 3) this.pasteFolded = { lines: this.bracketLines }
     this.bracketLines = 0
-    this.scheduleRender()
+    this.scheduleRender(true)
   }
 
   scheduleBracketTimeout() {
@@ -3857,7 +3966,7 @@ export class TuiApp {
     this.bracketTimer = undefined
   }
 
-  insertText(text, { allowFilePicker = true } = {}) {
+  insertText(text, { allowFilePicker = true, render = true } = {}) {
     if (this.bracketing) this.bracketLines += text.split('\n').length - 1
     else this.pasteFolded = undefined
     if (this.selection) {
@@ -3873,7 +3982,7 @@ export class TuiApp {
     this.help = false
     this.updateMenu()
     this.maybeOpenFilePicker(allowFilePicker && text.includes('@'))
-    this.scheduleRender(true)
+    if (render) this.scheduleRender(true)
   }
 
   eraseBefore() {
@@ -4316,6 +4425,8 @@ export class TuiApp {
       if (value === '\x1b' || value === '\x03' || value === 'q') {
         this.skillsPanel = undefined
         this.scheduleRender()
+      } else if (value === '\r' || value === ' ') {
+        void this.toggleSelectedSkill()
       } else if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) this.onEscapeSequence(value)
       return
     }
@@ -4465,6 +4576,9 @@ export class TuiApp {
     if (value === '\x1b[200~') {
       this.bracketing = true
       this.bracketLines = 0
+      if (this.renderTimer) clearTimeout(this.renderTimer)
+      this.renderTimer = undefined
+      this.renderPending = false
       this.scheduleBracketTimeout()
       return
     }
@@ -4481,7 +4595,10 @@ export class TuiApp {
       } else {
         // Strip ANSI escape sequences: text copied from the terminal's
         // native selection carries color codes that would render as garbage.
-        this.insertText(safe(visibleOf(String(value))).replace(/\r/g, ''), { allowFilePicker: false })
+        this.insertText(safe(visibleOf(String(value))).replace(/\r/g, ''), {
+          allowFilePicker: false,
+          render: false
+        })
         this.scheduleBracketTimeout()
         return
       }
@@ -4797,6 +4914,7 @@ export class TuiApp {
       }
     }
     for (const entry of this.skills) {
+      if (entry.enabled === false) continue
       if (!merged.has(entry.name)) merged.set(entry.name, entry)
     }
     return [...merged.values()]
@@ -4813,7 +4931,7 @@ export class TuiApp {
   formatEvents(events, columns) {
     return formatEvents(events, columns, {
       expandedKeys: this.expandedKeys,
-      skills: this.skills,
+      skills: this.skills.filter((skill) => skill.enabled !== false),
       reasoningBlocks: this.reasoningBlocks,
       activeModel: this.activeModel,
       defaultModel: this.agent?.options?.model ?? '',
@@ -4868,6 +4986,9 @@ export class TuiApp {
   // ── rendering ──────────────────────────────────────────────────────────
 
   scheduleRender(immediate = false) {
+    // Bracketed paste arrives as many PTY chunks. Keep the input buffer and
+    // cursor current, but repaint only after the closing marker (or timeout).
+    if (this.bracketing) return
     if (immediate && !this.active) {
       if (this.renderTimer) {
         clearTimeout(this.renderTimer)
@@ -4942,13 +5063,14 @@ export class TuiApp {
       planPending,
       effort,
       usage: this.usage,
+      contextTokens: this.contextTokens,
       active: this.active,
       presetName: this.presetName,
       permissionName: this.permissionName,
       liveModel,
       cwdName,
       sessionEvents: this.agent.session.events,
-      skills: this.skills,
+      skills: this.skills.filter((skill) => skill.enabled !== false),
       mcpCount: this.mcpCount,
       hookCount: this.hookCount,
       localBackgroundJobs: this.localBackgroundJobs ?? [],
@@ -5323,25 +5445,11 @@ export class TuiApp {
 
   renderInitialization() {
     const columns = Math.max(60, process.stdout.columns || 100)
-    const rows = Math.max(16, process.stdout.rows || 30)
     const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
     const frame = frames[Math.floor(Date.now() / 80) % frames.length]
-    const elapsed = Math.max(0, Math.floor((Date.now() - this.initializing.startedAt) / 1000))
-    const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
-    const model = truncateWidth(`${selection.provider}/${selection.model}`, Math.max(20, columns - 24))
-    const title = this.initializing.continuing ? 'Restoring previous session' : 'Starting DSH OMC TUI'
-    const detail = this.initializing.continuing
-      ? 'Loading conversation, model, and workspace state'
-      : 'Loading model and workspace state'
-    const lines = [
-      `${ANSI.blue}✻${ANSI.reset} ${ANSI.bold}DSH OMC${ANSI.reset}`,
-      '',
-      `${ANSI.blueSoft}${frame}${ANSI.reset} ${ANSI.ink}${title}${ANSI.reset} ${ANSI.dim}(${elapsed}s)${ANSI.reset}`,
-      `${ANSI.dim}${detail}${ANSI.reset}`,
-      `${ANSI.muted}${model}${ANSI.reset}`
-    ]
-    const padding = '\n'.repeat(Math.max(0, Math.floor((rows - lines.length) / 2)))
-    process.stdout.write(`\x1b[?25l\x1b[2J\x1b[H${padding}${lines.map((line) => truncateAnsi(line, columns)).join('\n')}\x1b[J`)
+    const label = this.initializing.continuing ? 'Restoring previous session…' : 'Starting DSH OMC…'
+    const line = `${ANSI.blueSoft}${frame}${ANSI.reset} ${ANSI.muted}${label}${ANSI.reset}`
+    process.stdout.write(`\x1b[?25l\r${truncateAnsi(line, columns)}\x1b[K`)
   }
 
   render() {

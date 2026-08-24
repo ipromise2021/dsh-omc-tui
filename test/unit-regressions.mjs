@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { TuiApp } from '../src/index.js'
+import { TuiApp, registerTuiSkillOverrides } from '../src/index.js'
 import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
 import { pngDimensions } from '../src/image-protocol.js'
 import { alignCodePoint, moveCursorLine } from '../src/input/editor.js'
@@ -9,11 +9,25 @@ import { renderStatusRows } from '../src/renderer/statusline.js'
 import { renderJobPanel } from '../src/panels/jobs-panel.js'
 import { renderModelPicker } from '../src/panels/model-picker.js'
 import { renderQuestionPanel } from '../src/panels/question-panel.js'
+import { renderSkillsPanel } from '../src/panels/skills-panel.js'
 import { formatEvents } from '../src/renderer/transcript.js'
 import { ANSI, applyTheme } from '../src/renderer/themes.js'
 import { safe, visibleOf, widthOf } from '../src/renderer/ansi.js'
 
 const noop = () => {}
+
+let tuiSkillOverride
+registerTuiSkillOverrides({
+  get(name) {
+    return name === 'skills' ? { register(skill) { tuiSkillOverride = skill } } : undefined
+  }
+})
+assert.deepEqual(tuiSkillOverride, {
+  name: 'image-recognize',
+  description: 'Disabled in dsh-omc-tui.',
+  content: '',
+  invocation: { modelInvocable: false, userInvocable: false }
+})
 
 let visionTool
 registerVisionRouter({ ctx: { tools: { register(tool) { visionTool = tool } } } })
@@ -58,6 +72,46 @@ TuiApp.prototype.maybeOpenFilePicker.call(recalledPrompt)
 assert.equal(filePickerRefreshes, 0)
 TuiApp.prototype.maybeOpenFilePicker.call(recalledPrompt, true)
 assert.equal(filePickerRefreshes, 1)
+
+let startupRepainted = false
+const startupApp = {
+  initializing: { startedAt: Date.now() },
+  lastFooterHeight: 5,
+  lastCursorRowInFooter: 3,
+  repaint(clearScreen) { startupRepainted = clearScreen }
+}
+TuiApp.prototype.finishInitialization.call(startupApp)
+assert.equal(startupApp.initializing, undefined)
+assert.equal(startupApp.lastFooterHeight, 0)
+assert.equal(startupApp.lastCursorRowInFooter, 0)
+assert.equal(startupRepainted, true)
+
+const originalStdoutWrite = process.stdout.write
+let initializationOutput = ''
+process.stdout.write = (chunk) => {
+  initializationOutput += String(chunk)
+  return true
+}
+TuiApp.prototype.renderInitialization.call({
+  initializing: { continuing: true },
+  ctx: {}
+})
+process.stdout.write = originalStdoutWrite
+assert.match(initializationOutput, /Restoring previous session/)
+assert.doesNotMatch(initializationOutput, /\x1b\[2J/)
+assert.doesNotMatch(initializationOutput, /Loading conversation/)
+
+let backgroundStarted = false
+const backgroundApp = {
+  backgroundInitTimer: undefined,
+  terminalOpen: true,
+  agent: {},
+  refreshSkills() { backgroundStarted = true },
+  refreshEnvironmentSummary() {}
+}
+TuiApp.prototype.startBackgroundInitialization.call(backgroundApp)
+await new Promise((resolve) => setTimeout(resolve, 0))
+assert.equal(backgroundStarted, true)
 
 const originalStderrWrite = process.stderr.write
 let stderrCallbackCalled = false
@@ -425,11 +479,8 @@ assert.deepEqual(routedImageSubmitApp.imageAttachments.get('att-route'), {
   attachmentId: 'att-route', mediaType: 'image/png', bytes: pngHeader.length, width: 16, height: 8
 })
 assert.deepEqual(routedImageMessage.content, [{
-  type: 'image',
-  attachment: { attachmentId: 'att-route', mediaType: 'image/png', bytes: pngHeader.length, width: 16, height: 8 }
-}, {
   type: 'text',
-  text: '[Image attachment att-route is available. Use analyze_image with attachment_id="att-route" when visual inspection is needed.]\ncheck the layout'
+  text: `[Image attachment att-route [ref: image/png, ${pngHeader.length} bytes, 16×8] is available. Use analyze_image with attachment_id="att-route" when visual inspection is needed.]\ncheck the layout`
 }])
 
 const restoredImageApp = { imageAttachments: new Map(), rememberImageAttachments: TuiApp.prototype.rememberImageAttachments }
@@ -551,7 +602,7 @@ const textOnlyRequest = await requestOverrideHandler({}, async () => ({
   messages: [{ content: [{ type: 'image', attachment: { attachmentId: 'att-text', name: 'diagram.png' } }] }]
 }))
 assert.equal('reasoningEffort' in textOnlyRequest, false)
-assert.deepEqual(textOnlyRequest.messages[0].content[0], { type: 'text', text: '[Attached Image: diagram.png]' })
+assert.equal(textOnlyRequest.messages[0].content[0].type, 'image')
 
 let bashCommand
 const bashImage = { data: Buffer.from('x'), mediaType: 'image/png' }
@@ -648,6 +699,27 @@ const urlSelectedStyle = `${ANSI.blueSoft}${ANSI.bold}\x1b[7m`
 assert.ok(highlightedInput.split(fileStyle).length - 1 >= 2)
 assert.ok(highlightedInput.split(urlSelectedStyle).length - 1 >= 2)
 
+let pasteRenderCalls = 0
+const bracketedPasteApp = {
+  bracketing: true,
+  bracketLines: 0,
+  bracketTimer: undefined,
+  input: '',
+  cursor: 0,
+  selection: undefined,
+  pasteFolded: undefined,
+  help: false,
+  clearBracketTimeout: noop,
+  updateMenu: noop,
+  maybeOpenFilePicker: noop,
+  scheduleRender() { pasteRenderCalls += 1 }
+}
+TuiApp.prototype.insertText.call(bracketedPasteApp, 'mysql_trans\ndisp_queue_no', { allowFilePicker: false, render: false })
+assert.equal(bracketedPasteApp.input, 'mysql_trans\ndisp_queue_no')
+assert.equal(pasteRenderCalls, 0)
+TuiApp.prototype.finishBracketing.call(bracketedPasteApp)
+assert.equal(pasteRenderCalls, 1)
+
 const normalizedJob = TuiApp.prototype.normalizeJobSnapshot.call({}, { jobId: 7, type: 'subagent', status: 'running', title: 'worker' })
 assert.deepEqual(normalizedJob, { jobId: 7, type: 'subagent', status: 'running', title: 'worker', id: '7', kind: 'subagent', label: 'worker', detail: 'worker' })
 
@@ -705,6 +777,8 @@ const turnLifecycleApp = {
   streaming: { text: '', reasoning: '', tool: undefined },
   commitUnprintedEvents: noop,
   scheduleRender: noop,
+  refreshContextTokens: noop,
+  scheduleAutoCompact: noop,
   sessionsService: { flush: async () => {} },
   agent: { session: {} },
   refreshGitStatus: async () => {}
@@ -740,6 +814,9 @@ const manyColumnTable = `| ${manyHeaders.join(' | ')} |\n|${manyHeaders.map(() =
 const manyColumnRows = renderMarkdownRows(manyColumnTable, 58, ANSI.answer, ANSI).filter(Boolean).map((row) => row[0] + row[1])
 assert.ok(Math.max(...manyColumnRows.map((row) => widthOf(visibleOf(row)))) <= 58)
 
+const identifierMarkdown = renderMarkdownRows('mysql_trans · disp_queue_no · foo_bar_baz', 80, ANSI.answer, ANSI).filter(Boolean).map((row) => row[0] + row[1]).join('\n')
+assert.match(visibleOf(identifierMarkdown), /mysql_trans · disp_queue_no · foo_bar_baz/)
+
 const osc = '\x1b]52;c;VEVTVA==\x07'
 const transcript = formatEvents([{
   type: 'user/message',
@@ -754,11 +831,14 @@ await handleCompact({
   compacting: false,
   ctx: { commands: { find: () => true, async execute() { return { result: { kind: 'success', text: `summary ${osc}` } } } } },
   agent: { session: { usage: { input: 10 }, events: [] } },
+  contextTokens: 4000,
+  refreshContextTokens() { this.contextTokens = 500 },
   commitToScrollback(lines) { compactCommits.push(...lines) },
   log: noop,
   scheduleRender: noop
 }, '/compact')
 assert.equal(compactCommits.some((line) => line.includes(osc)), false)
+assert.match(visibleOf(compactCommits.join('\n')), /Context 4\.0k → 500/)
 
 import { parseGitStatusOutput } from '../src/core/git.js'
 import { tuiSettingsSchema } from '../src/renderer/themes.js'
@@ -786,26 +866,69 @@ assert.equal(settingsParsed.hudTools, true)
 assert.equal(settingsParsed.contextMode, 'both')
 assert.equal(settingsParsed.contextWarnAt, 60)
 assert.equal(settingsParsed.contextCriticalAt, 80)
+assert.equal(settingsParsed.autoCompact, true)
+assert.deepEqual(settingsParsed.disabledSkills, ['image-recognize'])
 assert.deepEqual(tuiSettingsSchema({ visionProvider: 'deepseek', visionModel: 'deepseek-v4-vision-exp' }).visionModel, 'deepseek-v4-vision-exp')
+assert.deepEqual(tuiSettingsSchema({ disabledSkills: [] }).disabledSkills, [])
 assert.throws(() => tuiSettingsSchema({ contextMode: 'invalid' }), /contextMode must be one of/)
 assert.throws(() => tuiSettingsSchema({ contextWarnAt: 80, contextCriticalAt: 80 }), /contextCriticalAt must be an integer greater than contextWarnAt/)
 assert.throws(() => tuiSettingsSchema({ visionProvider: 'deepseek' }), /must be configured together/)
 assert.throws(() => tuiSettingsSchema({ hudGit: 'invalid' }), /hudGit must be boolean/)
+assert.throws(() => tuiSettingsSchema({ autoCompact: 'invalid' }), /autoCompact must be boolean/)
+assert.throws(() => tuiSettingsSchema({ disabledSkills: ['Not a skill'] }), /disabledSkills must be an array/)
+
+const skillRows = renderSkillsPanel({ selected: 0 }, [
+  { name: 'enabled-skill', description: 'available', enabled: true },
+  { name: 'disabled-skill', description: 'removed', enabled: false }
+], 8, 100)
+assert.match(visibleOf(skillRows.join('\n')), /1 on · 1 off/)
+assert.match(visibleOf(skillRows.join('\n')), /enabled-skill.*on/)
+assert.match(visibleOf(skillRows.join('\n')), /disabled-skill.*off/)
+
+const skillCommandItems = TuiApp.prototype.commandItems.call({
+  skills: [
+    { name: 'enabled-skill', description: 'available', kind: 'skill', enabled: true },
+    { name: 'disabled-skill', description: 'removed', kind: 'skill', enabled: false }
+  ],
+  ctx: { commands: { list: () => [] } },
+  agent: {}
+})
+assert.equal(skillCommandItems.some((item) => item.name === 'enabled-skill'), true)
+assert.equal(skillCommandItems.some((item) => item.name === 'disabled-skill'), false)
+
+let skillToggleUpdate
+let skillToggleRegistered
+let skillRefreshes = 0
+const skillToggleApp = {
+  skillsPanel: { selected: 0 },
+  skills: [{ name: 'mock-guide', description: 'guide', enabled: true }],
+  preferences: { disabledSkills: [] },
+  settingsScope: { async update(next) { skillToggleUpdate = next } },
+  agent: { ctx: { skills: { register(skill) { skillToggleRegistered = skill; return noop } } } },
+  skillOverrideDisposers: new Map(),
+  log: noop,
+  async refreshSkills() { skillRefreshes += 1 }
+}
+await TuiApp.prototype.toggleSelectedSkill.call(skillToggleApp)
+assert.deepEqual(skillToggleUpdate, { disabledSkills: ['mock-guide'] })
+assert.equal(skillToggleRegistered.name, 'mock-guide')
+assert.equal(skillToggleApp.skillOverrideDisposers.has('mock-guide'), true)
+assert.equal(skillRefreshes, 1)
 
 let visionModelsLog
 const visionModelsApp = {
   preferences: { visionProvider: 'deepseek-official', visionModel: 'deepseek-v4-flash-vision-exp' },
   llmService: {
-    listProviders: () => [{ id: 'deepseek-official' }, { id: 'text-only' }],
-    listModels: async (provider) => provider === 'deepseek-official'
-      ? [{ id: 'deepseek-v4-flash-vision-exp', inputModalities: ['text', 'image'] }]
-      : [{ id: 'text-model', inputModalities: ['text'] }]
+    listProviders() { throw new Error('vision options must not enumerate providers') }
   },
   log(_kind, text) { visionModelsLog = text },
   scheduleRender: noop
 }
 await TuiApp.prototype.showVisionModels.call(visionModelsApp)
 assert.match(visionModelsLog, /\/vision deepseek-official\/deepseek-v4-flash-vision-exp/)
+assert.match(visionModelsLog, /\/vision openai\/gpt-5\.6-luna/)
+assert.match(visionModelsLog, /\/vision opencode-go\/qwen3\.7-plus/)
+assert.match(visionModelsLog, /\/vision opencode-go\/deepseek-v4-flash-vision-exp/)
 
 // Settings panel rendering assertion
 const settingsRows = renderSettingsPicker({ selected: 0 }, { theme: 'claude', statusline: 'detailed', hudGit: true, hudSpeed: true, persistHistory: true })
@@ -842,6 +965,40 @@ assert.match(hudText, /2\.2s/)
 assert.match(hudText, /Context.*15k \/ 100k · 14% \| session in 12k · out 2\.5k/)
 assert.match(hudText, /Read: index\.js/)
 assert.match(hudText, /Edit: statusline\.js/)
+
+const measuredContext = renderStatusRows({
+  columns: 120,
+  contextTokens: 20000,
+  usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, contextWindow: 100000 }
+})
+assert.match(visibleOf(measuredContext.rows.join('\n')), /Context.*20k \/ 100k · 20%/)
+
+const contextWarning = renderStatusRows({
+  columns: 120,
+  contextTokens: 70000,
+  contextWarnAt: 60,
+  usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextWindow: 100000 }
+})
+assert.ok(contextWarning.rows.join('\n').includes(ANSI.contextWarning))
+
+const tokenMeterApp = {
+  agent: { session: {} },
+  ctx: { get(name) { return name === 'tokenMeter' ? { measure() { return { totalTokens: 1234 } } } : undefined } }
+}
+TuiApp.prototype.refreshContextTokens.call(tokenMeterApp)
+assert.equal(tokenMeterApp.contextTokens, 1234)
+
+const autoCompactApp = {
+  preferences: { autoCompact: true, contextCriticalAt: 80 },
+  compacting: false,
+  autoCompactTimer: undefined,
+  agent: {},
+  usage: { contextWindow: 100000 },
+  contextTokens: 80000
+}
+assert.equal(TuiApp.prototype.shouldAutoCompact.call(autoCompactApp), true)
+autoCompactApp.preferences.autoCompact = false
+assert.equal(TuiApp.prototype.shouldAutoCompact.call(autoCompactApp), false)
 
 const percentContext = renderStatusRows({
   columns: 120,

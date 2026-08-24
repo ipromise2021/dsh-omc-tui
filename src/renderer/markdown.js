@@ -12,7 +12,8 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
     styled = styled.replace(/\*\*(.+?)\*\*/g, (_match, value) => `${ANSI.bold}${value}${ANSI.reset}${base}`)
     styled = styled.replace(/__(.+?)__/g, (_match, value) => `${ANSI.bold}${value}${ANSI.reset}${base}`)
     styled = styled.replace(/\*([^\n]+?)\*/g, (_match, value) => `${ANSI.dim}${value}${ANSI.reset}${base}`)
-    styled = styled.replace(/_([^\n]+?)_/g, (_match, value) => `${ANSI.dim}${value}${ANSI.reset}${base}`)
+    // Do not treat underscores inside identifiers (foo_bar_baz) as emphasis.
+    styled = styled.replace(/(?<![\p{L}\p{N}])_([^_\n]+?)_(?![\p{L}\p{N}])/gu, (_match, value) => `${ANSI.dim}${value}${ANSI.reset}${base}`)
     return styled
   }
 
@@ -62,7 +63,7 @@ export function renderMarkdownRows(text, contentWidth, base, ANSI = defaultAnsi)
           .replace(/\*\*(.+?)\*\*/g, '$1')
           .replace(/__(.+?)__/g, '$1')
           .replace(/\*([^\n]+?)\*/g, '$1')
-          .replace(/_([^\n]+?)_/g, '$1')
+          .replace(/(?<![\p{L}\p{N}])_([^_\n]+?)_(?![\p{L}\p{N}])/gu, '$1')
       }
 
       const parsedRows = []
