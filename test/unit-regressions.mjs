@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { TuiApp, registerTuiSkillOverrides } from '../src/index.js'
+import { readFile } from 'node:fs/promises'
+import { TuiApp, registerTuiSkillOverrides, repeatedActionIntent } from '../src/index.js'
 import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
 import { pngDimensions } from '../src/image-protocol.js'
 import { alignCodePoint, moveCursorLine } from '../src/input/editor.js'
@@ -11,6 +12,7 @@ import { renderModelPicker } from '../src/panels/model-picker.js'
 import { renderQuestionPanel } from '../src/panels/question-panel.js'
 import { renderSkillsPanel } from '../src/panels/skills-panel.js'
 import { formatEvents } from '../src/renderer/transcript.js'
+import { BrowserLease, chromeApprovalReason, chromeConnectionApprovalReason, chromeLaunchArgs, chromeToolRisk, isChromeTool, registerBrowserLease } from '../src/browser-lease.js'
 import { ANSI, applyTheme } from '../src/renderer/themes.js'
 import { safe, visibleOf, widthOf } from '../src/renderer/ansi.js'
 
@@ -29,6 +31,10 @@ assert.deepEqual(tuiSkillOverride, {
   invocation: { modelInvocable: false, userInvocable: false }
 })
 
+assert.equal(repeatedActionIntent('提交代码。提交代码。提交代码。提交代码。提交代码。提交代码。'), 'commit')
+assert.equal(repeatedActionIntent('先检查改动。然后执行测试。最后总结结果。'), undefined)
+assert.equal(repeatedActionIntent('Update the parser.\nUpdate the renderer.\nUpdate the tests.\nUpdate the docs.\nUpdate the fixtures.\nUpdate the changelog.'), undefined)
+
 let visionTool
 registerVisionRouter({ ctx: { tools: { register(tool) { visionTool = tool } } } })
 assert.equal(visionTool.parameters.type, 'object')
@@ -39,7 +45,174 @@ assert.match(visionTool.output.render({}, { model: 'deepseek/vision', analysis: 
 const pngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 16, 0, 0, 0, 8])
 assert.deepEqual(pngDimensions(pngHeader), { width: 16, height: 8 })
 
+const chromeReadTool = 'mcp__chrome_devtools__list_network_requests'
+const chromeWriteTool = 'mcp__chrome_devtools__click'
+const chromeDangerTool = 'mcp__chrome_devtools__evaluate_script'
+assert.equal(isChromeTool(chromeReadTool), true)
+assert.equal(isChromeTool('bash'), false)
+assert.equal(chromeToolRisk(chromeReadTool), 'read')
+assert.equal(chromeToolRisk(chromeWriteTool), 'write')
+assert.equal(chromeToolRisk(chromeDangerTool), 'danger')
+assert.match(chromeApprovalReason(chromeDangerTool), /high-risk/)
+assert.deepEqual(chromeLaunchArgs({ port: 9222, dataDir: '/tmp/dsh-chrome' }), [
+  '--remote-debugging-address=127.0.0.1',
+  '--remote-debugging-port=9222',
+  '--user-data-dir=/tmp/dsh-chrome',
+  '--no-first-run',
+  '--no-default-browser-check',
+  '--new-window',
+  'about:blank'
+])
+const browserLeaseHooks = new Map()
+const registeredContext = {
+  on(name, handler) {
+    browserLeaseHooks.set(name, handler)
+    return () => browserLeaseHooks.delete(name)
+  }
+}
+const managedLease = {
+  options: { port: 9222 },
+  connectionApproved: true,
+  ensureCalls: [],
+  stopCalls: [],
+  async ensure(session) { this.ensureCalls.push(session); this.connectionApproved = true },
+  async stop(session) { this.stopCalls.push(session); this.connectionApproved = false }
+}
+const disposeBrowserLease = registerBrowserLease(registeredContext, { endpointReady: async () => false, lease: managedLease })
+assert.deepEqual(
+  await browserLeaseHooks.get('tools/pre-execute')({ name: chromeReadTool }, async () => ({ kind: 'allow' })),
+  { kind: 'allow' }
+)
+assert.deepEqual(
+  await browserLeaseHooks.get('tools/pre-execute')({ name: chromeWriteTool }, async () => ({ kind: 'allow' })),
+  { kind: 'ask', reason: chromeApprovalReason(chromeWriteTool) }
+)
+assert.equal(browserLeaseHooks.has('session/event'), true)
+const browserSession = { events: [] }
+await browserLeaseHooks.get('session/event')(browserSession, { type: 'turn/end' })
+assert.deepEqual(managedLease.stopCalls, [browserSession])
+await disposeBrowserLease()
+assert.deepEqual(managedLease.stopCalls, [browserSession, undefined])
+
+const workspaceReadHooks = new Map()
+const workspaceLease = {
+  options: { port: 9222 },
+  connectionApproved: true,
+  async ensure() {},
+  async stop() {}
+}
+const disposeWorkspaceReadLease = registerBrowserLease({
+  permissionPresets: { current: () => 'workspace-write' },
+  on(name, handler) {
+    workspaceReadHooks.set(name, handler)
+    return () => workspaceReadHooks.delete(name)
+  }
+}, { endpointReady: async () => true, lease: workspaceLease })
+assert.deepEqual(
+  await workspaceReadHooks.get('tools/pre-execute')({ name: chromeReadTool, agent: { session: { events: [] } } }, async () => ({ kind: 'ask', reason: 'base policy' })),
+  { kind: 'ask', reason: 'base policy' }
+)
+await disposeWorkspaceReadLease()
+
+const connectionHooks = new Map()
+const disposeConnectionLease = registerBrowserLease({
+  on(name, handler) {
+    connectionHooks.set(name, handler)
+    return () => connectionHooks.delete(name)
+  }
+}, { endpointReady: async () => true })
+assert.deepEqual(
+  await connectionHooks.get('tools/pre-execute')({ name: chromeReadTool }, async () => ({ kind: 'allow' })),
+  { kind: 'ask', reason: chromeConnectionApprovalReason() }
+)
+assert.deepEqual(
+  await connectionHooks.get('tools/pre-execute')({ name: chromeWriteTool }, async () => ({ kind: 'ask', reason: chromeApprovalReason(chromeWriteTool) })),
+  { kind: 'ask', reason: `${chromeApprovalReason(chromeWriteTool)}\n${chromeConnectionApprovalReason()}` }
+)
+await disposeConnectionLease()
+
+const externalChromeLease = new BrowserLease({ endpointReady: async () => true })
+await assert.rejects(
+  externalChromeLease.ensure({ id: 'external-chrome-session' }),
+  /already in use/
+)
+
+const bundlePatch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+assert.match(bundlePatch, /name: '@deepseek-ai\/dsh-mcp-client'/)
+assert.match(bundlePatch, /serverName: chrome_devtools/)
+assert.match(bundlePatch, /--browser-url=http:\/\/127\.0\.0\.1:9222/)
+
 assert.equal(moveCursorLine('你a\n12345', 2, 1), 6)
+
+const historyKeyboardApp = {
+  input: 'draft',
+  cursor: 5,
+  history: ['oldest entry', 'middle entry', 'latest entry'],
+  historyIndex: -1,
+  pasteFolded: undefined,
+  picker: undefined,
+  filePicker: undefined,
+  historySearch: undefined,
+  commandPalette: undefined,
+  modelPicker: undefined,
+  variantPicker: undefined,
+  presetPicker: undefined,
+  jobPanel: undefined,
+  mcpPanel: undefined,
+  skillsPanel: undefined,
+  settingsPicker: undefined,
+  menu: undefined,
+  closeFilePicker: noop,
+  scheduleRender: noop,
+  clearSelection: noop,
+  maybeOpenFilePicker: noop,
+  atLineStart: TuiApp.prototype.atLineStart,
+  atLineEnd: TuiApp.prototype.atLineEnd,
+  historyNav: TuiApp.prototype.historyNav,
+  moveCursorLine: () => false,
+  moveToLineStart: TuiApp.prototype.moveToLineStart,
+  moveToLineEnd: TuiApp.prototype.moveToLineEnd
+}
+TuiApp.prototype.onEscapeSequence.call(historyKeyboardApp, '\x1b[A')
+assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['latest entry', 'latest entry'.length, 2])
+TuiApp.prototype.onEscapeSequence.call(historyKeyboardApp, '\x1b[A')
+assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['middle entry', 'middle entry'.length, 1])
+historyKeyboardApp.historyIndex = 0
+historyKeyboardApp.input = 'oldest entry'
+historyKeyboardApp.cursor = historyKeyboardApp.input.length
+TuiApp.prototype.onEscapeSequence.call(historyKeyboardApp, '\x1b[A')
+assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['oldest entry', 0, 0])
+TuiApp.prototype.onEscapeSequence.call(historyKeyboardApp, '\x1b[B')
+assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['middle entry', 0, 1])
+TuiApp.prototype.onEscapeSequence.call(historyKeyboardApp, '\x1b[A')
+assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['middle entry', 0, 1])
+historyKeyboardApp.cursor = historyKeyboardApp.input.length
+TuiApp.prototype.onEscapeSequence.call(historyKeyboardApp, '\x1b[B')
+assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['middle entry', 'middle entry'.length, 1])
+
+const queuedMessageId = 'queued-message'
+const queuedWithdrawalApp = new TuiApp({})
+let queueCancelCount = 0
+queuedWithdrawalApp.agent = {
+  status: 'running',
+  inbox: { remove(messageId) { return messageId === queuedMessageId } },
+  cancel() { queueCancelCount += 1 }
+}
+queuedWithdrawalApp.queuedSubmissions = [{ draft: 'rewrite this question', images: [], messageId: queuedMessageId, cancelled: false }]
+queuedWithdrawalApp.scheduleRender = noop
+queuedWithdrawalApp.updateMenu = noop
+queuedWithdrawalApp.maybeOpenFilePicker = noop
+queuedWithdrawalApp.handleToken('\x1b')
+assert.deepEqual([queuedWithdrawalApp.input, queuedWithdrawalApp.cursor, queuedWithdrawalApp.queuedSubmissions.length, queueCancelCount], ['rewrite this question', 'rewrite this question'.length, 0, 0])
+queuedWithdrawalApp.handleToken('\x1b')
+assert.equal(queueCancelCount, 1)
+
+let cancelledQueuedFollowup = false
+await TuiApp.prototype.submitUserMessage.call({
+  expandFileReferences: async (text) => ({ text, missing: [] }),
+  agent: { followup() { cancelledQueuedFollowup = true } }
+}, 'do not send', [], [], { cancelled: true })
+assert.equal(cancelledQueuedFollowup, false)
 
 const editor = {
   input: '👨‍👩‍👧‍👦x',
@@ -307,7 +480,24 @@ assert.deepEqual([
   customChoiceApp.input
 ], [false, 1, 'custom response', ''])
 const customChoiceRows = renderQuestionPanel(customChoiceApp.questionPanel, customChoiceApp.questionPanel.questions[0], 100, 30)
-assert.match(visibleOf(customChoiceRows.join('\n')), /Type your own answer/)
+const customChoiceText = visibleOf(customChoiceRows.join('\n'))
+assert.match(customChoiceText, /Type your own answer/)
+assert.match(customChoiceText, /✎ custom response/)
+assert.doesNotMatch(customChoiceText, /Your answer/)
+
+const customCursorPanel = {
+  questions: [{ id: 'q-cursor', question: 'Choose one', options: [{ label: 'First' }] }],
+  index: 0,
+  selected: 1,
+  selectedOptions: new Set(),
+  answers: [],
+  customs: ['你好'],
+  customEditing: true,
+  inputCursorIndex: 1
+}
+const customCursorRows = renderQuestionPanel(customCursorPanel, customCursorPanel.questions[0], 100, 30)
+const customCursorRow = customCursorRows.findIndex((row) => visibleOf(row).includes('✎ 你好'))
+assert.deepEqual(customCursorPanel.inputCursor, { row: customCursorRow, col: widthOf('    ✎ 你') })
 
 const emojiQuestionApp = {
   input: '😀x',

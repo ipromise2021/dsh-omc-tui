@@ -1,5 +1,5 @@
 # A terminal app layer over the shared dsh-base services. It deliberately does
-# not mount the Web host, server, or browser runtime.
+# not mount the Web host or server runtime.
 
 - id: system-prompt
   config:
@@ -74,6 +74,19 @@
     - id: user-questions-tool
       name: '@deepseek-ai/dsh-tool-ask-user'
 
+    # The TUI starts a dedicated Chrome instance only when these tools run.
+    - id: mcp-chrome-devtools
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: chrome_devtools
+        transport: stdio
+        command: npx
+        args:
+          - -y
+          - chrome-devtools-mcp@1.7.0
+          - --browser-url=http://127.0.0.1:9222
+          - --no-performance-crux
+          - --no-usage-statistics
+
     - id: tui-runner
       name: 'dsh-omc-tui'
-

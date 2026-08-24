@@ -6,6 +6,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node
 import { homedir, tmpdir } from 'node:os'
 import { ImageParser, formatImageBytes, pngDimensions } from './image-protocol.js'
 import { registerVisionRouter } from './vision-router.js'
+import { registerBrowserLease } from './browser-lease.js'
 import {
   THEMES,
   defaultTheme,
@@ -42,7 +43,7 @@ import {
 } from './renderer/index.js'
 
 export const name = 'dsh-omc-tui'
-export const inject = ['agentDefaultModel', 'agentPresets', 'agents', 'permissionPresets', 'commands', 'sessionQuery', 'settings', 'tools']
+export const inject = ['agentDefaultModel', 'agentPresets', 'agents', 'permissionPresets', 'commands', 'sessionQuery', 'settings', 'systemPrompt', 'tools']
 
 function isSubagentSession(record) {
   const sessionId = record?.header?.id ?? ''
@@ -57,6 +58,29 @@ const VISION_ROUTE_OPTIONS = [
   'opencode-go/qwen3.7-plus',
   'opencode-go/deepseek-v4-flash-vision-exp'
 ]
+
+const ACTION_INTENT_PATTERNS = [
+  ['commit', /\b(?:git\s+(?:add|commit)|stage|commit)\b|暂存|提交/i],
+  ['edit', /\b(?:edit|write|modify|update|revert)\b|编辑|修改|还原/i],
+  ['browser', /\b(?:click|navigate|open|snapshot)\b|点击|打开|截图/i]
+]
+
+export function repeatedActionIntent(text, threshold = 6) {
+  const counts = new Map()
+  for (const sentence of String(text ?? '').split(/[\n。！？.!?]+/)) {
+    const normalized = sentence.trim().toLocaleLowerCase().replace(/\s+/g, ' ')
+    if (normalized.length < 4) continue
+    for (const [intent, pattern] of ACTION_INTENT_PATTERNS) {
+      if (!pattern.test(normalized)) continue
+      const key = `${intent}:${normalized}`
+      const count = (counts.get(key) ?? 0) + 1
+      counts.set(key, count)
+      if (count >= threshold) return intent
+      break
+    }
+  }
+  return undefined
+}
 
 export function registerTuiSkillOverrides(agentCtx, names = DEFAULT_DISABLED_SKILLS) {
   const disposers = new Map()
@@ -174,6 +198,7 @@ export class TuiApp {
     this.initializing = undefined
     this.history = []
     this.historyIndex = -1
+    this.queuedSubmissions = [] // { draft, images, messageId?, cancelled }
     this.skills = []
 
     this.help = false
@@ -200,6 +225,8 @@ export class TuiApp {
 
     this.streaming = { text: '', reasoning: '', tool: undefined }
     this.streamBuffer = ''
+    this.streamActionText = ''
+    this.streamLoopStopped = false
     this.streamHeaderCommitted = false
     this.turnHeaderCommitted = false
     this.reasoningAt = undefined
@@ -251,6 +278,8 @@ export class TuiApp {
     this.animationTimer = undefined
     this.caretRow = undefined
     this.caretCol = undefined
+    this.overlayCaretRow = undefined
+    this.overlayCaretCol = undefined
     this.inputTop = undefined
     this.bracketing = false
     this.disposers = []
@@ -663,6 +692,7 @@ export class TuiApp {
     this.streaming = { text: '', reasoning: '', tool: undefined }
     this.message = ''
     this.lastQueuedText = undefined
+    this.queuedSubmissions = []
     if (wasActive) {
       void this.sessionsService?.flush?.(this.agent.session)?.catch?.(() => {})
       void this.refreshGitStatus({ force: true })
@@ -827,6 +857,18 @@ export class TuiApp {
     this.reasoningAt = undefined
   }
 
+  stopRepetitiveStream(chunk) {
+    if (this.streamLoopStopped || !this.agent || this.agent.status !== 'running') return false
+    this.streamActionText = `${this.streamActionText}${chunk}`.slice(-8000)
+    const intent = repeatedActionIntent(this.streamActionText)
+    if (!intent) return false
+    this.streamLoopStopped = true
+    this.message = 'stopped repetitive model output'
+    this.log('error', `stopped repeated ${intent} output before it could loop indefinitely`, 'guard')
+    this.agent.cancel({ kind: 'user' })
+    return true
+  }
+
   flushStreamBuffer(forceAll = false) {
     if (!this.streamBuffer) return
     const columns = Math.max(60, process.stdout.columns || 100)
@@ -949,6 +991,7 @@ export class TuiApp {
           }
           this.streamBuffer += chunk.text
           this.flushStreamBuffer(false)
+          this.stopRepetitiveStream(chunk.text)
         }
         else if (chunk.type === 'reasoning-delta') {
           if (this.streaming.reasoning === '') {
@@ -958,6 +1001,8 @@ export class TuiApp {
           this.streaming.reasoning += chunk.text
         }
         else if (chunk.type === 'tool-call-delta') {
+          this.streamActionText = ''
+          this.streamLoopStopped = false
           this.flushThinking(event.seq)
           this.flushStreamBuffer(true)
           const draft = this.streaming.tool ?? { name: '', args: '', startTime: Date.now() }
@@ -971,6 +1016,8 @@ export class TuiApp {
         this.rememberImageAttachments(event.data?.content)
         this.turnHeaderCommitted = false
         this.streamHeaderCommitted = false
+        this.streamActionText = ''
+        this.streamLoopStopped = false
         this.commitUnprintedEvents()
         break
       }
@@ -981,6 +1028,8 @@ export class TuiApp {
         this.streamHeaderCommitted = false
         this.streaming.text = ''
         this.streaming.reasoning = ''
+        this.streamActionText = ''
+        this.streamLoopStopped = false
         this.reasoningAt = undefined
         this.message = ''
         this.lastCommittedSeq = event.seq
@@ -988,6 +1037,8 @@ export class TuiApp {
         break
       }
       case 'tool/call':
+        this.streamActionText = ''
+        this.streamLoopStopped = false
         this.flushThinking(event.seq)
         this.flushStreamBuffer(true)
         this.streaming.tool = { name: event.data.name, args: event.data.args, startTime: Date.now() }
@@ -1856,21 +1907,54 @@ export class TuiApp {
       )
       const isSkill = this.skills.some((skill) => skill.name === name && skill.enabled !== false)
       if (isSkill && !isCommand) {
+        const queuedSubmission = this.trackQueuedSubmission(raw, images)
         this.message = 'queued'
         this.scheduleRender()
-        void this.submitUserMessage(prompt, [], images)
+        void this.submitUserMessage(prompt, [], images, queuedSubmission)
         return
       }
       void this.runCommand(prompt, images)
       return
     }
+    const queuedSubmission = this.trackQueuedSubmission(raw, images)
     this.message = 'queued'
     this.scheduleRender()
-    void this.submitUserMessage(prompt, [], images)
+    void this.submitUserMessage(prompt, [], images, queuedSubmission)
   }
 
-  async submitUserMessage(prompt, content = [], images = []) {
+  trackQueuedSubmission(draft, images = []) {
+    if (this.agent?.status !== 'running') return undefined
+    const submission = { draft, images: images.slice(), messageId: undefined, cancelled: false }
+    this.queuedSubmissions.push(submission)
+    return submission
+  }
+
+  withdrawQueuedSubmission() {
+    const submission = this.queuedSubmissions.at(-1)
+    if (!submission) return false
+    if (submission.messageId && !this.agent?.inbox?.remove?.(submission.messageId)) {
+      this.queuedSubmissions.pop()
+      return false
+    }
+    submission.cancelled = true
+    this.queuedSubmissions.pop()
+    this.input = this.input ? `${submission.draft}\n${this.input}` : submission.draft
+    this.cursor = this.input.length
+    this.pendingImages = [...submission.images, ...(this.pendingImages ?? [])]
+    this.historyIndex = -1
+    this.pasteFolded = undefined
+    this.clearSelection()
+    this.message = 'queued message returned to input'
+    this.lastQueuedText = undefined
+    this.updateMenu()
+    this.maybeOpenFilePicker()
+    this.scheduleRender(true)
+    return true
+  }
+
+  async submitUserMessage(prompt, content = [], images = [], queuedSubmission) {
     const { text, missing } = await this.expandFileReferences(prompt)
+    if (queuedSubmission?.cancelled) return
     for (const path of missing) this.log('error', `@${path} not found`)
 
     // Check if current LLM model adapter supports native vision content blocks.
@@ -1896,6 +1980,7 @@ export class TuiApp {
       try {
         persistedImages = await this.persistImageDrafts(images)
       } catch (error) {
+        this.queuedSubmissions = (this.queuedSubmissions ?? []).filter((submission) => submission !== queuedSubmission)
         this.pendingImages = [...images, ...(this.pendingImages ?? [])]
         if (prompt) {
           this.input = this.input
@@ -1909,6 +1994,8 @@ export class TuiApp {
         return
       }
     }
+
+    if (queuedSubmission?.cancelled) return
 
     if (supportsNativeVision) {
       for (const { ref } of persistedImages) content.push({ type: 'image', attachment: ref })
@@ -1935,13 +2022,15 @@ export class TuiApp {
       fullText = fullText ? `${imageInfo}\n${fullText}` : imageInfo
     }
     if (fullText) content.push({ type: 'text', text: fullText })
+    const message = userMessage(content)
+    if (queuedSubmission) queuedSubmission.messageId = message.id
     if (this.agent?.status === 'running' && fullText) {
       this.lastQueuedText = fullText
     }
     this.streamBuffer = ''
     this.streamHeaderCommitted = false
     this.turnHeaderCommitted = false
-    this.agent.followup(userMessage(content))
+    this.agent.followup(message)
     this.scheduleRender()
   }
 
@@ -3337,6 +3426,7 @@ export class TuiApp {
       this.turnHeaderCommitted = false
       this.streamHeaderCommitted = false
       this.lastQueuedText = undefined
+      this.queuedSubmissions = []
       this.active = false
       void this.refreshSkills()
       this.log('ok', isNewSession ? 'New session started.' : `New session started with preset "${id}"`, source)
@@ -4105,19 +4195,19 @@ export class TuiApp {
     this.scheduleRender(true)
   }
 
-  historyNav(direction) {
+  historyNav(direction, cursorAt = 'end') {
     this.pasteFolded = undefined
     const entries = this.history
-    if (entries.length === 0) return
+    if (entries.length === 0) return false
     let index = this.historyIndex + direction
     if (this.historyIndex === -1 && direction < 0) index = entries.length - 1
-    if (index >= entries.length) index = entries.length - 1
-    if (index < -1) index = -1
+    if (index < 0 || index >= entries.length) return false
     this.historyIndex = index
-    this.input = index === -1 ? '' : entries[index]
-    this.cursor = this.input.length
+    this.input = entries[index]
+    this.cursor = cursorAt === 'start' ? 0 : this.input.length
     this.closeFilePicker()
     this.scheduleRender(true)
+    return true
   }
 
   wordAt(index) {
@@ -4605,6 +4695,7 @@ export class TuiApp {
     }
 
     if (value === '\x1b') {
+      if (this.withdrawQueuedSubmission()) return
       if (this.agent?.status === 'running') {
         this.agent.cancel({ kind: 'user' })
         return
@@ -4798,12 +4889,12 @@ export class TuiApp {
       } else if (this.menu) {
         this.menu.selected = (this.menu.selected - 1 + this.menu.items.length) % this.menu.items.length
         this.scheduleRender()
+      } else if (this.cursor === this.input.length && this.historyNav(-1, 'end')) {
+        // browsed history while preserving the end-of-input cursor position
       } else if (this.input.includes('\n') && this.moveCursorLine(-1)) {
         // moved within multi-line input
       } else if (this.input.length > 0 && !this.atLineStart()) {
         this.moveToLineStart()
-      } else {
-        this.historyNav(-1)
       }
       return
     }
@@ -4842,12 +4933,12 @@ export class TuiApp {
       } else if (this.menu) {
         this.menu.selected = (this.menu.selected + 1) % this.menu.items.length
         this.scheduleRender()
+      } else if (this.cursor === 0 && this.historyNav(1, 'start')) {
+        // browsed history while preserving the start-of-input cursor position
       } else if (this.input.includes('\n') && this.moveCursorLine(1)) {
         // moved within multi-line input
       } else if (this.input.length > 0 && !this.atLineEnd()) {
         this.moveToLineEnd()
-      } else {
-        this.historyNav(1)
       }
       return
     }
@@ -5289,12 +5380,16 @@ export class TuiApp {
 
     let cursorMove = ''
     const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.skillsPanel
-    if (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasOverlay) {
-      const rowInFooter = this.inputTopInFooter + (this.caretRow - (this.inputWindowStart ?? 0))
+    const overlayCaret = this.overlayCaretRow !== undefined
+    if (overlayCaret || (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasOverlay)) {
+      const rowInFooter = overlayCaret
+        ? this.overlayCaretRow
+        : this.inputTopInFooter + (this.caretRow - (this.inputWindowStart ?? 0))
+      const caretCol = overlayCaret ? this.overlayCaretCol : this.caretCol
       const upLines = (footerLines.length - 1) - rowInFooter
       cursorMove = upLines > 0
-        ? `\r\x1b[${upLines}A\x1b[${Math.max(1, (this.caretCol ?? 0) + 1)}G\x1b[?25h`
-        : `\r\x1b[${Math.max(1, (this.caretCol ?? 0) + 1)}G\x1b[?25h`
+        ? `\r\x1b[${upLines}A\x1b[${Math.max(1, (caretCol ?? 0) + 1)}G\x1b[?25h`
+        : `\r\x1b[${Math.max(1, (caretCol ?? 0) + 1)}G\x1b[?25h`
       this.lastCursorRowInFooter = rowInFooter
     } else {
       cursorMove = '\x1b[?25l'
@@ -5320,6 +5415,9 @@ export class TuiApp {
 
   buildFooter(columns, rows) {
     const lines = []
+    this.overlayCaretRow = undefined
+    this.overlayCaretCol = undefined
+    if (this.questionPanel?.customEditing) this.questionPanel.inputCursorIndex = this.cursor
     const bashMode = this.inBashMode()
     const panelRows = this.panelRows(columns, rows)
     const inlineRows = this.inlinePanelRows(columns, rows)
@@ -5401,7 +5499,12 @@ export class TuiApp {
     this.inputTopInFooter = lines.length
     lines.push(...inputLines)
     lines.push(`${this.ruleStyle()}${'─'.repeat(Math.max(10, columns))}${ANSI.reset}`)
+    const statusTopInFooter = lines.length
     lines.push(...statusRows)
+    if (this.questionPanel?.customEditing && this.questionPanel.inputCursor) {
+      this.overlayCaretRow = statusTopInFooter + this.questionPanel.inputCursor.row
+      this.overlayCaretCol = this.questionPanel.inputCursor.col
+    }
 
     return lines
   }
@@ -5484,13 +5587,17 @@ export class TuiApp {
 
     let cursorMove = ''
     const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.skillsPanel
-    if (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasOverlay) {
-      const rowInFooter = this.inputTopInFooter + (this.caretRow - (this.inputWindowStart ?? 0))
+    const overlayCaret = this.overlayCaretRow !== undefined
+    if (overlayCaret || (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasOverlay)) {
+      const rowInFooter = overlayCaret
+        ? this.overlayCaretRow
+        : this.inputTopInFooter + (this.caretRow - (this.inputWindowStart ?? 0))
+      const caretCol = overlayCaret ? this.overlayCaretCol : this.caretCol
       const upLines = (footerLines.length - 1) - rowInFooter
       if (upLines > 0) {
-        cursorMove = `\r\x1b[${upLines}A\x1b[${Math.max(1, (this.caretCol ?? 0) + 1)}G\x1b[?25h`
+        cursorMove = `\r\x1b[${upLines}A\x1b[${Math.max(1, (caretCol ?? 0) + 1)}G\x1b[?25h`
       } else {
-        cursorMove = `\r\x1b[${Math.max(1, (this.caretCol ?? 0) + 1)}G\x1b[?25h`
+        cursorMove = `\r\x1b[${Math.max(1, (caretCol ?? 0) + 1)}G\x1b[?25h`
       }
       this.lastCursorRowInFooter = rowInFooter
     } else {
@@ -5505,15 +5612,23 @@ export class TuiApp {
 // ── plugin entry ─────────────────────────────────────────────────────────
 
 export function apply(ctx) {
+  ctx.systemPrompt?.section?.({
+    name: 'tui-execution-discipline',
+    order: 109,
+    text: 'When working, do not repeat plans, promises, or status lines. Make at most one concise progress statement before a tool call. After verification, either perform the requested action or give a final answer; never keep restating an intended action instead of calling its tool.'
+  })
   const app = new TuiApp(ctx)
   const removeVisionRouter = registerVisionRouter(app)
+  const removeBrowserLease = registerBrowserLease(ctx)
   void app.start().catch(async (error) => {
+    await removeBrowserLease()
     removeVisionRouter()
     await app.stop()
     process.stderr.write(`dsh-omc-tui: ${error instanceof Error ? error.message : String(error)}\n`)
     ctx.get('appExit')?.(1)
   })
   return async () => {
+    await removeBrowserLease()
     removeVisionRouter()
     await app.stop()
   }

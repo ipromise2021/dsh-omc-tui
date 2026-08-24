@@ -1,7 +1,10 @@
-import { safe, shorten, wrap } from '../renderer/ansi.js'
+import { safe, shorten, widthOf, wrap } from '../renderer/ansi.js'
 import { ANSI as defaultAnsi } from '../renderer/themes.js'
 
+const CURSOR_MARKER = '\u200c'
+
 export function renderQuestionPanel(panel, question, columns, rows, ANSI = defaultAnsi) {
+  panel.inputCursor = undefined
   const isConfirmTab = panel.index >= panel.questions.length
   const isMulti = !!(question?.multiSelect || question?.multi_select)
 
@@ -106,13 +109,36 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
     const isCustomOption = optionIndex === options.length
     const current = optionIndex === panel.selected
     if (isCustomOption) {
-      const custom = panel.customs?.[panel.index] ?? ''
-      const marker = panel.customEditing || custom.trim() ? '✎' : '○'
+      const custom = String(panel.customs?.[panel.index] ?? '')
+      const hasCustom = custom.length > 0
+      const num = `${optionIndex + 1}.`
       const label = 'Type your own answer…'
       if (current) {
-        lines.push(`  ${ANSI.blue}⌨ ${ANSI.teal ?? ANSI.blue}${marker}${ANSI.reset} ${ANSI.userBg ?? '\x1b[48;5;237m'}${ANSI.ink}${ANSI.bold} ${label} ${ANSI.reset}`)
+        lines.push(`  ${ANSI.blue}${num}${ANSI.reset} ${ANSI.userBg ?? '\x1b[48;5;237m'}${ANSI.ink}${ANSI.bold} ${label} ${ANSI.reset}`)
       } else {
-        lines.push(`  ${ANSI.dim}⌨ ${marker} ${ANSI.answer}${label}${ANSI.reset}`)
+        lines.push(`  ${ANSI.dim}${num} ${ANSI.answer}${label}${ANSI.reset}`)
+      }
+      if (panel.customEditing || hasCustom) {
+        const cursorIndex = Math.max(0, Math.min(custom.length, panel.inputCursorIndex ?? custom.length))
+        const markedCustom = panel.customEditing
+          ? `${custom.slice(0, cursorIndex)}${CURSOR_MARKER}${custom.slice(cursorIndex)}`
+          : custom
+        const allCustomLines = wrap(safe(markedCustom), Math.max(20, columns - 10))
+        const cursorLine = allCustomLines.findIndex((line) => line.includes(CURSOR_MARKER))
+        const startLine = panel.customEditing && cursorLine >= 0
+          ? Math.min(Math.max(0, cursorLine - 1), Math.max(0, allCustomLines.length - 2))
+          : Math.max(0, allCustomLines.length - 2)
+        const customLines = allCustomLines.slice(startLine, startLine + 2)
+        const customStyle = hasCustom ? (current ? ANSI.detail : ANSI.dim) : ANSI.dim
+        for (const [lineIndex, line] of customLines.entries()) {
+          const prefix = '    ✎ '
+          const markerIndex = line.indexOf(CURSOR_MARKER)
+          const displayLine = line.replace(CURSOR_MARKER, '')
+          lines.push(`${prefix}${customStyle}${safe(displayLine)}${ANSI.reset}`)
+          if (panel.customEditing && markerIndex >= 0) {
+            panel.inputCursor = { row: lines.length - 1, col: widthOf(prefix) + widthOf(line.slice(0, markerIndex)) }
+          }
+        }
       }
       continue
     }
@@ -123,10 +149,12 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
     const labelText = safe(option?.label ?? (typeof option === 'string' ? option : ''))
     if (current) {
       const chosenColor = chosen ? (ANSI.bash ?? ANSI.blue) : ANSI.blue
-      lines.push(`  ${ANSI.blue}${num} ${chosenColor}${marker}${ANSI.reset} ${ANSI.userBg ?? '\x1b[48;5;237m'}${ANSI.ink}${ANSI.bold} ${labelText} ${ANSI.reset}`)
+      const prefix = `${chosenColor}${marker}${ANSI.reset} `
+      lines.push(`  ${ANSI.blue}${num} ${prefix}${ANSI.userBg ?? '\x1b[48;5;237m'}${ANSI.ink}${ANSI.bold} ${labelText} ${ANSI.reset}`)
     } else {
       const markerColor = chosen ? (ANSI.bash ?? ANSI.blue) : ANSI.dim
-      lines.push(`  ${ANSI.dim}${num} ${markerColor}${marker}${ANSI.reset} ${ANSI.answer}${labelText}${ANSI.reset}`)
+      const prefix = `${markerColor}${marker}${ANSI.reset} `
+      lines.push(`  ${ANSI.dim}${num} ${prefix}${ANSI.answer}${labelText}${ANSI.reset}`)
     }
     if (option?.description) {
       const descWrapped = wrap(safe(option.description), Math.max(20, columns - 10)).slice(0, 2)
@@ -137,17 +165,6 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
   }
   if (choiceCount > end - start) {
     lines.push(`  ${ANSI.dim}… ${choiceCount - (end - start)} more choices${ANSI.reset}`)
-  }
-  const custom = panel.customs?.[panel.index] ?? ''
-  lines.push('')
-  if (panel.customEditing) {
-    lines.push(`  ${ANSI.teal ?? ANSI.blue}✎ Your answer${ANSI.reset}`)
-    const customLines = String(custom || 'type a free-form answer…').split('\n')
-      .flatMap((line) => wrap(safe(line), Math.max(20, columns - 8)))
-      .slice(-3)
-    for (const line of customLines) {
-      lines.push(`    ${ANSI.ink}${safe(line)}${ANSI.reset}`)
-    }
   }
   lines.push('')
   const quickSelect = options.length > 0 ? ` · 1-${Math.min(9, options.length)} quick select` : ''
