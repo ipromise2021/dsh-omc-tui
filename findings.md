@@ -158,3 +158,34 @@
 - `resolved`：实现完成且单元/模块检查通过。
 - `verified`：PTY 或实际交互场景验证通过。
 - 每项关闭必须附带测试名称、命令结果或人工复现记录。
+
+## 主分支界面渲染与输出折叠分析（2026-08-25）
+
+### 当前架构事实
+
+- `main` 使用普通终端主屏和原生 scrollback；`openTerminal()` 没有进入 alternate screen。
+- `onResize()` 以 80ms 防抖后无条件调用 `repaint(true)`；`repaint(true)` 用 `ESC[3J ESC[2J ESC[H` 清屏，再把 welcome、durable events 和本地日志一次性全量写回。
+- transcript、footer 和提交路径普遍把列宽下限钳制为 60；真实窗口小于 60 列时，应用布局宽度与终端物理宽度不一致，会发生不可控软换行。
+- 终端 scrollback 有宿主配置的容量上限。全量回放行数超过上限时，最早内容仍会被宿主丢弃；ANSI 没有可移植能力恢复用户 resize 前的原生 scrollback 阅读位置。
+- `turn/end` 当前没有调用 `repaint(true)`，只做增量 flush 和 footer 调度；用户要求的“输出结束不再重绘”在该事件路径已经满足。
+
+### 折叠链事实
+
+- durable events 是完整真相源，但当前渲染器只按连续 tool/hook/approval 事件做启发式分组，没有读取父子节点或 subtree 标识。
+- 多工具组默认折叠，单工具组默认直接展开；分组 key 是 `tools-${group[0].seq}`。
+- live 路径 `commitUnprintedEvents()` 只格式化“本次尚未输出”的事件，并立即推进 `lastCommittedSeq`。因此同一段工具活动常被拆成多个单工具块写入 scrollback，后续完整历史渲染虽能识别为一组，也无法原地收回已经写入的旧行。
+- Ctrl+O 当前切换所有 reasoning/tool group，而非当前或最近一组，并调用 `repaint(true)` 全量清屏重放；它与 resize 的截断问题共享同一个根因。
+
+### 可行性结论
+
+- “resize 后所有历史按新宽度重排、仍可访问对话开头、并保持当前阅读位置”无法由普通终端原生 scrollback 在所有终端中可靠保证；需要应用自有 document + viewport，或接受宿主 scrollback 上限和位置丢失。
+- “遍历完工具活动子树后立即折叠，Ctrl+O 可原位展开”可支持，但 live 阶段必须先缓冲事件，不再把每个工具节点立即提交到不可变 scrollback；可靠的原位展开仍需要应用自有 viewport。inline 回退只能用临时详情面板或在当前位置追加详情，不能可靠改写任意历史位置。
+
+## 界面优化实施复核（2026-08-26）
+
+- **状态：** resolved
+- **实现：** 已采用 alternate screen、transcript document、viewport 和差分 screen renderer；历史内容不再依赖原生 scrollback 的原位改写能力。
+- **resize：** 阅读锚点保存 block 的源文本偏移，Markdown 换行变化后仍定位到同一语义内容；底部 followEnd 行为保持不变。
+- **流式与折叠：** text、reasoning、tool-call delta 使用同一合并调度；activity/reasoning 默认折叠，Ctrl+O 只切换焦点或最近可见 block。
+- **输入与选择：** SGR 鼠标滚轮只滚动 viewport；Markdown、CJK、表格及窄表格省略号使用可见文本映射，复制内容不含 ANSI 或隐藏字符。
+- **关闭验证：** `npm test`、`npm run verify`、`git diff --check` 与 npm 打包预检均通过；真实 Harness PTY fixture 仍待环境具备后执行。

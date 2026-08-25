@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "verify": "node -e \"Promise.all([import('./src/index.js'), import('./src/renderer/themes.js'), import('./src/commands/registry.js')]).then(() => console.log('✓ All modules verified OK!'))\"",
-    "test": "node test/unit-regressions.mjs",
+    "test": "node test/transcript-projection.test.mjs && node test/screen-viewport.test.mjs && node test/input-router.test.mjs && node test/mouse-selection.test.mjs && node test/unit-regressions.mjs",
     "test:pty": "sh test/run-pty-suite.sh",
     "render-assets": "node scripts/render-tui-scenes.mjs"
   },

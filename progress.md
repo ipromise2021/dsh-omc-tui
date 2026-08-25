@@ -58,6 +58,25 @@
 - 根据用户截图新增并关闭 CR-011。用户明确选择“resize 优先布局稳定，全量重放可接受，历史重复暂不处理”；因此 resize 从局部 footer 重绘改为 `repaint(true)`，让整个会话按当前终端宽度重新格式化。普通增量输出仍保留精确 footer 清除。
 - 运行 `npm test`、`npm run verify`、`git diff --check`，全部通过。
 
+### 阶段 8：主分支界面渲染与输出折叠方案分析
+- **状态：** complete
+- 仓库不存在 `master`，已按用户意图切换到与 `origin/main` 对齐的 `main`；基线为 `95d6318`。
+- 逐段分析 `onResize()`、`repaint(true)`、`commitToScrollback()`、`commitUnprintedEvents()`、`formatEvents()`、`toggleCollapsible()` 和 turn/end 回归测试。
+- 通过合成 durable events 验证：严格连续的多个工具调用会折叠；中间夹 assistant 过渡消息时会被拆为多个单工具展开块，现有实现并不具备真正的“子树”投影。
+- 确认 turn/end 已无全量 repaint；resize 和 Ctrl+O 仍共享清 scrollback + 全量重放路径。
+- 新增 `UI_RENDERING_OPTIMIZATION_ANALYSIS.md`，给出 document/viewport 架构、activity span 定义、live 缓冲与原子折叠、定向 Ctrl+O、分阶段实施顺序、测试矩阵和验收标准。
+- 根据后续交接要求补充统一输入事件路由、consumer 优先级、滚轮与输入历史隔离、语义内容选择、OSC 52/平台复制降级、终端原生选择逃生通道、异常清理契约及对应测试用例。
+- 本阶段未修改任何产品源代码。
+
+### 阶段 9：document + viewport 界面优化实施
+- **状态：** complete
+- 将 transcript 投影、viewport、screen renderer、activity 分组、输入路由、鼠标选择和剪贴板拆分为独立模块，并接入 `TuiApp` 的 alternate screen 生命周期。
+- resize 使用 semantic source anchor 恢复 Markdown 阅读位置；普通文本、reasoning 和 tool-call delta 统一进行合并重投影。
+- activity 默认折叠，Ctrl+O 只切换目标 block；滚轮不再穿透到输入历史。
+- 修复多段 Markdown、CJK 表格、表格边框/空白边界和窄表格省略号的选择映射；省略号单元格按可见文本复制。
+- 新增 transcript、viewport/screen、input router、鼠标选择等回归用例。
+- `npm test`、`npm run verify`、`git diff --check` 与 npm 打包预检均通过。
+
 ## 测试结果
 | 测试 | 预期结果 | 实际结果 | 状态 |
 |------|---------|---------|------|

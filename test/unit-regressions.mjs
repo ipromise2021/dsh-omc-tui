@@ -254,10 +254,10 @@ assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKe
 TuiApp.prototype.onEscapeSequence.call(historyKeyboardApp, '\x1b[B')
 assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['middle entry', 0, 1])
 TuiApp.prototype.onEscapeSequence.call(historyKeyboardApp, '\x1b[A')
-assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['middle entry', 0, 1])
+assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['oldest entry', 'oldest entry'.length, 0])
 historyKeyboardApp.cursor = historyKeyboardApp.input.length
 TuiApp.prototype.onEscapeSequence.call(historyKeyboardApp, '\x1b[B')
-assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['middle entry', 'middle entry'.length, 1])
+assert.deepEqual([historyKeyboardApp.input, historyKeyboardApp.cursor, historyKeyboardApp.historyIndex], ['middle entry', 0, 1])
 
 const shellCompletionApp = {
   input: '! git p',
@@ -1792,7 +1792,148 @@ assert.equal(footerResizeApp.footerCursorRows(5), 2)
 footerResizeApp.lastCursorRowInFooter = 0
 footerResizeApp.lastCursorColumnInFooter = 7
 assert.equal(footerResizeApp.footerCursorRows(5), 1)
-for (const dispose of [...footerResizeApp.disposers].reverse()) dispose()
+// History navigation: Up places cursor at end; Down places cursor at start
+const histApp = new TuiApp({})
+histApp.history = ['first message', 'second message', 'third message']
+histApp.input = 'draft'
+histApp.cursor = 2
+
+// Press Up: goes to 'third message', cursor at end (13)
+histApp.handleToken('\x1b[A')
+assert.equal(histApp.input, 'third message')
+assert.equal(histApp.cursor, 13)
+
+// Press Up: goes to 'second message', cursor at end (14)
+histApp.handleToken('\x1b[A')
+assert.equal(histApp.input, 'second message')
+assert.equal(histApp.cursor, 14)
+
+// Press Down: goes to 'third message', cursor at start (0)
+histApp.handleToken('\x1b[B')
+assert.equal(histApp.input, 'third message')
+assert.equal(histApp.cursor, 0)
+
+// Press Down: returns to draft, cursor at start (0)
+histApp.handleToken('\x1b[B')
+assert.equal(histApp.input, 'draft')
+assert.equal(histApp.cursor, 0)
+
+// Multi-line message navigation
+histApp.history = ['first msg', 'row 1\nrow 2\nrow 3']
+histApp.historyIndex = -1
+histApp.input = ''
+histApp.cursor = 0
+
+// Press Up: loads 'row 1\nrow 2\nrow 3', cursor at end of last line (17)
+histApp.handleToken('\x1b[A')
+assert.equal(histApp.input, 'row 1\nrow 2\nrow 3')
+assert.equal(histApp.cursor, 17)
+
+// Press Up in multi-line: jumps to row 2
+histApp.handleToken('\x1b[A')
+assert.equal(histApp.input, 'row 1\nrow 2\nrow 3')
+assert.equal(histApp.cursor, 11)
+
+// Press Up in multi-line: jumps to row 1
+histApp.handleToken('\x1b[A')
+assert.equal(histApp.input, 'row 1\nrow 2\nrow 3')
+assert.equal(histApp.cursor, 5)
+
+// Press Up when at row 1: switches to 'first msg', cursor at end (9)
+histApp.handleToken('\x1b[A')
+assert.equal(histApp.input, 'first msg')
+assert.equal(histApp.cursor, 9)
+
+// Press Down: switches to 'row 1\nrow 2\nrow 3', cursor at start of row 1 (0)
+histApp.handleToken('\x1b[B')
+assert.equal(histApp.input, 'row 1\nrow 2\nrow 3')
+assert.equal(histApp.cursor, 0)
+
+// Press Down in multi-line: jumps to row 2
+histApp.handleToken('\x1b[B')
+assert.equal(histApp.input, 'row 1\nrow 2\nrow 3')
+assert.equal(histApp.cursor, 6)
+
+// Press Down in multi-line: jumps to row 3
+histApp.handleToken('\x1b[B')
+assert.equal(histApp.input, 'row 1\nrow 2\nrow 3')
+assert.equal(histApp.cursor, 12)
+
+// Press Down when at last row: returns to draft '', cursor at start (0)
+histApp.handleToken('\x1b[B')
+assert.equal(histApp.input, '')
+assert.equal(histApp.cursor, 0)
+
+// Panel layout test: command palette and menu are rendered in floatingRows overlay
+const panelLayoutApp = new TuiApp({})
+panelLayoutApp.commandPalette = {
+  items: [{ name: '/compact', description: 'Compact conversation' }],
+  selected: 0,
+  query: 'compact'
+}
+panelLayoutApp.input = '/compact'
+panelLayoutApp.buildFooter(80, 24)
+assert.ok(panelLayoutApp.floatingRows.some((l) => l.includes('/compact')), 'Command palette MUST be placed in floatingRows overlay')
+panelLayoutApp.commandPalette = undefined
+
+// No match message test: No commands match "/moe"
+panelLayoutApp.commandPalette = { items: [], selected: 0, query: 'moe' }
+panelLayoutApp.input = '/moe'
+panelLayoutApp.buildFooter(80, 24)
+assert.ok(panelLayoutApp.floatingRows.some((l) => l.includes('No commands match "/moe"')), 'No match message must be displayed')
+panelLayoutApp.commandPalette = undefined
+
+// History indicator badge test: ─── History X/Y ─────
+panelLayoutApp.history = ['msg1', 'msg2', 'msg3']
+panelLayoutApp.historyIndex = 1
+const histFooter = panelLayoutApp.buildFooter(80, 24)
+assert.ok(histFooter.some((l) => l.includes('History 2/3')), 'History indicator MUST be displayed on input top line')
+panelLayoutApp.historyIndex = -1
+
+// Secondary panel layout test: effort picker / model picker are rendered below input box
+panelLayoutApp.effortPicker = { efforts: ['low', 'medium', 'high', 'max'], selected: 0 }
+panelLayoutApp.input = ''
+const footerWithEffort = panelLayoutApp.buildFooter(80, 24)
+const effortLineIndex = footerWithEffort.findIndex((l) => l.includes('REASONING') || l.includes('EFFORT') || l.includes('HIGH'))
+assert.ok(effortLineIndex >= 0, 'Effort picker item must be in footer')
+assert.ok(effortLineIndex > panelLayoutApp.inputTopInFooter, 'Effort picker MUST be placed below input prompt')
+
+// Active stream single truth test: no duplication
+const liveApp = new TuiApp({})
+liveApp.active = true
+liveApp.streaming.text = 'hello'
+liveApp.streamBuffer = 'hello'
+const payload = liveApp.activeStreamPayload()
+assert.equal(payload.text, 'hello', 'activeStreamPayload text must NOT duplicate streaming.text and streamBuffer')
+for (const dispose of [...liveApp.disposers].reverse()) dispose()
+
+// Stop repetitive stream in AltScreen mode test
+let stopRepetitiveCalled = false
+const altApp = new TuiApp({})
+altApp.agent = { status: 'running', session: {}, cancel() {} }
+altApp.screenRenderer = { isAltScreen: true }
+altApp.stopRepetitiveStream = (chunk) => {
+  stopRepetitiveCalled = true
+  return false
+}
+altApp.onSessionEvent(altApp.agent.session, {
+  type: 'assistant/chunk',
+  seq: 10,
+  data: { chunk: { type: 'text-delta', text: 'testing chunk' } }
+})
+assert.equal(stopRepetitiveCalled, true, 'stopRepetitiveStream MUST be invoked in AltScreen mode upon text-delta')
+
+// Reasoning persistence across text streaming
+altApp.active = true
+altApp.streaming.reasoning = 'Thinking about algorithms'
+altApp.flushThinking(11)
+assert.equal(altApp.streaming.reasoning, '', 'streaming.reasoning cleared after flush')
+assert.ok(altApp.activeStreamPayload().reasoning.includes('Thinking about algorithms'), 'Reasoning remains persistent in activeStreamPayload during subsequent text streaming')
+for (const dispose of [...altApp.disposers].reverse()) dispose()
+
+for (const dispose of [...panelLayoutApp.disposers].reverse()) dispose()
+
+for (const dispose of [...histApp.disposers].reverse()) dispose()
 
 console.log('unit regressions: ok')
 process.exit(0)

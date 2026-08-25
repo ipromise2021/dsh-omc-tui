@@ -1,326 +1,624 @@
-import { widthOf, truncateWidth, safe, shorten, wrap, formatTime, formatDurationMs, textOf, reasoningOf } from './ansi.js'
+import { widthOf, truncateWidth, safe, shorten, wrap, wrapWithSpans, formatTime, formatDurationMs, textOf, reasoningOf, visibleOf } from './ansi.js'
 import { formatImageBytes } from '../image-protocol.js'
 import { ANSI as defaultAnsi } from './themes.js'
-import { renderMarkdownRows } from './markdown.js'
+import { renderMarkdownRows, renderMarkdownDocument } from './markdown.js'
 import { renderDiffLines } from './diff.js'
 import { compactExpandedFileReferences } from '../core/events.js'
+import { groupActivitySpans, parseToolArgs, summarizeToolCall } from './activity.js'
 
-
-export function formatEvents(events, columns, options = {}) {
+/**
+ * Pure projection from durable events + state to TranscriptDocument (blocks, rows, layoutMap).
+ */
+export function projectTranscript(events = [], columns = 80, options = {}) {
   const {
     expandedKeys = new Set(),
     skills = [],
     reasoningBlocks = [],
     activeModel = undefined,
     defaultModel = '',
-    allSessionEvents = events,
-    ANSI = defaultAnsi
+    ANSI = defaultAnsi,
+    focusedBlockKey = undefined,
+    welcomeRows = []
   } = options
 
-  const contentWidth = Math.max(24, columns - 2)
-  const rows = []
-  const push = (color, text) => rows.push(color ? `${color}${text}${ANSI.reset}` : text)
+  const contentWidth = Math.max(20, columns - 2)
+  const blocks = []
+  const flatRows = []
+  const layoutMap = [] // index -> { blockKey, blockRowIndex, blockKind }
 
-  const parseToolArgs = (raw) => {
-    if (!raw) return {}
-    try {
-      const parsed = JSON.parse(raw)
-      return typeof parsed === 'object' && parsed !== null ? parsed : {}
-    } catch {
-      return {}
+  const addBlock = (block) => {
+    const startRow = flatRows.length
+    block.startRow = startRow
+    for (let r = 0; r < block.rows.length; r++) {
+      flatRows.push(block.rows[r])
+      layoutMap.push({
+        blockKey: block.key,
+        blockRowIndex: r,
+        blockKind: block.kind,
+        isSummary: r === 0 && (block.kind === 'activity' || block.kind === 'reasoning')
+      })
     }
+    block.rowCount = block.rows.length
+    blocks.push(block)
   }
 
-  const renderGroup = (group) => {
-    if (group.length === 0) return
-    const calls = group.filter((event) => event.type === 'tool/call')
-    const key = `tools-${group[0].seq}`
-    const isMultiple = calls.length > 1
+  if (Array.isArray(welcomeRows) && welcomeRows.length > 0) {
+    addBlock({
+      key: 'welcome',
+      kind: 'welcome',
+      startSeq: 0,
+      endSeq: 0,
+      rows: welcomeRows,
+      logicalLines: welcomeRows.map((r) => visibleOf(r))
+    })
+  }
 
-    if (isMultiple) {
-      const names = [...new Set(calls.map((call) => safe(call.data.name || 'tool')))].map((name) => {
-        const count = calls.filter((call) => safe(call.data.name || 'tool') === name).length
-        return count > 1 ? `${name} ×${count}` : name
-      }).join(' · ')
-      const isExpanded = expandedKeys.has(key)
-      push(ANSI.detail, `  ⚙ TOOLS · ${calls.length} · ${names} ${ANSI.dim}(ctrl+o to ${isExpanded ? 'collapse' : 'expand'})${ANSI.reset}`)
-      if (!isExpanded) {
-        rows.push('')
-        return
-      }
-    }
+  // First group events into semantic items (activity spans, user messages, etc.)
+  const groupedItems = groupActivitySpans(events)
+  let turnHeaderPrinted = false
 
-    const indent = isMultiple ? '    ' : '  '
-    for (const event of group) {
-      if (event.type === 'tool/call') {
-        const args = parseToolArgs(event.data.arguments)
-        const name = safe(event.data.name || 'tool')
-        const isBash = /bash|shell|terminal|exec/i.test(name)
-        const isSkill = /^skill$/i.test(name)
-        const isWrite = /write|create|save/i.test(name)
-        const isEdit = /edit|replace|patch/i.test(name)
-        const isRead = /read|view|cat|grep|list/i.test(name)
+  for (let itemIndex = 0; itemIndex < groupedItems.length; itemIndex++) {
+    const item = groupedItems[itemIndex]
 
-        if (isBash) {
-          const command = args.command ?? args.cmd ?? args.script ?? ''
-          push(ANSI.amber, `${indent}● Bash(${safe(shorten(String(command), Math.max(20, contentWidth - 16)))})`)
-        } else if (isSkill) {
-          const skillName = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'instructions'
-          push(ANSI.blueSoft, `${indent}● Skill(${safe(shorten(String(skillName), Math.max(20, contentWidth - 16)))})`)
-        } else if (isWrite) {
-          const file = args.file_path ?? args.path ?? args.targetFile ?? ''
-          push(ANSI.blueSoft, `${indent}● Write(${safe(shorten(String(file), Math.max(20, contentWidth - 16)))})`)
-        } else if (isEdit) {
-          const file = args.file_path ?? args.path ?? args.targetFile ?? ''
-          push(ANSI.blueSoft, `${indent}● Edit(${safe(shorten(String(file), Math.max(20, contentWidth - 16)))})`)
-        } else if (isRead) {
-          const file = args.file_path ?? args.path ?? args.targetFile ?? args.searchPath ?? ''
-          push(ANSI.blueSoft, `${indent}● Read(${safe(shorten(String(file), Math.max(20, contentWidth - 16)))})`)
-        } else if (/ask_user_question|ask_question|question|interview/i.test(name)) {
-          const qText = args.questions?.[0]?.question ?? args.question ?? args.prompt ?? args.header ?? '向用户发起交互确认'
-          push(ANSI.peach, `${indent}● AskUserQuestion(${safe(shorten(String(qText), Math.max(20, contentWidth - 26)))})`)
-        } else {
-          const target = args.file_path ?? args.path ?? args.query ?? ''
-          push(ANSI.ink, `${indent}● ${name}(${safe(shorten(String(target), Math.max(20, contentWidth - name.length - 8)))})`)
-        }
-      } else if (event.type === 'approval/asked') {
-        push(ANSI.coral, `${indent}  ! approval needed · ${safe(event.data.toolName ?? '')}`)
-      } else if (event.type === 'approval/decided') {
-        push(ANSI.dim, `${indent}  └ decision: ${safe(event.data.outcome ?? '')}`)
-      } else if (event.type === 'hook/invoked') {
-        push(ANSI.dim, `${indent}  ϟ hook · ${safe(event.data.point ?? '')} · ${safe(event.data.dialect ?? '')}${event.data.matcher ? ` · ${safe(event.data.matcher)}` : ''}`)
-      } else if (event.type === 'hook/result') {
-        const data = event.data
-        const ok = data.decision === 'allow' || data.decision === 'pass'
-        const decision = ok ? `${ANSI.blue}${safe(data.decision ?? '')}${ANSI.reset}` : `${ANSI.coral}${safe(data.decision ?? '')}${ANSI.reset}`
-        const duration = data.durationMs !== undefined ? ` · ${(data.durationMs / 1000).toFixed(1)}s` : ''
-        push(ANSI.dim, `${indent}  └ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}`)
-      } else {
-        const resultText = textOf(event.data.message?.content)
-        if (event.data.error) {
-          const detail = event.data.error.message ?? resultText
-          push(ANSI.coral, `${indent}  └ ✗ ${safe(event.data.error.code ?? 'error')} · ${shorten(detail, Math.max(20, contentWidth - 24))}`)
-        } else if (/^diff |\n(---|\+\+\+)/.test(`\n${resultText}`) && /^[+-]/.test(resultText.split('\n').find((l) => l.startsWith('+') || l.startsWith('-')) ?? '')) {
-          const diffLines = renderDiffLines(resultText, contentWidth, ANSI)
-          for (const line of diffLines) rows.push(line)
-        } else if (resultText) {
-          const isExpanded = expandedKeys.has(key) || expandedKeys.has(`tool-${event.seq}`)
-          if (isExpanded) {
+    if (item.kind === 'activity') {
+      const span = item.span
+      const blockKey = span.key
+      const isExpanded = expandedKeys.has(blockKey)
+      const isFocused = focusedBlockKey === blockKey
+      const summary = span.summary
+      const totalCalls = span.calls.length
+
+      const rows = []
+      const detailRows = []
+      const logicalLines = []
+
+      // 1. Summary line
+      const expandHint = isExpanded ? '(ctrl+o to collapse)' : '(ctrl+o to expand)'
+      const focusMarker = isFocused ? `${ANSI.pink}▶${ANSI.reset} ` : '  '
+      const statusIcon = span.state === 'failed' ? `${ANSI.coral}✗${ANSI.reset}` : (span.state === 'aborted' ? `${ANSI.dim}∅${ANSI.reset}` : '⚙')
+
+      const summaryRow = `${focusMarker}${ANSI.detail}${statusIcon} ${summary.summaryText} ${ANSI.dim}${expandHint}${ANSI.reset}`
+      rows.push(summaryRow)
+      detailRows.push(summaryRow)
+      logicalLines.push(summary.summaryText)
+
+      // 2. Expanded details
+      const indent = totalCalls > 1 ? '    ' : '  '
+      for (const event of span.events) {
+        if (event.type === 'tool/call') {
+          const args = parseToolArgs(event.data?.arguments)
+          const name = safe(event.data?.name || 'tool')
+          const isBash = /bash|shell|terminal|exec/i.test(name)
+          const isSkill = /^skill$/i.test(name)
+          const isWrite = /write|create|save/i.test(name)
+          const isEdit = /edit|replace|patch/i.test(name)
+          const isRead = /read|view|cat|grep|list/i.test(name)
+
+          let line = ''
+          let logicalText = ''
+          if (isBash) {
+            const command = args.command ?? args.cmd ?? args.script ?? ''
+            line = `${indent}${ANSI.amber}● Bash(${safe(shorten(String(command), Math.max(20, contentWidth - 16)))})`
+            logicalText = `Bash(${command})`
+          } else if (isSkill) {
+            const skillName = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'instructions'
+            line = `${indent}${ANSI.blueSoft}● Skill(${safe(shorten(String(skillName), Math.max(20, contentWidth - 16)))})`
+            logicalText = `Skill(${skillName})`
+          } else if (isWrite) {
+            const file = args.file_path ?? args.path ?? args.targetFile ?? ''
+            line = `${indent}${ANSI.blueSoft}● Write(${safe(shorten(String(file), Math.max(20, contentWidth - 16)))})`
+            logicalText = `Write(${file})`
+          } else if (isEdit) {
+            const file = args.file_path ?? args.path ?? args.targetFile ?? ''
+            line = `${indent}${ANSI.blueSoft}● Edit(${safe(shorten(String(file), Math.max(20, contentWidth - 16)))})`
+            logicalText = `Edit(${file})`
+          } else if (isRead) {
+            const file = args.file_path ?? args.path ?? args.targetFile ?? args.searchPath ?? ''
+            line = `${indent}${ANSI.blueSoft}● Read(${safe(shorten(String(file), Math.max(20, contentWidth - 16)))})`
+            logicalText = `Read(${file})`
+          } else if (/ask_user_question|ask_question|question|interview/i.test(name)) {
+            const qText = args.questions?.[0]?.question ?? args.question ?? args.prompt ?? args.header ?? '向用户发起交互确认'
+            line = `${indent}${ANSI.peach}● AskUserQuestion(${safe(shorten(String(qText), Math.max(20, contentWidth - 26)))})`
+            logicalText = `AskUserQuestion(${qText})`
+          } else {
+            const target = args.file_path ?? args.path ?? args.query ?? ''
+            line = `${indent}${ANSI.ink}● ${name}(${safe(shorten(String(target), Math.max(20, contentWidth - name.length - 8)))})`
+            logicalText = `${name}(${target})`
+          }
+          detailRows.push(line)
+          logicalLines.push(logicalText)
+        } else if (event.type === 'approval/asked') {
+          detailRows.push(`${indent}${ANSI.coral}! approval needed · ${safe(event.data?.toolName ?? '')}${ANSI.reset}`)
+          logicalLines.push(`! approval needed · ${event.data?.toolName ?? ''}`)
+        } else if (event.type === 'approval/decided') {
+          detailRows.push(`${indent}${ANSI.dim}└ decision: ${safe(event.data?.outcome ?? '')}${ANSI.reset}`)
+          logicalLines.push(`decision: ${event.data?.outcome ?? ''}`)
+        } else if (event.type === 'hook/invoked') {
+          detailRows.push(`${indent}${ANSI.dim}ϟ hook · ${safe(event.data?.point ?? '')} · ${safe(event.data?.dialect ?? '')}${event.data?.matcher ? ` · ${safe(event.data.matcher)}` : ''}${ANSI.reset}`)
+          logicalLines.push(`hook: ${event.data?.point ?? ''}`)
+        } else if (event.type === 'hook/result') {
+          const data = event.data ?? {}
+          const ok = data.decision === 'allow' || data.decision === 'pass'
+          const decision = ok ? `${ANSI.blue}${safe(data.decision ?? '')}${ANSI.reset}` : `${ANSI.coral}${safe(data.decision ?? '')}${ANSI.reset}`
+          const duration = data.durationMs !== undefined ? ` · ${(data.durationMs / 1000).toFixed(1)}s` : ''
+          detailRows.push(`${indent}${ANSI.dim}└ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}${ANSI.reset}`)
+          logicalLines.push(`hook result: ${data.decision ?? ''}`)
+        } else if (event.type === 'tool/result') {
+          const resultText = textOf(event.data?.message?.content)
+          if (event.data?.error) {
+            const detail = event.data.error.message ?? resultText
+            detailRows.push(`${indent}${ANSI.coral}└ ✗ ${safe(event.data.error.code ?? 'error')} · ${shorten(detail, Math.max(20, contentWidth - 24))}${ANSI.reset}`)
+            logicalLines.push(`error: ${detail}`)
+          } else if (/^diff |\n(---|\+\+\+)/.test(`\n${resultText}`) && /^[+-]/.test(resultText.split('\n').find((l) => l.startsWith('+') || l.startsWith('-')) ?? '')) {
+            const diffLines = renderDiffLines(resultText, contentWidth, ANSI)
+            for (const line of diffLines) detailRows.push(line)
+            logicalLines.push(resultText)
+          } else if (resultText) {
             const resultLines = safe(resultText).split(/\r?\n/).filter((l) => l.trim().length > 0)
             if (resultLines.length > 0) {
-              push(ANSI.dim, `${indent}  └ ${shorten(resultLines[0], Math.max(20, contentWidth - 10))}`)
-              for (let idx = 1; idx < Math.min(4, resultLines.length); idx++) {
-                push(ANSI.dim, `${indent}    ${shorten(resultLines[idx], Math.max(20, contentWidth - 10))}`)
+              detailRows.push(`${indent}${ANSI.dim}└ ${shorten(resultLines[0], Math.max(20, contentWidth - 10))}${ANSI.reset}`)
+              logicalLines.push(resultLines[0])
+              for (let idx = 1; idx < Math.min(6, resultLines.length); idx++) {
+                detailRows.push(`${indent}${ANSI.dim}  ${shorten(resultLines[idx], Math.max(20, contentWidth - 10))}${ANSI.reset}`)
+                logicalLines.push(resultLines[idx])
               }
-              if (resultLines.length > 4) {
-                push(ANSI.dim, `${indent}    … ${resultLines.length - 4} more lines`)
+              if (resultLines.length > 6) {
+                detailRows.push(`${indent}${ANSI.dim}  … ${resultLines.length - 6} more lines${ANSI.reset}`)
               }
             }
           }
+        } else if (event.type === 'assistant/message') {
+          const transText = textOf(event.data?.message?.content)?.trim()
+          if (transText) {
+            const cleanLead = shorten(transText.replace(/\s+/g, ' '), Math.max(20, contentWidth - 4))
+            detailRows.push(`  ${ANSI.dim}${cleanLead}${ANSI.reset}`)
+            logicalLines.push(cleanLead)
+          }
+          if (event.data?.error) {
+            const errStr = shorten(event.data.error.message || 'failed', contentWidth - indent.length - 6)
+            const errLine = `${indent}  ${ANSI.coral}✗ ${errStr}${ANSI.reset}`
+            detailRows.push(errLine)
+            logicalLines.push(`✗ ${errStr}`)
+          }
         }
       }
-    }
-    rows.push('')
-  }
 
-  let group = []
-  let turnHeaderPrinted = false
-  const isToolEvent = (type) => type === 'tool/call' || type === 'tool/result' || type === 'approval/asked' || type === 'approval/decided' || type === 'hook/invoked' || type === 'hook/result'
-  const isStrongEvent = (type) => type === 'user/message' || type === 'assistant/message' || type === 'turn/start' || type === 'turn/end'
-  const flushGroup = () => {
-    renderGroup(group)
-    group = []
-  }
+      rows.push('')
+      detailRows.push('')
 
-  for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
-    const event = events[eventIndex]
-    if (isToolEvent(event.type)) {
-      group.push(event)
+      addBlock({
+        key: blockKey,
+        kind: 'activity',
+        startSeq: span.startSeq,
+        endSeq: span.endSeq,
+        collapsed: !isExpanded,
+        summary: summary.summaryText,
+        rows: isExpanded ? detailRows : [summaryRow, ''],
+        logicalLines
+      })
       continue
     }
-    if (group.length > 0) {
-      let hasMoreToolsAhead = false
-      if (event.type === 'assistant/message') {
-        const text = textOf(event.data?.message?.content)?.trim()
-        if (!text || text.length < 120) {
-          for (let n = eventIndex + 1; n < events.length; n++) {
-            if (isToolEvent(events[n].type)) {
-              hasMoreToolsAhead = true
-              break
-            }
-            if (events[n].type === 'user/message' || events[n].type === 'turn/end') break
-          }
-        }
-      }
-      if (!hasMoreToolsAhead && isStrongEvent(event.type)) flushGroup()
-      else if (!hasMoreToolsAhead) continue
-    }
-    renderGroup(group)
-    group = []
-    switch (event.type) {
+
+    const event = item.event
+    if (!event) continue
+
+    switch (item.kind) {
       case 'turn/start': {
         turnHeaderPrinted = false
         break
       }
+
       case 'user/message': {
         turnHeaderPrinted = false
-        if (event.data.source?.kind !== 'user') break
+        if (event.data?.source?.kind !== 'user') break
         const contentBlocks = event.data.content ?? []
         const isBashCmd = contentBlocks.some((b) => b.type === 'text' && b.text?.startsWith('!') && !b.text?.startsWith('!!'))
+
+        const rows = []
+        const rowSpans = []
+        const logicalLines = []
+        let userPromptText = ''
+
         if (!isBashCmd) {
-          push(ANSI.blue, `${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
+          rows.push(`${ANSI.blue}${ANSI.bold}YOU${ANSI.reset} ${ANSI.dim}·${ANSI.reset} ${ANSI.muted}${formatTime(event.time)}`)
+          logicalLines.push(`YOU · ${formatTime(event.time)}`)
+          rowSpans.push({ sourceStart: 0, sourceEnd: 0, prefixCols: 0, text: 'YOU' })
         }
+
         for (const block of contentBlocks) {
           if (block.type === 'image') {
             const ref = block.attachment
             const size = formatImageBytes(ref?.bytes ?? 0)
             const dimensions = ref?.width && ref?.height ? ` · ${ref.width}×${ref.height}` : ''
-            push(ANSI.dim, `◱ image · ${size}${dimensions}`)
+            rows.push(`${ANSI.dim}◱ image · ${size}${dimensions}${ANSI.reset}`)
+            logicalLines.push(`[image ${size}${dimensions}]`)
           } else if (block.type === 'text') {
             const rawText = block.text ?? ''
             if (rawText.startsWith('!') && !rawText.startsWith('!!')) {
               const [firstLine, ...restLines] = rawText.split('\n')
               const cmdName = safe(firstLine.slice(1).trim())
-              push('', `${ANSI.bash}${ANSI.bold}! ${cmdName}${ANSI.reset}`)
+              rows.push(`${ANSI.bash}${ANSI.bold}! ${cmdName}${ANSI.reset}`)
+              logicalLines.push(`! ${cmdName}`)
               if (restLines.length > 0) {
                 const textLines = restLines.join('\n').trimEnd().split('\n').slice(0, 30)
                 for (const [i, line] of textLines.entries()) {
                   const prefix = i === 0 ? `${ANSI.dim}└${ANSI.reset} ` : `  `
-                  push('', `${prefix}${ANSI.answer}${safe(line)}${ANSI.reset}`)
+                  rows.push(`${prefix}${ANSI.answer}${safe(line)}${ANSI.reset}`)
+                  logicalLines.push(line)
                 }
               }
             } else {
               const displayText = compactExpandedFileReferences(rawText)
-              const blockWidth = Math.max(24, contentWidth)
-              const innerWidth = blockWidth - 2
-              const wrapped = wrap(displayText, innerWidth - 2)
-              push('', `${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
-              for (const line of wrapped) {
-                const padding = ' '.repeat(Math.max(0, innerWidth - 2 - widthOf(line)))
-                push('', `${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
+              userPromptText = displayText
+              const blockWidth = Math.max(10, contentWidth)
+              const innerWidth = Math.max(8, blockWidth - 2)
+              const { lines: wrappedLines, spans } = wrapWithSpans(displayText, innerWidth - 2)
+
+              // Top border
+              rowSpans.push({ sourceStart: 0, sourceEnd: 0, prefixCols: 0, text: '' })
+              rows.push(`${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
+
+              for (let idx = 0; idx < wrappedLines.length; idx++) {
+                const line = wrappedLines[idx]
+                const sp = spans[idx]
+                const padLength = Math.max(0, innerWidth - 2 - widthOf(line))
+                const padding = ' '.repeat(padLength)
+                rows.push(`${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${line}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
+                logicalLines.push(line)
+                rowSpans.push({
+                  sourceStart: sp.sourceStart,
+                  sourceEnd: sp.sourceEnd,
+                  prefixCols: 2,
+                  text: sp.text
+                })
               }
-              push('', `${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
+
+              // Bottom border
+              rows.push(`${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
+              rowSpans.push({ sourceStart: displayText.length, sourceEnd: displayText.length, prefixCols: 0, text: '' })
             }
           }
         }
+
         const skillCount = skills.length || 0
         if (skillCount > 0 && !isBashCmd) {
-          push(ANSI.dim, `◫ 上下文注入 · skill-catalog (${skillCount} skills)`)
+          rows.push(`${ANSI.dim}◫ 上下文注入 · skill-catalog (${skillCount} skills)${ANSI.reset}`)
+          logicalLines.push(`skill-catalog (${skillCount} skills)`)
+          rowSpans.push({ sourceStart: userPromptText.length, sourceEnd: userPromptText.length, prefixCols: 0, text: '' })
         }
         rows.push('')
+        rowSpans.push({ sourceStart: userPromptText.length, sourceEnd: userPromptText.length, prefixCols: 0, text: '' })
+
+        addBlock({
+          key: `user-${event.seq || item.index}`,
+          kind: 'user',
+          startSeq: event.seq,
+          endSeq: event.seq,
+          rows,
+          logicalLines,
+          plainText: userPromptText,
+          rowSpans
+        })
         break
       }
-      case 'assistant/message': {
-        const fullAnswerText = textOf(event.data.message.content)
+
+      case 'assistant': {
+        const fullAnswerText = textOf(event.data?.message?.content)
         const answerText = fullAnswerText
-        const reasoningText = reasoningOf(event.data.message.content)
+        const reasoningText = reasoningOf(event.data?.message?.content)
         const block = reasoningBlocks.find((entry) => entry.key === `reason-${event.seq}` || entry.seq === event.seq) || (reasoningText ? {
           key: `reason-${event.seq}`,
           seq: event.seq,
           lines: reasoningText.split('\n').length,
           text: reasoningText
-        } : (reasoningBlocks.length === 1 ? reasoningBlocks[0] : undefined))
+        } : undefined)
+
         if (!answerText && !block) break
+
         if (!turnHeaderPrinted) {
           turnHeaderPrinted = true
-          push(ANSI.blueSoft, `DSH  ${ANSI.muted}${activeModel?.model ?? defaultModel} · ${formatTime(event.time)}`)
-          rows.push('')
-        }
-        if (block) {
-          const msStr = block.ms !== undefined ? `${(block.ms / 1000).toFixed(0)}s` : `${block.lines} lines`
-          if (expandedKeys.has(block.key)) {
-            push(ANSI.detail, `  ⚛ Thought for ${msStr} (ctrl+o to collapse)`)
-            for (const line of wrap(block.text, contentWidth - 4)) {
-              push(ANSI.detail, `    ${line}`)
-            }
-          } else {
-            push(ANSI.detail, `  ⚛ Thought for ${msStr} (ctrl+o to expand)`)
-          }
-          rows.push('')
+          const modelName = activeModel?.model ?? defaultModel ?? 'DeepSeek'
+          addBlock({
+            key: `header-${event.seq || item.index}`,
+            kind: 'turn-header',
+            startSeq: event.seq,
+            endSeq: event.seq,
+            rows: [
+              `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(event.time)}${ANSI.reset}`,
+              ''
+            ],
+            logicalLines: [`DSH ${modelName} · ${formatTime(event.time)}`]
+          })
         }
 
-        // Check if this message is an intermediate transition before tool calls
-        let isIntermediate = false
-        for (let n = eventIndex + 1; n < events.length; n++) {
-          if (events[n].type === 'user/message' || events[n].type === 'turn/end') break
-          if (events[n].type === 'tool/call') {
-            isIntermediate = true
-            break
+        if (block) {
+          const blockKey = block.key || `reason-${event.seq}`
+          const isExpanded = expandedKeys.has(blockKey)
+          const msStr = block.ms !== undefined ? `${(block.ms / 1000).toFixed(0)}s` : `${block.lines} lines`
+          const expandHint = isExpanded ? '(ctrl+o to collapse)' : '(ctrl+o to expand)'
+
+          const reasonRows = []
+          const reasonLogical = []
+          const reasonHeader = `  ${ANSI.detail}⚛ Thought for ${msStr} ${ANSI.dim}${expandHint}${ANSI.reset}`
+          reasonRows.push(reasonHeader)
+          reasonLogical.push(`Thought for ${msStr}`)
+
+          if (isExpanded) {
+            for (const line of wrap(block.text, contentWidth - 4)) {
+              reasonRows.push(`    ${ANSI.detail}${line}${ANSI.reset}`)
+              reasonLogical.push(line)
+            }
           }
+          reasonRows.push('')
+
+          addBlock({
+            key: blockKey,
+            kind: 'reasoning',
+            startSeq: event.seq,
+            endSeq: event.seq,
+            collapsed: !isExpanded,
+            summary: `Thought for ${msStr}`,
+            rows: reasonRows,
+            logicalLines: reasonLogical
+          })
         }
 
         if (answerText) {
-          if (isIntermediate) {
-            const cleanLead = shorten(answerText.trim().replace(/\s+/g, ' '), Math.max(20, contentWidth - 4))
-            if (cleanLead) {
-              push(ANSI.dim, `  ${cleanLead}`)
-              rows.push('')
-            }
-          } else {
-            rows.push('')
-            const mdRows = renderMarkdownRows(answerText, contentWidth, ANSI.answer, ANSI)
-            for (const r of mdRows) {
-              if (r === null) rows.push('')
-              else push('', r[0] + r[1])
-            }
-            rows.push('')
-          }
+          const doc = renderMarkdownDocument(answerText, contentWidth, ANSI.answer, ANSI)
+          const answerRows = [...doc.rows, '']
+          const rowSpans = [...doc.rowSpans, { sourceStart: doc.plainText.length, sourceEnd: doc.plainText.length, prefixCols: 0, text: '' }]
+
+          addBlock({
+            key: `answer-${event.seq || item.index}`,
+            kind: 'answer',
+            startSeq: event.seq,
+            endSeq: event.seq,
+            rows: answerRows,
+            logicalLines: [answerText],
+            plainText: doc.plainText,
+            rowSpans
+          })
         }
         break
       }
+
       case 'turn/end': {
         turnHeaderPrinted = false
-        if (event.data.reason?.kind === 'aborted') push(ANSI.dim, `  ∅ interrupted`)
-        else if (event.data.reason?.kind === 'error') {
+        const rows = []
+        const logicalLines = []
+
+        if (event.data?.reason?.kind === 'aborted') {
+          rows.push(`  ${ANSI.dim}∅ interrupted${ANSI.reset}`)
+          logicalLines.push('interrupted')
+        } else if (event.data?.reason?.kind === 'error') {
           const error = event.data.reason.error
-          push(ANSI.coral, `  ✗ ${error?.code ?? 'error'}: ${shorten(error?.message ?? '', contentWidth - 20)}`)
-        } else if (event.data.reason?.kind === 'completed') {
-          let startIndex = -1
-          for (let cursor = eventIndex - 1; cursor >= 0; cursor -= 1) {
-            if (events[cursor].type === 'turn/start') {
-              startIndex = cursor
-              break
-            }
-          }
-          if (startIndex >= 0) {
-            const durationMs = Number(event.time) - Number(events[startIndex].time)
-            if (Number.isFinite(durationMs) && durationMs >= 0) {
-              const tools = events.slice(startIndex, eventIndex).filter((e) => e.type === 'tool/call').length
-              const toolsText = tools > 0 ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : ''
-              push(ANSI.dim, `  ✻ finished in ${formatDurationMs(durationMs)}${toolsText}`)
-            }
-          }
+          rows.push(`  ${ANSI.coral}✗ ${error?.code ?? 'error'}: ${shorten(error?.message ?? '', contentWidth - 20)}${ANSI.reset}`)
+          logicalLines.push(`error: ${error?.message ?? ''}`)
+        }
+
+        if (event.data?.cost?.totalTokens) {
+          const cost = event.data.cost
+          const durMs = event.data.durationMs ? ` · ${formatDurationMs(event.data.durationMs)}` : ''
+          const tokStr = `${cost.totalTokens} tokens`
+          const toolCount = event.data.toolCallsCount ? ` · ${event.data.toolCallsCount} tools` : ''
+          rows.push(`  ${ANSI.dim}✻ finished in ${tokStr}${durMs}${toolCount}${ANSI.reset}`)
+          logicalLines.push(`finished in ${tokStr}${durMs}${toolCount}`)
+        }
+
+        if (rows.length > 0) {
+          rows.push('')
+          addBlock({
+            key: `turn-end-${event.seq || item.index}`,
+            kind: 'turn-end',
+            startSeq: event.seq,
+            endSeq: event.seq,
+            rows,
+            logicalLines
+          })
         }
         break
       }
+
+      case 'approval/asked': {
+        const rows = []
+        const logicalLines = []
+        const toolName = safe(event.data?.tool?.name || 'tool')
+        rows.push(`  ${ANSI.amber}⚙ Permission required: ${toolName}${ANSI.reset}`)
+        rows.push('')
+        logicalLines.push(`Permission required: ${toolName}`)
+
+        addBlock({
+          key: `approval-${event.seq || item.index}`,
+          kind: 'approval',
+          startSeq: event.seq,
+          endSeq: event.seq,
+          rows,
+          logicalLines
+        })
+        break
+      }
+
+      case 'approval/decided': {
+        const rows = []
+        const logicalLines = []
+        const decision = event.data?.decision === 'allow' ? `${ANSI.green}✓ Approved${ANSI.reset}` : `${ANSI.coral}✗ Denied${ANSI.reset}`
+        rows.push(`  ${decision}`)
+        rows.push('')
+        logicalLines.push(event.data?.decision === 'allow' ? 'Approved' : 'Denied')
+
+        addBlock({
+          key: `approval-decided-${event.seq || item.index}`,
+          kind: 'approval/decided',
+          startSeq: event.seq,
+          endSeq: event.seq,
+          rows,
+          logicalLines
+        })
+        break
+      }
+
       case 'local/log': {
-        const entry = event.data ?? {}
-        if (entry.command) {
-          push('', `${ANSI.bash}${ANSI.bold}! ${safe(entry.command)}${ANSI.reset}`)
-          if (entry.text) {
-            for (const line of String(entry.text).split('\n')) {
-              push('', `  ${ANSI.dim}${safe(line)}${ANSI.reset}`)
-            }
-          }
-        } else if (entry.text) {
-          const color = entry.kind === 'error' ? ANSI.coral : (entry.kind === 'ok' ? ANSI.blue : ANSI.dim)
+        const entry = event.data
+        if (!entry || !entry.text) break
+        const rows = []
+        const logicalLines = []
+        const color = entry.level === 'ok' ? ANSI.green : (entry.level === 'err' ? ANSI.coral : ANSI.dim)
+        const icon = entry.level === 'ok' ? '✓' : (entry.level === 'err' ? '✗' : '·')
+
+        if (entry.badge) {
+          rows.push(`  ${color}${icon} ${safe(entry.badge)}: ${safe(entry.text)}${ANSI.reset}`)
+          logicalLines.push(`${entry.badge}: ${entry.text}`)
+        } else {
           for (const line of String(entry.text).split('\n')) {
-            push('', `  ${color}${safe(line)}${ANSI.reset}`)
+            rows.push(`  ${color}${safe(line)}${ANSI.reset}`)
+            logicalLines.push(line)
           }
         }
         rows.push('')
+
+        addBlock({
+          key: `log-${event.seq || item.index}`,
+          kind: 'local/log',
+          startSeq: event.seq,
+          endSeq: event.seq,
+          rows,
+          logicalLines
+        })
         break
       }
+
       default:
         break
     }
   }
-  flushGroup()
-  const cleaned = []
-  for (const r of rows) {
-    if (r === '' && cleaned.length > 0 && cleaned[cleaned.length - 1] === '') continue
-    cleaned.push(r)
+
+  // Active stream block (live in-progress assistant streaming)
+  const activeStream = options.activeStream
+  if (activeStream && (activeStream.text || activeStream.reasoning || activeStream.tool)) {
+    if (!turnHeaderPrinted) {
+      turnHeaderPrinted = true
+      const modelName = activeStream.model || (activeModel?.model ?? defaultModel ?? 'DeepSeek')
+      addBlock({
+        key: 'active-header',
+        kind: 'turn-header',
+        startSeq: 999999,
+        endSeq: 999999,
+        rows: [
+          `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(activeStream.time || Date.now())}${ANSI.reset}`,
+          ''
+        ],
+        logicalLines: [`DSH ${modelName} · ${formatTime(activeStream.time || Date.now())}`]
+      })
+    }
+
+    if (activeStream.reasoning) {
+      const isExpanded = expandedKeys.has('active-reasoning')
+      const lines = activeStream.reasoning.split('\n').length
+      const expandHint = isExpanded ? '(ctrl+o to collapse)' : '(ctrl+o to expand)'
+      const reasonRows = [
+        `  ${ANSI.detail}⚛ Thought for ${lines} lines ${ANSI.dim}${expandHint}${ANSI.reset}`
+      ]
+      const reasonLogical = [`Thought for ${lines} lines`]
+      if (isExpanded) {
+        for (const line of wrap(activeStream.reasoning, contentWidth - 4)) {
+          reasonRows.push(`    ${ANSI.detail}${line}${ANSI.reset}`)
+          reasonLogical.push(line)
+        }
+      }
+      reasonRows.push('')
+      addBlock({
+        key: 'active-reasoning',
+        kind: 'reasoning',
+        startSeq: 999999,
+        endSeq: 999999,
+        collapsed: !isExpanded,
+        summary: `Thought for ${lines} lines`,
+        rows: reasonRows,
+        logicalLines: reasonLogical
+      })
+    }
+
+    if (activeStream.text) {
+      const mdRows = renderMarkdownRows(activeStream.text, contentWidth, ANSI.answer, ANSI)
+      const answerRows = []
+      for (const r of mdRows) {
+        if (r === null) answerRows.push('')
+        else answerRows.push(r[0] + r[1])
+      }
+      answerRows.push('')
+      addBlock({
+        key: 'active-stream',
+        kind: 'answer',
+        startSeq: 999999,
+        endSeq: 999999,
+        rows: answerRows,
+        logicalLines: [activeStream.text]
+      })
+    }
+
+    if (activeStream.tool) {
+      const toolName = safe(activeStream.tool.name || 'tool')
+      addBlock({
+        key: 'active-tool',
+        kind: 'activity',
+        startSeq: 999999,
+        endSeq: 999999,
+        rows: [`  ${ANSI.amber}⚙ Calling ${toolName}...${ANSI.reset}`, ''],
+        logicalLines: [`Calling ${toolName}`]
+      })
+    }
   }
-  while (cleaned.length > 0 && cleaned[cleaned.length - 1] === '') cleaned.pop()
-  return cleaned
+
+  // Clean empty consecutive rows and re-synchronize blocks metadata
+  const cleanedRows = []
+  const cleanedLayout = []
+  for (let idx = 0; idx < flatRows.length; idx++) {
+    const r = flatRows[idx]
+    if (r === '' && cleanedRows.length > 0 && cleanedRows[cleanedRows.length - 1] === '') {
+      continue
+    }
+    cleanedRows.push(r)
+    cleanedLayout.push(layoutMap[idx] || { blockKey: 'unknown', blockRowIndex: 0, blockKind: 'unknown' })
+  }
+  while (cleanedRows.length > 0 && cleanedRows[cleanedRows.length - 1] === '') {
+    cleanedRows.pop()
+    cleanedLayout.pop()
+  }
+
+  // Re-map blocks startRow & rowCount so they strictly match cleanedRows and cleanedLayout
+  const blockMetaMap = new Map()
+  for (let i = 0; i < cleanedLayout.length; i++) {
+    const entry = cleanedLayout[i]
+    if (!blockMetaMap.has(entry.blockKey)) {
+      blockMetaMap.set(entry.blockKey, { startRow: i, count: 1 })
+    } else {
+      blockMetaMap.get(entry.blockKey).count += 1
+    }
+  }
+
+  for (const block of blocks) {
+    const meta = blockMetaMap.get(block.key)
+    if (meta) {
+      block.startRow = meta.startRow
+      block.rowCount = meta.count
+    } else {
+      block.startRow = 0
+      block.rowCount = 0
+    }
+  }
+
+  return {
+    blocks,
+    rows: cleanedRows,
+    layoutMap: cleanedLayout,
+    totalLines: cleanedRows.length
+  }
+}
+
+/**
+ * Backward-compatible helper returning plain row array.
+ */
+export function formatEvents(events, columns, options = {}) {
+  const result = projectTranscript(events, columns, options)
+  return result.rows
 }

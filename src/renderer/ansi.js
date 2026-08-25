@@ -57,6 +57,31 @@ export function widthOf(text) {
   return width
 }
 
+export function colToCharIndex(text, targetVisualCol, round = 'floor') {
+  if (!text || targetVisualCol <= 0) return 0
+  let currentVisualCol = 0
+  let charIndex = 0
+
+  for (const { segment } of graphemeEntries(text)) {
+    const w = graphemeWidth(segment)
+    if (currentVisualCol + w > targetVisualCol) {
+      return round === 'ceil' ? charIndex + segment.length : charIndex
+    }
+    currentVisualCol += w
+    charIndex += segment.length
+    if (currentVisualCol === targetVisualCol) {
+      return charIndex
+    }
+  }
+  return text.length
+}
+
+export function charIndexToVisualCol(text, targetCharIndex) {
+  if (!text || targetCharIndex <= 0) return 0
+  const sub = text.slice(0, targetCharIndex)
+  return widthOf(sub)
+}
+
 export function safe(text) {
   return String(text ?? '')
     .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
@@ -128,11 +153,37 @@ export function padWidth(text, max) {
   return `${text}${' '.repeat(max - width)}`
 }
 
-export function wrap(text, columns) {
-  const width = Math.max(20, columns)
+export function stripMarkdownSyntax(text) {
+  return safe(text)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    .replace(/\*([^\n]+?)\*/g, '$1')
+    .replace(/(?<![\p{L}\p{N}])_([^_\n]+?)_(?![\p{L}\p{N}])/gu, '$1')
+}
+
+export function wrapWithSpans(text, columns) {
+  const width = Math.max(4, columns)
   const lines = []
-  for (const source of safe(text).split('\n')) {
+  const spans = []
+  const safeText = safe(text)
+
+  let sourceCursor = 0
+  const rawParagraphs = safeText.split('\n')
+
+  for (let p = 0; p < rawParagraphs.length; p++) {
+    const source = rawParagraphs[p]
     let line = source
+    let lineSourceOffset = sourceCursor
+
+    if (line.length === 0) {
+      lines.push('')
+      spans.push({ sourceStart: lineSourceOffset, sourceEnd: lineSourceOffset, text: '' })
+      sourceCursor += 1 // for \n
+      continue
+    }
+
     while (widthOf(line) > width) {
       let cut = -1
       let acc = 0
@@ -143,20 +194,53 @@ export function wrap(text, columns) {
         acc += w
       }
       if (cut >= Math.floor(width / 2)) {
-        let head = line.slice(0, cut).trimEnd()
-        while (widthOf(head) > width) head = truncateWidth(head, width)
+        const head = line.slice(0, cut).trimEnd()
+        const headTrimmedLen = head.length
+        spans.push({
+          sourceStart: lineSourceOffset,
+          sourceEnd: lineSourceOffset + headTrimmedLen,
+          text: head
+        })
         lines.push(head)
-        line = line.slice(cut).trimStart()
+
+        // Skip whitespace between wrapped words in source string
+        const nextStartInLine = cut + (line.slice(cut).match(/^\s+/)?.[0]?.length || 0)
+        lineSourceOffset += nextStartInLine
+        line = line.slice(nextStartInLine)
       } else {
-        // No usable break point (long URL / CJK / code): hard-wrap at width.
+        // CJK / long word / unbreakable token: hard-wrap at width
         const head = truncateWidth(line, width)
+        spans.push({
+          sourceStart: lineSourceOffset,
+          sourceEnd: lineSourceOffset + head.length,
+          text: head
+        })
         lines.push(head)
+        lineSourceOffset += head.length
         line = line.slice(head.length)
       }
     }
-    lines.push(line)
+
+    if (line.length > 0) {
+      spans.push({
+        sourceStart: lineSourceOffset,
+        sourceEnd: lineSourceOffset + line.length,
+        text: line
+      })
+      lines.push(line)
+    }
+
+    sourceCursor += source.length
+    if (p < rawParagraphs.length - 1) {
+      sourceCursor += 1 // for '\n'
+    }
   }
-  return lines
+
+  return { lines, spans }
+}
+
+export function wrap(text, columns) {
+  return wrapWithSpans(text, columns).lines
 }
 
 export function shorten(text, size = 110) {
@@ -182,6 +266,7 @@ export function formatDurationMs(ms) {
 }
 
 export function textOf(content) {
+  if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
   return content.filter((block) => block?.type === 'text').map((block) => block.text).join('')
 }
