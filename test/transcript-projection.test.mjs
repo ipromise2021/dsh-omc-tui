@@ -46,15 +46,15 @@ const multiToolEvents = [
 
 const multiSpans = groupActivitySpans(multiToolEvents)
 const activities = multiSpans.filter(s => s.kind === 'activity')
-assert.equal(activities.length, 1, 'Tools across intermediate messages must be grouped into a single activity span')
-assert.equal(activities[0].span.calls.length, 3, 'Should contain all 3 tool calls')
+assert.equal(activities.length, 3, 'Each tool call should be an individual activity item')
+assert.equal(activities[0].span.calls.length, 1)
 
 const multiDoc = projectTranscript(multiToolEvents, 80)
-const multiBlock = multiDoc.blocks.find(b => b.kind === 'activity')
-assert.ok(multiBlock)
-assert.match(multiBlock.summary, /3 tools/)
-assert.match(multiBlock.summary, /Read ×2/)
-assert.match(multiBlock.summary, /Edit/)
+const multiBlocks = multiDoc.blocks.filter(b => b.kind === 'activity')
+assert.equal(multiBlocks.length, 3, 'Document should project 3 distinct activity blocks')
+assert.match(multiBlocks[0].summary, /Read\(a\.js\)/)
+assert.match(multiBlocks[1].summary, /Read\(b\.js\)/)
+assert.match(multiBlocks[2].summary, /Edit\(a\.js\)/)
 
 // 4. Approval and Hook integration
 const approvalEvents = [

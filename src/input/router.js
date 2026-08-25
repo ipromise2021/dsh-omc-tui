@@ -94,6 +94,22 @@ export class InputRouter {
           return
         }
 
+        // Meta / Alt CSI sequences: \x1b\x1b[... or \x1b\x1bO...
+        if (tail.startsWith('\x1b\x1b[')) {
+          const metaCsiMatch = tail.match(/^(\x1b\x1b(?:\[[0-9;]*[A-Za-z~]|O[A-Za-z]))/)
+          if (metaCsiMatch) {
+            const seq = metaCsiMatch[1]
+            this.app?.handleToken?.(seq)
+            i += seq.length
+            continue
+          }
+          if (/^\x1b\x1b\[[0-9;]*$/.test(tail)) {
+            this.buffer = tail
+            this.setFlushTimer()
+            return
+          }
+        }
+
         // CSI / SS3 matches: \x1b[... or \x1bO...
         const csiMatch = tail.match(/^(\x1b(?:\[[0-9;]*[A-Za-z~]|O[A-Za-z]))/)
         if (csiMatch) {
@@ -108,8 +124,17 @@ export class InputRouter {
           continue
         }
 
+        // 2-byte Alt/Option key combinations: \x1bb, \x1bf, \x1bd, \x1b\x7f, \x1b\x08, etc.
+        const altMatch = tail.match(/^(\x1b[\x20-\x7e\x7f\x08])/)
+        if (altMatch) {
+          const seq = altMatch[1]
+          this.app?.handleToken?.(seq)
+          i += seq.length
+          continue
+        }
+
         // Incomplete CSI / SS3 sequence prefix at the end of input chunk
-        if (tail === '\x1b' || /^\x1b\[[0-9;]*$/.test(tail) || tail === '\x1bO') {
+        if (tail === '\x1b' || /^\x1b\[[0-9;]*$/.test(tail) || tail === '\x1bO' || tail === '\x1b\x1b' || /^\x1b\x1b\[[0-9;]*$/.test(tail)) {
           this.buffer = tail
           this.setFlushTimer()
           return

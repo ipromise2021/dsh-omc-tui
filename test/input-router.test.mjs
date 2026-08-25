@@ -108,6 +108,25 @@ router.processInput('1~')
 assert.deepEqual(pasteEvents, ['hello world'], 'Bracketed paste with split closing marker must resolve successfully')
 assert.equal(router.inPaste, false, 'inPaste must be reset to false')
 
+// 11. Alt/Option and Meta key sequence dispatch
+tokenEvents = []
+router.processInput('\x1bb') // Alt+Left (iTerm2/Emacs)
+router.processInput('\x1bf') // Alt+Right (iTerm2/Emacs)
+router.processInput('\x1b\x7f') // Alt+Backspace
+router.processInput('\x1b\x1b[D') // Meta+Left (macOS Terminal)
+router.processInput('\x1b\x1b[C') // Meta+Right (macOS Terminal)
+router.processInput('\x1b[1;3D') // Alt+Left (xterm)
+router.processInput('\x1b[1;3C') // Alt+Right (xterm)
+assert.deepEqual(tokenEvents, [
+  '\x1bb',
+  '\x1bf',
+  '\x1b\x7f',
+  '\x1b\x1b[D',
+  '\x1b\x1b[C',
+  '\x1b[1;3D',
+  '\x1b[1;3C'
+], 'Alt and Meta sequences must be dispatched intact to app.handleToken')
+
 router.dispose()
 
 console.log('✓ input router unit tests passed')

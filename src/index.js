@@ -4795,13 +4795,26 @@ export class TuiApp {
       this.eraseBefore()
       return
     }
-    let index = this.cursor - 1
-    while (index >= 0 && /\s/.test(this.input[index])) index -= 1
-    while (index >= 0 && !/\s/.test(this.input[index])) index -= 1
-    const start = Math.max(0, index + 1)
+    const start = moveWordLeft(this.input, this.cursor)
     if (start === this.cursor) return
     this.input = this.input.slice(0, start) + this.input.slice(this.cursor)
     this.cursor = start
+    this.updateMenu()
+    this.maybeOpenFilePicker()
+    this.scheduleRender(true)
+  }
+
+  eraseWordAfter() {
+    this.clearPromptSuggestion?.()
+    this.clearShellCompletion?.()
+    this.pasteFolded = undefined
+    if (this.selection) {
+      this.eraseBefore()
+      return
+    }
+    const end = moveWordRight(this.input, this.cursor)
+    if (end === this.cursor) return
+    this.input = this.input.slice(0, this.cursor) + this.input.slice(end)
     this.updateMenu()
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
@@ -5648,10 +5661,10 @@ export class TuiApp {
       })()
       return
     }
-    if (value === '\x1bb') return this.moveWordLeft()
-    if (value === '\x1bf') return this.moveWordRight()
-    if (value === '\x17') return this.eraseWordBefore()
-    if (value === '\x1b\x7f') return this.eraseWordBefore()
+    if (value === '\x1bb' || value === '\x1b[1;3D' || value === '\x1b[1;5D' || value === '\x1b[5D' || value === '\x1b\x1b[D') return this.moveWordLeft()
+    if (value === '\x1bf' || value === '\x1b[1;3C' || value === '\x1b[1;5C' || value === '\x1b[5C' || value === '\x1b\x1b[C') return this.moveWordRight()
+    if (value === '\x17' || value === '\x1b\x7f' || value === '\x1b\x08') return this.eraseWordBefore()
+    if (value === '\x1bd' || value === '\x1b[3;3~' || value === '\x1b[3;5~') return this.eraseWordAfter()
     if (value === '\r') return this.submit()
     if (value === '\n') return this.insertText('\n')
     if (value === '\x7f' || value === '\x08') return this.eraseBefore()
@@ -5859,8 +5872,8 @@ export class TuiApp {
       }
       return this.moveRight()
     }
-    if (value === '\x1b[1;3D') return this.moveWordLeft()
-    if (value === '\x1b[1;3C') return this.moveWordRight()
+    if (value === '\x1b[1;3D' || value === '\x1b[1;5D' || value === '\x1b[5D' || value === '\x1b\x1b[D') return this.moveWordLeft()
+    if (value === '\x1b[1;3C' || value === '\x1b[1;5C' || value === '\x1b[5C' || value === '\x1b\x1b[C') return this.moveWordRight()
     if (value === '\x1b[H' || value === '\x1b[1~' || value === '\x1bOH') return this.moveToLineStart()
     if (value === '\x1b[F' || value === '\x1b[4~' || value === '\x1bOF') return this.moveToLineEnd()
     if (value === '\x1b[3~') return this.eraseAt()
