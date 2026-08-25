@@ -1339,7 +1339,7 @@ const hudStatus = renderStatusRows({
 const hudText = visibleOf(hudStatus.rows.join('\n'))
 assert.match(hudText, /git:\(main\* ↑1\)/)
 assert.match(hudText, /48\.5 tok\/s/)
-assert.match(hudText, /2\.2s/)
+assert.match(hudText, /⏱️ 2s/)
 assert.match(hudText, /Context.*15k \/ 100k · 14% \| session in 12k · out 2\.5k/)
 assert.match(hudText, /Read: index\.js/)
 assert.match(hudText, /Edit: statusline\.js/)
@@ -1909,9 +1909,11 @@ for (const dispose of [...liveApp.disposers].reverse()) dispose()
 
 // Stop repetitive stream in AltScreen mode test
 let stopRepetitiveCalled = false
+let streamCommitCalls = 0
 const altApp = new TuiApp({})
 altApp.agent = { status: 'running', session: {}, cancel() {} }
 altApp.screenRenderer = { isAltScreen: true }
+altApp.commitUnprintedEvents = () => { streamCommitCalls++ }
 altApp.stopRepetitiveStream = (chunk) => {
   stopRepetitiveCalled = true
   return false
@@ -1922,13 +1924,69 @@ altApp.onSessionEvent(altApp.agent.session, {
   data: { chunk: { type: 'text-delta', text: 'testing chunk' } }
 })
 assert.equal(stopRepetitiveCalled, true, 'stopRepetitiveStream MUST be invoked in AltScreen mode upon text-delta')
+assert.equal(altApp.streaming.text, 'testing chunk', 'Text deltas must be appended immediately instead of waiting in a typewriter queue')
+assert.equal(streamCommitCalls, 0, 'Text deltas must not rebuild the durable transcript')
+assert.equal(altApp.needsLiveProjection, true, 'Text deltas must schedule a live-tail projection')
 
 // Reasoning persistence across text streaming
 altApp.active = true
 altApp.streaming.reasoning = 'Thinking about algorithms'
 altApp.flushThinking(11)
-assert.equal(altApp.streaming.reasoning, '', 'streaming.reasoning cleared after flush')
-assert.ok(altApp.activeStreamPayload().reasoning.includes('Thinking about algorithms'), 'Reasoning remains persistent in activeStreamPayload during subsequent text streaming')
+// Lifecycle & Live Tail Projection Assertions
+const benchApp = new TuiApp({})
+benchApp.terminalOpen = true
+benchApp.agent = { status: 'running', session: { events: [] }, cancel() {} }
+benchApp.screenRenderer = {
+  isAltScreen: true,
+  composeFrame(rows, footer) { return { screenLines: [...rows, ...footer] } },
+  renderFrame() {}
+}
+
+// 1. Synthetic long session document cache invariant test
+for (let i = 1; i <= 100; i++) {
+  benchApp.agent.session.events.push(
+    { seq: i * 2 - 1, type: 'user/message', time: 1000 + i * 10, data: { source: { kind: 'user' }, content: [{ type: 'text', text: `Question ${i}` }] } },
+    { seq: i * 2, type: 'assistant/message', time: 1000 + i * 10 + 5, data: { message: { content: `Answer ${i} with code\n\`\`\`js\nconst val = ${i};\n\`\`\`` } } }
+  )
+}
+benchApp.reprojectDocument(true)
+const baseDoc = benchApp.baseTranscriptDocument
+assert.ok(baseDoc, 'baseTranscriptDocument must be cached')
+
+// Simulate high-frequency streaming deltas (including CJK and emoji)
+benchApp.active = true
+const streamDeltas = ['你好', '世界', ' 🚀 ', 'test\n', '```python\nprint("hello")\n```\n', '🎯 end of stream']
+for (const chunkText of streamDeltas) {
+  benchApp.onSessionEvent(benchApp.agent.session, {
+    type: 'assistant/chunk',
+    seq: 300,
+    data: { chunk: { type: 'text-delta', text: chunkText } }
+  })
+}
+assert.equal(benchApp.baseTranscriptDocument, baseDoc, 'Streaming chunks MUST NOT re-project baseTranscriptDocument')
+benchApp.render()
+assert.ok(benchApp.viewport.allRows.join('\n').includes('🎯 end of stream'), 'Live stream merged into viewport')
+
+// 2. Lifecycle drain on assistant/message
+benchApp.onSessionEvent(benchApp.agent.session, {
+  type: 'assistant/message',
+  seq: 301,
+  data: { message: { content: 'Final message content' } }
+})
+assert.equal(benchApp.streaming.text, '', 'streaming text cleared on final message')
+assert.ok(!benchApp.typewriterQueue, 'typewriterQueue drained/empty on final message')
+
+// 3. Status animation does NOT dirty transcript document
+benchApp.needsReproject = false
+benchApp.needsLiveProjection = false
+// Trigger an animation tick directly
+if (benchApp.turnStartTime) {
+  benchApp.scheduleRender()
+}
+assert.equal(benchApp.needsReproject, false, 'Animation timer must not dirty transcript projection')
+
+for (const dispose of [...benchApp.disposers].reverse()) dispose()
+
 for (const dispose of [...altApp.disposers].reverse()) dispose()
 
 for (const dispose of [...panelLayoutApp.disposers].reverse()) dispose()

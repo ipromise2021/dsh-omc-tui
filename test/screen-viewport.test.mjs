@@ -101,6 +101,12 @@ const targetBlock = toolVp.findTargetCollapsibleBlock()
 assert.ok(targetBlock, 'Must find collapsible activity block')
 assert.equal(targetBlock.kind, 'activity')
 
+const batchRes = toolVp.findTargetCollapsibleBlocks(new Set())
+assert.equal(batchRes.blocks.length, 1)
+assert.equal(batchRes.anyCollapsed, true, 'Initially collapsed without expandedKeys')
+const batchExpanded = toolVp.findTargetCollapsibleBlocks(new Set([targetBlock.key]))
+assert.equal(batchExpanded.anyCollapsed, false, 'Reports false when all blocks in target are already in expandedKeys')
+
 // 8. ScreenRenderer Frame Composition
 let capturedOutput = ''
 const mockStdout = {

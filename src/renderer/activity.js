@@ -141,13 +141,6 @@ export function groupActivitySpans(events) {
     const type = event.type
 
     if (isToolEvent(type)) {
-      if (type === 'tool/call') {
-        // If current span already has a completed tool call, close it and start a new item
-        if (currentSpan && currentSpan.calls.length > 0) {
-          closeCurrentSpan('completed', Number(event.time) || Date.now())
-        }
-      }
-
       if (!currentSpan) {
         const firstCallId = event.data?.callId || event.data?.id
         currentSpan = {
@@ -172,10 +165,6 @@ export function groupActivitySpans(events) {
       if (type === 'tool/call') currentSpan.calls.push(event)
       else if (type === 'tool/result') {
         currentSpan.results.push(event)
-        const hasPendingCalls = currentSpan.calls.length > currentSpan.results.length
-        if (!hasPendingCalls) {
-          closeCurrentSpan('completed', Number(event.time) || Date.now())
-        }
       }
       else if (type.startsWith('approval/')) currentSpan.approvals.push(event)
       else if (type.startsWith('hook/')) currentSpan.hooks.push(event)

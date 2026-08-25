@@ -269,12 +269,20 @@ export class SelectionController {
   }
 
   handleMouseMove(mouseEvent, viewport) {
-    if (!this.active || !this.start) return { consumed: false }
+    if (!this.active || !this.start) return { consumed: false, changed: false, scrollDelta: 0 }
 
     const allRows = viewport.document?.rows ?? viewport.allRows ?? []
     const docRow = Math.max(0, Math.min(allRows.length - 1, viewport.scrollTop + mouseEvent.row))
     const col = Math.max(0, mouseEvent.col)
-    this.end = resolvePointToBlockOffset(viewport, docRow, col)
+
+    const prevEnd = this.end
+    const newEnd = resolvePointToBlockOffset(viewport, docRow, col)
+
+    let changed = false
+    if (!prevEnd || prevEnd.docRow !== newEnd.docRow || prevEnd.col !== newEnd.col || prevEnd.charOffset !== newEnd.charOffset) {
+      this.end = newEnd
+      changed = true
+    }
 
     // Edge auto-scroll only if within valid scroll range
     let scrollDelta = 0
@@ -286,6 +294,7 @@ export class SelectionController {
 
     return {
       consumed: true,
+      changed: changed || scrollDelta !== 0,
       scrollDelta
     }
   }
@@ -433,7 +442,7 @@ export class SelectionController {
     if (!range) return visibleRows
     const { from, to } = range
 
-    const selBg = '\x1b[48;5;239m\x1b[38;5;255m' // Selection background
+    const selBg = ANSI?.selectionBg || '\x1b[48;5;239m\x1b[38;5;255m' // Selection background
 
     return visibleRows.map((row, screenRowIdx) => {
       const docRow = viewport.scrollTop + screenRowIdx

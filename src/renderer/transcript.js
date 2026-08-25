@@ -521,66 +521,67 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
 
   // Active stream block (live in-progress assistant streaming following the message flow)
   const activeStream = options.activeStream
-  if (activeStream) {
-    if (!turnHeaderPrinted) {
-      turnHeaderPrinted = true
-      const modelName = activeStream.model || (activeModel?.model ?? defaultModel ?? 'DeepSeek')
-      addBlock({
-        key: 'active-header',
-        kind: 'turn-header',
-        startSeq: 999999,
-        endSeq: 999999,
-        rows: [
-          `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(activeStream.time || Date.now())}${ANSI.reset}`,
-          ''
-        ],
-        logicalLines: [`DSH ${modelName} · ${formatTime(activeStream.time || Date.now())}`]
-      })
+  if (activeStream && (activeStream.text || activeStream.reasoning)) {
+    const isReasonCollapsed = expandedKeys.has('active-reasoning:collapsed')
+    const hasReason = Boolean(activeStream.reasoning && activeStream.reasoning.trim().length > 0)
+    const hasText = Boolean(activeStream.text && activeStream.text.length > 0)
+
+    if (hasText || hasReason) {
+      if (!turnHeaderPrinted) {
+        turnHeaderPrinted = true
+        const modelName = activeStream.model || (activeModel?.model ?? defaultModel ?? 'DeepSeek')
+        addBlock({
+          key: 'active-header',
+          kind: 'turn-header',
+          startSeq: 999999,
+          endSeq: 999999,
+          rows: [
+            `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(activeStream.time || Date.now())}${ANSI.reset}`,
+            ''
+          ],
+          logicalLines: [`DSH ${modelName} · ${formatTime(activeStream.time || Date.now())}`]
+        })
+      }
     }
 
-    if (activeStream.reasoning) {
-      const isExpanded = expandedKeys.has('active-reasoning')
+    if (hasReason) {
       const rawLines = activeStream.reasoning.split('\n').filter((l) => l.trim().length > 0)
       const lines = rawLines.length
-      const charCount = activeStream.reasoning.length
-      const expandHint = isExpanded ? '(ctrl+o to collapse)' : '(ctrl+o to expand)'
-      const frame = activeStream.frame || '⠋'
-      const dots = activeStream.dots || '...'
-      const elapsedSec = activeStream.elapsedSec || 1
+      const reasonRows = []
+      const reasonLogical = []
 
-      const reasonRows = [
-        `  ${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ${charCount} chars) ${ANSI.dim}${expandHint}${ANSI.reset}`
-      ]
-      const reasonLogical = [`Thinking (${elapsedSec}s · ${charCount} chars)`]
-
-      if (isExpanded) {
-        for (const line of wrap(activeStream.reasoning, contentWidth - 4)) {
-          reasonRows.push(`    ${ANSI.detail}${line}${ANSI.reset}`)
-          reasonLogical.push(line)
+      if (!isReasonCollapsed) {
+        // Visible by default during live streaming!
+        const reasonHeader = `  ${ANSI.detail}⚛ Thinking (${lines} lines) ${ANSI.dim}(ctrl+o to collapse)${ANSI.reset}`
+        reasonRows.push(reasonHeader)
+        reasonLogical.push(`Thinking (${lines} lines)`)
+        const wrapped = wrap(activeStream.reasoning, contentWidth - 4)
+        for (let i = 0; i < wrapped.length; i++) {
+          const isLast = i === wrapped.length - 1
+          const cursor = (isLast && !activeStream.text) ? `${ANSI.blue}▋${ANSI.reset}` : ''
+          reasonRows.push(`    ${ANSI.detail}${wrapped[i]}${cursor}${ANSI.reset}`)
+          reasonLogical.push(wrapped[i])
         }
       } else {
-        const recent = rawLines.slice(-3)
-        for (let i = 0; i < recent.length; i++) {
-          const isLast = i === recent.length - 1
-          const cursor = isLast ? `${ANSI.blue}▋${ANSI.reset}` : ''
-          reasonRows.push(`    ${ANSI.dim}│ ${shorten(recent[i].trim(), contentWidth - 12)}${cursor}${ANSI.reset}`)
-          reasonLogical.push(recent[i])
-        }
+        const reasonHeader = `  ${ANSI.detail}⚛ Thinking (${lines} lines) ${ANSI.dim}(ctrl+o to expand)${ANSI.reset}`
+        reasonRows.push(reasonHeader)
+        reasonLogical.push(`Thinking (${lines} lines)`)
       }
       reasonRows.push('')
+
       addBlock({
         key: 'active-reasoning',
         kind: 'reasoning',
         startSeq: 999999,
         endSeq: 999999,
-        collapsed: !isExpanded,
-        summary: `Thinking (${elapsedSec}s · ${charCount} chars)`,
+        collapsed: isReasonCollapsed,
+        summary: `Thinking (${lines} lines)`,
         rows: reasonRows,
         logicalLines: reasonLogical
       })
     }
 
-    if (activeStream.text) {
+    if (hasText) {
       const doc = renderMarkdownDocument(activeStream.text, contentWidth, ANSI.answer, ANSI)
       const answerRows = [...doc.rows]
       if (answerRows.length > 0) {
@@ -598,59 +599,32 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
         rowSpans: doc.rowSpans
       })
     }
-
-    if (activeStream.tool) {
-      const frame = activeStream.frame || '⠋'
-      const dots = activeStream.dots || '...'
-      const toolName = safe(activeStream.tool.name || 'tool')
-      const rawArgs = typeof activeStream.tool.args === 'string' ? activeStream.tool.args : JSON.stringify(activeStream.tool.args ?? '')
-      const cleanArgs = rawArgs.replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim()
-      const toolSec = activeStream.tool.startTime ? Math.max(1, Math.floor((Date.now() - activeStream.tool.startTime) / 1000)) : (activeStream.elapsedSec || 1)
-      const toolRows = [
-        `  ${ANSI.amber}${frame} Calling ${toolName}${dots} (${toolSec}s)${ANSI.reset}`
-      ]
-      if (cleanArgs) {
-        const argLines = wrap(cleanArgs, contentWidth - 12).slice(0, 2)
-        for (let i = 0; i < argLines.length; i++) {
-          const prefix = i === 0 ? '└ $ ' : '  '
-          toolRows.push(`    ${ANSI.dim}${prefix}${shorten(argLines[i], contentWidth - 12)}${ANSI.reset}`)
-        }
-      }
-      if (activeStream.message) {
-        toolRows.push(`    ${ANSI.dim}  [${activeStream.message}]${ANSI.reset}`)
-      }
-      toolRows.push('')
-      addBlock({
-        key: 'active-tool',
-        kind: 'activity',
-        startSeq: 999999,
-        endSeq: 999999,
-        rows: toolRows,
-        logicalLines: toolRows.map(visibleOf)
-      })
-    }
-
-    if (!activeStream.reasoning && !activeStream.text && !activeStream.tool) {
-      const frame = activeStream.frame || '⠋'
-      const dots = activeStream.dots || '...'
-      const elapsedSec = activeStream.elapsedSec || 1
-      const phrase = activeStream.phrase || 'Thinking'
-      const spinnerRows = [
-        `  ${ANSI.blueSoft}${frame} ${phrase}${dots} (${elapsedSec}s)${ANSI.reset}`,
-        `    ${ANSI.dim}│ processing prompt...${ANSI.reset}`,
-        ''
-      ]
-      addBlock({
-        key: 'active-spinner',
-        kind: 'activity',
-        startSeq: 999999,
-        endSeq: 999999,
-        rows: spinnerRows,
-        logicalLines: spinnerRows.map(visibleOf)
-      })
-    }
   }
 
+  return finalizeTranscriptDocument(blocks, flatRows, layoutMap)
+}
+
+/**
+ * Combine independently projected document sections without reparsing their
+ * already-rendered rows. The streaming tail uses this to avoid rebuilding the
+ * complete transcript for each delta.
+ */
+export function mergeTranscriptDocuments(documents = []) {
+  const blocks = []
+  const flatRows = []
+  const layoutMap = []
+
+  for (const document of documents) {
+    if (!document) continue
+    for (const block of document.blocks || []) blocks.push(block)
+    flatRows.push(...(document.rows || []))
+    layoutMap.push(...(document.layoutMap || []))
+  }
+
+  return finalizeTranscriptDocument(blocks, flatRows, layoutMap)
+}
+
+function finalizeTranscriptDocument(blocks, flatRows, layoutMap) {
   // Clean empty consecutive rows and re-synchronize blocks metadata
   const cleanedRows = []
   const cleanedLayout = []

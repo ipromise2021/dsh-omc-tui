@@ -24,6 +24,7 @@ export const THEMES = {
     contextFill: '\x1b[38;5;65m', // Muted green for normal context pressure
     contextWarning: '\x1b[38;5;172m', // Deep amber for elevated context pressure
     contextCritical: '\x1b[38;5;167m', // Deep red for critical context pressure
+    selectionBg: '\x1b[48;5;239m\x1b[38;5;255m',
     userBg: '\x1b[48;5;237m',
     diffRemoveBg: '\x1b[48;5;52m',
     diffAddBg: '\x1b[48;5;236m'
@@ -50,6 +51,7 @@ export const THEMES = {
     contextFill: '\x1b[38;5;31m',
     contextWarning: '\x1b[38;5;130m',
     contextCritical: '\x1b[38;5;124m',
+    selectionBg: '\x1b[48;5;24m\x1b[38;5;255m',
     userBg: '\x1b[48;5;236m',     // Slightly lighter bg
     diffRemoveBg: '\x1b[48;5;52m',
     diffAddBg: '\x1b[48;5;236m'
@@ -75,6 +77,7 @@ export const THEMES = {
     contextFill: '\x1b[38;5;246m',
     contextWarning: '\x1b[38;5;245m',
     contextCritical: '\x1b[1;37m',
+    selectionBg: '\x1b[7m',
     userBg: '\x1b[48;5;238m',
     diffRemoveBg: '\x1b[48;5;238m',
     diffAddBg: '\x1b[48;5;236m'
@@ -100,6 +103,7 @@ export const THEMES = {
     contextFill: '\x1b[38;5;28m',
     contextWarning: '\x1b[38;5;130m',
     contextCritical: '\x1b[38;5;124m',
+    selectionBg: '\x1b[48;5;252m\x1b[38;5;235m',
     userBg: '\x1b[48;5;252m',
     diffRemoveBg: '\x1b[48;5;224m',
     diffAddBg: '\x1b[48;5;253m'

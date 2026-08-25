@@ -170,34 +170,39 @@ export class ViewportState {
   }
 
   /**
-   * Find nearest collapsible block for Ctrl+O targeting.
-   * Priority:
-   * 1. If focused block is collapsible, use it.
-   * 2. Nearest visible collapsible block in current viewport.
-   * 3. Nearest collapsible block in the whole document.
+   * Find the one block Ctrl+O should affect: the focused block, then the most
+   * recent visible block, then the most recent collapsible block in history.
    */
   findTargetCollapsibleBlock() {
+    if (this.blocks.length === 0) return null
+    const collapsibleBlocks = this.blocks.filter((b) => b.kind === 'activity' || b.kind === 'reasoning')
+    if (collapsibleBlocks.length === 0) return null
     if (this.focusedBlockKey) {
-      const focused = this.blocks.find(b => b.key === this.focusedBlockKey && (b.kind === 'activity' || b.kind === 'reasoning'))
+      const focused = collapsibleBlocks.find(b => b.key === this.focusedBlockKey)
       if (focused) return focused
     }
 
-    // Check visible rows from top to bottom
+    const visibleKeys = new Set()
     const start = Math.min(this.layoutMap.length, this.scrollTop)
     const end = Math.min(this.layoutMap.length, start + this.viewportHeight)
     for (let i = start; i < end; i++) {
       const entry = this.layoutMap[i]
-      const block = this.blocks.find(b => b.key === entry?.blockKey && (b.kind === 'activity' || b.kind === 'reasoning'))
-      if (block) return block
+      if (entry?.blockKey) visibleKeys.add(entry.blockKey)
     }
 
-    // If none visible, find the most recent collapsible block in entire doc
-    for (let i = this.blocks.length - 1; i >= 0; i--) {
-      const b = this.blocks[i]
-      if (b.kind === 'activity' || b.kind === 'reasoning') return b
-    }
+    const visibleBlocks = collapsibleBlocks.filter((b) => visibleKeys.has(b.key))
+    return visibleBlocks.at(-1) || collapsibleBlocks.at(-1)
+  }
 
-    return null
+  // Kept for callers compiled against the previous viewport API. Ctrl+O uses
+  // the single-block method above and never performs a batch toggle.
+  findTargetCollapsibleBlocks(expandedKeys = new Set()) {
+    const block = this.findTargetCollapsibleBlock()
+    if (!block) return { blocks: [], anyCollapsed: false }
+    const anyCollapsed = block.key === 'active-reasoning'
+      ? expandedKeys.has('active-reasoning:collapsed')
+      : !expandedKeys.has(block.key)
+    return { blocks: [block], anyCollapsed }
   }
 
   /**

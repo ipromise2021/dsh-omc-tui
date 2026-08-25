@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { projectTranscript, formatEvents } from '../src/renderer/transcript.js'
+import { projectTranscript, formatEvents, mergeTranscriptDocuments } from '../src/renderer/transcript.js'
 import { groupActivitySpans } from '../src/renderer/activity.js'
 import { widthOf, visibleOf } from '../src/renderer/ansi.js'
 
@@ -46,15 +46,15 @@ const multiToolEvents = [
 
 const multiSpans = groupActivitySpans(multiToolEvents)
 const activities = multiSpans.filter(s => s.kind === 'activity')
-assert.equal(activities.length, 3, 'Each tool call should be an individual activity item')
+assert.equal(activities.length, 2, 'Contiguous tool nodes should remain in one collapsible activity subtree')
 assert.equal(activities[0].span.calls.length, 1)
+assert.equal(activities[1].span.calls.length, 2)
 
 const multiDoc = projectTranscript(multiToolEvents, 80)
 const multiBlocks = multiDoc.blocks.filter(b => b.kind === 'activity')
-assert.equal(multiBlocks.length, 3, 'Document should project 3 distinct activity blocks')
+assert.equal(multiBlocks.length, 2, 'Document should keep contiguous tool nodes together')
 assert.match(multiBlocks[0].summary, /Read\(a\.js\)/)
-assert.match(multiBlocks[1].summary, /Read\(b\.js\)/)
-assert.match(multiBlocks[2].summary, /Edit\(a\.js\)/)
+assert.match(multiBlocks[1].summary, /2 tools · Read · Edit/)
 
 // 4. Approval and Hook integration
 const approvalEvents = [
@@ -107,7 +107,28 @@ const streamDoc = projectTranscript(singleToolEvents, 80, {
 })
 const streamRowsText = streamDoc.rows.join('\n')
 assert.ok(streamRowsText.includes('Live streaming answer in progress...'), 'Active streaming text must be projected in document')
-assert.ok(streamRowsText.includes('Thinking') || streamRowsText.includes('Thought for'), 'Active reasoning must be projected in document')
+assert.ok(streamRowsText.includes('Thinking deeply about the universe'), 'Live active reasoning must be visible by default')
+
+const stableDoc = projectTranscript(singleToolEvents, 80)
+const liveTailDoc = projectTranscript([], 80, {
+  activeStream: { text: 'Only the active tail is projected again.' }
+})
+const mergedStreamDoc = mergeTranscriptDocuments([stableDoc, liveTailDoc])
+assert.ok(mergedStreamDoc.rows.join('\n').includes('File contents are read.'), 'Merged document keeps stable history rows')
+assert.ok(mergedStreamDoc.rows.join('\n').includes('Only the active tail is projected again.'), 'Merged document appends the live tail')
+
+const collapsedStreamDoc = projectTranscript(singleToolEvents, 80, {
+  activeStream: {
+    text: 'Live streaming answer in progress...',
+    reasoning: 'Thinking deeply about the universe',
+    model: 'deepseek-v4-flash',
+    time: 2000
+  },
+  expandedKeys: new Set(['active-reasoning:collapsed'])
+})
+const collapsedText = collapsedStreamDoc.rows.join('\n')
+assert.ok(!collapsedText.includes('Thinking deeply about the universe'), 'Live reasoning should hide detail when collapsed')
+assert.ok(collapsedText.includes('Thinking (1 lines)'), 'Live reasoning should show summary when collapsed')
 
 // 9. Block metadata realignment test: startRow and rowCount must strictly match cleanedRows indices
 for (const block of streamDoc.blocks) {

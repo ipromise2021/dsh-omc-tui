@@ -42,6 +42,7 @@ import {
   renderStatusRows,
   formatEvents,
   projectTranscript,
+  mergeTranscriptDocuments,
   groupActivitySpans,
   ViewportState,
   ScreenRenderer,
@@ -369,6 +370,11 @@ export class TuiApp {
     this.sessionTitleCache = new Map() // sessionId -> Title object
     this.renderTimer = undefined
     this.renderPending = false
+    this.baseTranscriptDocument = undefined
+    this.baseTranscriptColumns = undefined
+    this.needsLiveProjection = false
+    this.edgeScrollTimer = undefined
+    this.edgeScrollDelta = 0
     this.backgroundInitTimer = undefined
     this.autoCompactTimer = undefined
     this.animationTimer = undefined
@@ -776,6 +782,8 @@ export class TuiApp {
     clearTimeout(this.imageFlushTimer)
     clearInterval(this.animationTimer)
     this.animationTimer = undefined
+    this.needsLiveProjection = false
+    this.stopEdgeAutoScroll()
     process.stdin.off('data', this.onData)
     process.stdout.off('resize', this.onResize)
     if (process.stdin.isTTY) process.stdin.setRawMode(false)
@@ -827,13 +835,12 @@ export class TuiApp {
         this.animationTimer = setInterval(() => {
           if (this.turnStartTime) {
             const durationMs = Math.max(100, Date.now() - this.turnStartTime)
-            this.turnStats = { speed: this.turnStats.speed, durationMs, active: true }
+            const generatedTokens = Math.max(0, (this.usage?.output ?? 0) - (this.turnStartOutputTokens ?? 0))
+            const speed = (generatedTokens > 0 && durationMs > 500) ? (generatedTokens / (durationMs / 1000)) : (this.turnStats?.speed || 0)
+            this.turnStats = { speed, durationMs, active: true }
           }
           const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.providerPanel || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.exitConfirm || this.skillsPanel
           if (hasOverlay) return
-          if (this.screenRenderer?.isAltScreen) {
-            this.needsReproject = true
-          }
           this.scheduleRender()
         }, 100)
       }
@@ -970,7 +977,7 @@ export class TuiApp {
     const model = truncateWidth(`${selection.provider}/${selection.model}`, Math.max(20, contentWidth - 28))
     const welcome = welcomeCardRows(columns, workspace, model, (this.currentEffort?.() ?? 'DEFAULT').toUpperCase())
 
-    const doc = projectTranscript(combined, columns, {
+    const options = {
       expandedKeys: this.expandedKeys,
       skills: this.skills.filter((skill) => skill.enabled !== false),
       reasoningBlocks: this.reasoningBlocks,
@@ -978,12 +985,52 @@ export class TuiApp {
       defaultModel: this.agent?.options?.model || '',
       ANSI,
       focusedBlockKey: this.focusedBlockKey,
-      welcomeRows: welcome,
-      activeStream: this.activeStreamPayload()
-    })
+      welcomeRows: welcome
+    }
+
+    this.baseTranscriptDocument = projectTranscript(combined, columns, options)
+    this.baseTranscriptColumns = columns
+    this.needsLiveProjection = false
 
     this.viewport.setDimensions(columns, viewportHeight)
-    this.viewport.updateDocument(doc, { preserveFollowEnd })
+    this.viewport.updateDocument(mergeTranscriptDocuments([
+      this.baseTranscriptDocument,
+      this.projectLiveStreamDocument(columns)
+    ]), { preserveFollowEnd })
+  }
+
+  projectLiveStreamDocument(columns = process.stdout.columns || 80) {
+    return projectTranscript([], columns, {
+      expandedKeys: this.expandedKeys,
+      activeModel: this.activeModel,
+      defaultModel: this.agent?.options?.model || '',
+      ANSI,
+      activeStream: this.activeStreamPayload()
+    })
+  }
+
+  reprojectLiveStream(preserveFollowEnd = true) {
+    const columns = process.stdout.columns || 80
+    const rows = process.stdout.rows || 24
+    const footerHeight = this.lastFooterHeight || 4
+    const viewportHeight = Math.max(1, rows - footerHeight)
+
+    if (!this.baseTranscriptDocument || this.baseTranscriptColumns !== columns) {
+      this.reprojectDocument(preserveFollowEnd)
+      return
+    }
+
+    this.viewport.setDimensions(columns, viewportHeight)
+    this.viewport.updateDocument(mergeTranscriptDocuments([
+      this.baseTranscriptDocument,
+      this.projectLiveStreamDocument(columns)
+    ]), { preserveFollowEnd })
+  }
+
+  markLiveStreamDirty() {
+    if (!this.screenRenderer?.isAltScreen) return
+    this.needsLiveProjection = true
+    this.scheduleRender()
   }
 
   commitUnprintedEvents() {
@@ -1031,7 +1078,7 @@ export class TuiApp {
     const ms = this.reasoningAt ? Date.now() - this.reasoningAt : undefined
     const msStr = ms !== undefined ? `${Math.max(1, Math.round(ms / 1000))}s` : `${rlines} lines`
 
-    if (!this.turnHeaderCommitted) {
+    if (!this.screenRenderer?.isAltScreen && !this.turnHeaderCommitted) {
       this.turnHeaderCommitted = true
       this.streamHeaderCommitted = true
       this.commitUnprintedEvents()
@@ -1043,7 +1090,7 @@ export class TuiApp {
         ''
       ]
       this.commitToScrollback(headerLines)
-    } else {
+    } else if (!this.screenRenderer?.isAltScreen) {
       this.commitToScrollback([
         `  ${ANSI.detail}⚛ Thought for ${msStr} (ctrl+o to expand)${ANSI.reset}`,
         ''
@@ -1184,24 +1231,22 @@ export class TuiApp {
       case 'assistant/chunk': {
         const chunk = event.data.chunk
         if (chunk.type === 'text-delta') {
-          this.commitUnprintedEvents()
           this.flushThinking(event.seq)
-          this.streaming.text += chunk.text
           this.stopRepetitiveStream(chunk.text)
+          if (!this.turnHeaderCommitted && !this.screenRenderer?.isAltScreen) {
+            this.turnHeaderCommitted = true
+            this.streamHeaderCommitted = true
+            const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
+            const headerLines = [
+              `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`,
+              ''
+            ]
+            this.commitToScrollback(headerLines)
+          }
+          this.streaming.text += chunk.text
           if (this.screenRenderer?.isAltScreen) {
-            this.needsReproject = true
-            this.scheduleRender()
+            this.markLiveStreamDirty()
           } else {
-            if (!this.turnHeaderCommitted) {
-              this.turnHeaderCommitted = true
-              this.streamHeaderCommitted = true
-              const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
-              const headerLines = [
-                `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`,
-                ''
-              ]
-              this.commitToScrollback(headerLines)
-            }
             this.streamBuffer += chunk.text
             this.flushStreamBuffer(false)
           }
@@ -1209,13 +1254,9 @@ export class TuiApp {
         else if (chunk.type === 'reasoning-delta') {
           if (this.streaming.reasoning === '') {
             this.reasoningAt = Date.now()
-            this.commitUnprintedEvents()
           }
           this.streaming.reasoning += chunk.text
-          if (this.screenRenderer?.isAltScreen) {
-            this.needsReproject = true
-            this.scheduleRender()
-          }
+          this.markLiveStreamDirty()
         }
         else if (chunk.type === 'tool-call-delta') {
           this.streamActionText = ''
@@ -1228,10 +1269,7 @@ export class TuiApp {
           if (chunk.name) draft.name = chunk.name
           draft.args += chunk.argumentsDelta ?? ''
           this.streaming.tool = draft
-          if (this.screenRenderer?.isAltScreen) {
-            this.needsReproject = true
-            this.scheduleRender()
-          }
+          this.scheduleRender()
         }
         break
       }
@@ -1241,11 +1279,9 @@ export class TuiApp {
         this.streamHeaderCommitted = false
         this.streamActionText = ''
         this.streamLoopStopped = false
-        this.commitUnprintedEvents()
         break
       }
       case 'assistant/message': {
-        this.commitUnprintedEvents()
         this.flushThinking(event.seq)
         if (!this.screenRenderer?.isAltScreen) {
           this.flushStreamBuffer(true)
@@ -1259,12 +1295,7 @@ export class TuiApp {
         this.streamLoopStopped = false
         this.reasoningAt = undefined
         this.message = ''
-        this.lastCommittedSeq = event.seq
         if (event.data.usage) this.usage = foldUsage(this.agent.session.events)
-        if (this.screenRenderer?.isAltScreen) {
-          this.reprojectDocument(true)
-          this.scheduleRender()
-        }
         break
       }
       case 'tool/call':
@@ -1303,17 +1334,15 @@ export class TuiApp {
         this.presetName = event.data.agentPreset
         break
       case 'turn/end': {
+        this.flushThinking(event.seq)
         this.streaming.text = ''
         this.streaming.reasoning = ''
         this.currentTurnReasoning = null
         this.streaming.tool = undefined
         this.streamBuffer = ''
-        this.commitUnprintedEvents()
-        this.flushThinking(event.seq)
         if (!this.screenRenderer?.isAltScreen) {
           this.flushStreamBuffer(true)
         }
-        this.commitUnprintedEvents()
         this.onTurnEnd(event.data.reason)
         this.scheduleRender(true)
         break
@@ -1321,7 +1350,8 @@ export class TuiApp {
       default:
         break
     }
-    if (['user/message', 'assistant/message', 'tool/call', 'tool/result', 'compaction/summary', 'compaction/prune'].includes(event.type)) {
+    if (['user/message', 'assistant/message', 'tool/call', 'tool/result', 'approval/asked', 'approval/decided', 'hook/invoked', 'hook/result', 'turn/end', 'compaction/summary', 'compaction/prune'].includes(event.type)) {
+      this.commitUnprintedEvents?.()
       this.refreshContextTokens?.()
     }
     this.scheduleRender()
@@ -4604,7 +4634,6 @@ export class TuiApp {
 
       this.lastCommittedSeq = agent.session.events[agent.session.events.length - 1]?.seq ?? 0
 
-      this.log('ok', `resumed session ${record.header.id.slice(0, 8)}`, '/resume')
       this.touchMru(record.header.id)
       this.reprojectDocument(true)
       this.viewport.scrollToBottom()
@@ -5132,24 +5161,57 @@ export class TuiApp {
     if (event.row < this.viewport.viewportHeight) {
       this.selectionController.handleMouseDown(event, this.viewport)
       this.scheduleRender(true)
+    } else if (!this.viewport.followEnd && event.row === this.viewport.viewportHeight) {
+      this.viewport.scrollToBottom()
+      this.scheduleRender(true)
     }
   }
 
   onMouseMove(event) {
     if (!this.terminalOpen || !this.selectionController.active) return
     const res = this.selectionController.handleMouseMove(event, this.viewport)
+    if (!res.consumed || !res.changed) return
+
     if (res.scrollDelta) {
       this.viewport.scrollBy(res.scrollDelta)
+      this.startEdgeAutoScroll(res.scrollDelta)
+    } else {
+      this.stopEdgeAutoScroll()
     }
     this.scheduleRender(true)
   }
 
   onMouseUp(event) {
     if (!this.terminalOpen) return
+    this.stopEdgeAutoScroll()
+    const hadSelection = this.selectionController.hasSelection()
     if (this.selectionController.active) {
       this.selectionController.handleMouseUp(event, this.viewport, process.stdout)
-      this.scheduleRender(true)
     }
+
+    if (!hadSelection && event.row < this.viewport.viewportHeight) {
+      const info = this.viewport.findBlockAtRow(event.row)
+      if (info?.block && (info.block.kind === 'activity' || info.block.kind === 'reasoning')) {
+        const key = info.block.key
+        if (key === 'active-reasoning') {
+          if (this.expandedKeys.has('active-reasoning:collapsed')) {
+            this.expandedKeys.delete('active-reasoning:collapsed')
+          } else {
+            this.expandedKeys.add('active-reasoning:collapsed')
+          }
+        } else {
+          if (this.expandedKeys.has(key)) {
+            this.expandedKeys.delete(key)
+          } else {
+            this.expandedKeys.add(key)
+          }
+        }
+        this.reprojectDocument(false)
+        this.scheduleRender(true)
+        return
+      }
+    }
+    this.scheduleRender(true)
   }
 
   onPageUp() {
@@ -5570,9 +5632,22 @@ export class TuiApp {
         this.scheduleRender()
         return
       }
-      if (this.help) this.help = false
-      else if (this.menu) this.menu = undefined
-      else if (this.input !== '') this.input = ''
+      if (this.help) {
+        this.help = false
+        this.scheduleRender()
+        return
+      }
+      if (this.menu) {
+        this.menu = undefined
+        this.scheduleRender()
+        return
+      }
+      if (this.viewport && (!this.viewport.followEnd || this.viewport.scrollTop < this.viewport.maxScroll())) {
+        this.viewport.scrollToBottom()
+        this.scheduleRender(true)
+        return
+      }
+      if (this.input !== '') this.input = ''
       this.pasteFolded = undefined
       this.cursor = Math.min(this.cursor, this.input.length)
       this.updateMenu()
@@ -5874,8 +5949,18 @@ export class TuiApp {
     }
     if (value === '\x1b[1;3D' || value === '\x1b[1;5D' || value === '\x1b[5D' || value === '\x1b\x1b[D') return this.moveWordLeft()
     if (value === '\x1b[1;3C' || value === '\x1b[1;5C' || value === '\x1b[5C' || value === '\x1b\x1b[C') return this.moveWordRight()
+    if (value === '\x1b[1;5F' || value === '\x1b[4;5~') {
+      this.viewport?.scrollToBottom()
+      return this.scheduleRender(true)
+    }
     if (value === '\x1b[H' || value === '\x1b[1~' || value === '\x1bOH') return this.moveToLineStart()
-    if (value === '\x1b[F' || value === '\x1b[4~' || value === '\x1bOF') return this.moveToLineEnd()
+    if (value === '\x1b[F' || value === '\x1b[4~' || value === '\x1bOF') {
+      if (this.cursor === this.input.length && this.viewport && !this.viewport.followEnd) {
+        this.viewport.scrollToBottom()
+        return this.scheduleRender(true)
+      }
+      return this.moveToLineEnd()
+    }
     if (value === '\x1b[3~') return this.eraseAt()
   }
 
@@ -5950,18 +6035,56 @@ export class TuiApp {
   }
 
   toggleCollapsible() {
-    const target = this.viewport.findTargetCollapsibleBlock()
-    if (!target) return
-    if (this.expandedKeys.has(target.key)) {
-      this.expandedKeys.delete(target.key)
+    const block = this.viewport.findTargetCollapsibleBlock()
+    if (!block) return
+
+    if (block.key === 'active-reasoning') {
+      if (this.expandedKeys.has('active-reasoning:collapsed')) {
+        this.expandedKeys.delete('active-reasoning:collapsed')
+      } else {
+        this.expandedKeys.add('active-reasoning:collapsed')
+      }
     } else {
-      this.expandedKeys.add(target.key)
+      if (this.expandedKeys.has(block.key)) {
+        this.expandedKeys.delete(block.key)
+      } else {
+        this.expandedKeys.add(block.key)
+      }
     }
+
     this.reprojectDocument(false)
     this.scheduleRender(true)
   }
 
-  // ── rendering ──────────────────────────────────────────────────────────
+  // ── rendering ─────────────────────────────────────────────────────────
+
+  startEdgeAutoScroll(delta) {
+    this.edgeScrollDelta = delta
+    if (!this.edgeScrollTimer) {
+      this.edgeScrollTimer = setInterval(() => {
+        if (!this.selectionController?.active || !this.edgeScrollDelta || !this.viewport) {
+          return this.stopEdgeAutoScroll()
+        }
+        const prevScroll = this.viewport.scrollTop
+        this.viewport.scrollBy(this.edgeScrollDelta)
+        if (this.viewport.scrollTop !== prevScroll) {
+          const docRow = this.edgeScrollDelta < 0
+            ? this.viewport.scrollTop
+            : Math.min(this.viewport.allRows.length - 1, this.viewport.scrollTop + this.viewport.viewportHeight - 1)
+          this.selectionController.end = resolvePointToBlockOffset(this.viewport, docRow, this.selectionController.end?.col ?? 0)
+          this.scheduleRender(true)
+        }
+      }, 60)
+    }
+  }
+
+  stopEdgeAutoScroll() {
+    if (this.edgeScrollTimer) {
+      clearInterval(this.edgeScrollTimer)
+      this.edgeScrollTimer = undefined
+      this.edgeScrollDelta = 0
+    }
+  }
 
   scheduleRender(immediate = false) {
     // Bracketed paste arrives as many PTY chunks. Keep the input buffer and
@@ -5978,10 +6101,9 @@ export class TuiApp {
     }
     if (this.renderPending) return
     this.renderPending = true
-    // Coalesce the small token events emitted by the model. Rendering every
-    // token makes ANSI/Markdown output visibly jitter; idle/input updates can
-    // still use the shorter frame while an active stream gets a small batch.
-    const delay = this.active ? 56 : 8
+    // Coalesce bursty transport deltas into terminal frames without delaying
+    // their content behind a synthetic typewriter animation.
+    const delay = this.active ? 32 : 8
     this.renderTimer = setTimeout(() => {
       this.renderPending = false
       this.render()
@@ -6024,8 +6146,8 @@ export class TuiApp {
       ]
     }
     const density = this.preferences?.statusline ?? 'detailed'
-    const selection = this.agent.options
-    const liveModel = this.activeModel?.model ?? selection.model
+    const selection = this.agent?.options
+    const liveModel = this.activeModel?.model ?? selection?.model ?? 'deepseek'
     const cwdName = process.cwd().split('/').filter(Boolean).pop() || process.cwd()
     const planState = this.planModeService()?.get?.(this.agent) ?? { active: false, pending: undefined }
     const planActive = planState.pending ?? planState.active
@@ -6364,18 +6486,50 @@ export class TuiApp {
       if (this.compactState.tip) {
         lines.push(`    ${ANSI.dim}└ ${this.compactState.tip}${ANSI.reset}`)
       }
+    } else if (this.active && !this.questionPanel && !this.pendingApproval) {
+      const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+      const frame = frames[Math.floor(Date.now() / 80) % frames.length]
+      const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
+      const elapsedSec = this.turnStartTime
+        ? Math.max(1, Math.floor((Date.now() - this.turnStartTime) / 1000))
+        : (this.reasoningAt ? Math.max(1, Math.floor((Date.now() - this.reasoningAt) / 1000)) : 1)
+
+      const currentTurnTokens = Math.max(0, (this.usage?.output ?? 0) - (this.turnStartOutputTokens ?? 0))
+      const tokStr = currentTurnTokens > 0 ? ` · ↓ ${currentTurnTokens} tokens` : ''
+      const speed = this.turnStats?.speed || 0
+      const speedStr = speed > 0 ? ` · ${speed >= 10 ? speed.toFixed(1) : speed.toFixed(2)} tok/s` : ''
+
+      let phrase = 'Ideating'
+      if (this.streaming?.tool) {
+        const toolName = this.streaming.tool.name || 'tool'
+        phrase = `Calling ${toolName}`
+      } else if (this.streaming?.text) {
+        phrase = 'Generating response'
+      } else if (this.streaming?.reasoning) {
+        phrase = 'Thinking'
+      } else {
+        phrase = this.activityPhrase() || 'Ideating'
+      }
+
+      lines.push(`  ${ANSI.peach}✻ ${phrase}${dots}${ANSI.reset} ${ANSI.dim}(${elapsedSec}s${tokStr}${speedStr})${ANSI.reset}`)
+      lines.push('')
     }
 
     // 1. Floating overlay rows (z-index higher layer, floating over messages above input)
     this.floatingRows = topRows
 
-    // 2. Input box top separator (with History indicator if browsing history)
+    // 2. Input box top separator (with History indicator or Scroll-to-bottom indicator)
     let topRule
+    const linesBelow = this.viewport ? (this.viewport.maxScroll() - this.viewport.scrollTop) : 0
     if (this.historyIndex !== -1 && this.history.length > 0) {
       const histPos = `${this.historyIndex + 1}/${this.history.length}`
       const badgeText = `─── History ${histPos} `
       const remain = Math.max(2, columns - widthOf(visibleOf(badgeText)))
       topRule = `${this.ruleStyle()}─── ${ANSI.dim}History ${histPos}${ANSI.reset}${this.ruleStyle()} ${'─'.repeat(remain)}${ANSI.reset}`
+    } else if (linesBelow > 0 && !this.viewport.followEnd) {
+      const jumpText = `─── ↓ Jump to bottom (Esc · ${linesBelow} lines below) `
+      const remain = Math.max(2, columns - widthOf(visibleOf(jumpText)))
+      topRule = `${this.ruleStyle()}─── ${ANSI.blue}${ANSI.bold}↓ Jump to bottom${ANSI.reset} ${ANSI.dim}(Esc · ${linesBelow} lines below)${ANSI.reset}${this.ruleStyle()} ${'─'.repeat(remain)}${ANSI.reset}`
     } else {
       topRule = `${this.ruleStyle()}${'─'.repeat(Math.max(10, columns))}${ANSI.reset}`
     }
@@ -6470,9 +6624,9 @@ export class TuiApp {
 
   render() {
     if (!this.terminalOpen || this.isCommittingScrollback) return
-    if (this.needsReproject) {
-      this.needsReproject = false
-      this.reprojectDocument(true)
+    if (this.needsLiveProjection) {
+      this.needsLiveProjection = false
+      this.reprojectLiveStream(true)
     }
     if (this.initializing) {
       this.renderInitialization()
