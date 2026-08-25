@@ -206,6 +206,7 @@ import {
   appendHistoryFile,
   loadShellHistoryFile,
   appendShellHistoryFile,
+  COMMON_SHELL_COMMANDS,
   loadMruFile,
   saveMruFile,
   EXCLUDED_DIRS,
@@ -286,7 +287,7 @@ export class TuiApp {
     this.effortPicker = undefined // { efforts, selected }
     this.settingsPicker = undefined
     this.settingsScope = undefined
-    this.preferences = { theme: defaultTheme, showWelcome: true, persistHistory: true, contextMode: 'both', contextWarnAt: 60, contextCriticalAt: 80, autoCompact: true, promptSuggestions: false, hudGit: true, hudSpeed: true, hudTools: true, disabledSkills: [...DEFAULT_DISABLED_SKILLS] }
+    this.preferences = { theme: defaultTheme, showWelcome: true, persistHistory: true, importSystemShellHistory: false, contextMode: 'both', contextWarnAt: 60, contextCriticalAt: 80, autoCompact: true, promptSuggestions: false, hudGit: true, hudSpeed: true, hudTools: true, disabledSkills: [...DEFAULT_DISABLED_SKILLS] }
     this.presetPicker = undefined // { entries, selected }
     this.presetConfirm = undefined
     this.exitConfirm = undefined // { code, selected, runningJobs }
@@ -349,6 +350,8 @@ export class TuiApp {
     this.lastCommittedSeq = 0
     this.lastFooterHeight = 0
     this.lastCursorRowInFooter = 0
+    this.lastCursorColumnInFooter = 0
+    this.lastFooterLines = []
     this.inputTopInFooter = 0
     this.activityIndex = -1
     this.activityAt = 0
@@ -418,7 +421,7 @@ export class TuiApp {
       clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         if (!this.terminalOpen) return
-        this.render()
+        this.repaint(true)
       }, 80)
     }
     this.disposers.push(() => clearTimeout(resizeTimer))
@@ -664,7 +667,9 @@ export class TuiApp {
   }
 
   async loadShellHistory(cwd = process.cwd()) {
-    this.shellHistory = await loadShellHistoryFile(this.stateDir(), cwd, this.preferences.persistHistory)
+    this.shellHistory = await loadShellHistoryFile(this.stateDir(), cwd, this.preferences.persistHistory, 200, {
+      importSystemHistory: this.preferences.importSystemShellHistory
+    })
   }
 
   appendHistory(entry) {
@@ -685,11 +690,15 @@ export class TuiApp {
   }
 
   applySettings(next) {
+    const reloadShellHistory = this.preferences.persistHistory !== next.persistHistory
+      || this.preferences.importSystemShellHistory !== next.importSystemShellHistory
     this.preferences = next
     applyTheme(next.theme)
     if (!next.persistHistory) {
       this.history = []
       this.shellHistory = []
+    } else if (reloadShellHistory && this.agent?.session?.header?.cwd) {
+      void this.loadShellHistory(this.agent.session.header.cwd)
     }
     if (next.promptSuggestions === false) this.clearPromptSuggestion()
     this.scheduleRender()
@@ -1249,6 +1258,11 @@ export class TuiApp {
     const seen = new Set()
     const matches = []
     for (const command of [...(this.shellHistory ?? [])].reverse()) {
+      if (command === base || !command.startsWith(base) || seen.has(command)) continue
+      seen.add(command)
+      matches.push(command)
+    }
+    for (const command of (COMMON_SHELL_COMMANDS ?? [])) {
       if (command === base || !command.startsWith(base) || seen.has(command)) continue
       seen.add(command)
       matches.push(command)
@@ -6043,7 +6057,8 @@ export class TuiApp {
 
   clearFooter() {
     if (this.lastFooterHeight > 0) {
-      const up = this.lastCursorRowInFooter ?? 0
+      const columns = Math.max(60, process.stdout.columns || 100)
+      const up = this.footerCursorRows(columns)
       if (up > 0) {
         process.stdout.write(`\x1b[?25l\r\x1b[${up}A\x1b[J`)
       } else {
@@ -6051,7 +6066,19 @@ export class TuiApp {
       }
       this.lastFooterHeight = 0
       this.lastCursorRowInFooter = 0
+      this.lastCursorColumnInFooter = 0
+      this.lastFooterLines = []
     }
+  }
+
+  footerCursorRows(columns) {
+    const lines = this.lastFooterLines
+    if (!Array.isArray(lines) || lines.length === 0) return this.lastCursorRowInFooter ?? 0
+    const cursorRow = Math.max(0, Math.min(this.lastCursorRowInFooter ?? 0, lines.length - 1))
+    const wrappedRows = (line) => Math.max(1, Math.ceil(widthOf(visibleOf(line)) / columns))
+    let up = 0
+    for (let index = 0; index < cursorRow; index++) up += wrappedRows(lines[index])
+    return up + Math.floor(Math.max(0, this.lastCursorColumnInFooter ?? 0) / columns)
   }
 
   commitToScrollback(lines) {
@@ -6061,18 +6088,22 @@ export class TuiApp {
 
     let erase = ''
     if (this.lastFooterHeight > 0) {
-      const up = this.lastCursorRowInFooter ?? 0
+      const up = this.footerCursorRows(columns)
       erase = up > 0 ? `\x1b[?25l\r\x1b[${up}A\x1b[J` : `\x1b[?25l\r\x1b[J`
     }
     this.lastFooterHeight = 0
     this.lastCursorRowInFooter = 0
+    this.lastCursorColumnInFooter = 0
+    this.lastFooterLines = []
 
     const content = lines.join('\n') + '\n'
 
     const footerLines = this.buildFooter(columns, rows)
-    const footerText = footerLines.map((line) => `${truncateAnsi(line, columns)}\x1b[K`).join('\n')
+    const renderedFooterLines = footerLines.map((line) => truncateAnsi(line, columns))
+    const footerText = renderedFooterLines.map((line) => `${line}\x1b[K`).join('\n')
     this.lastFooterHeight = footerLines.length
     this.lastColumns = columns
+    this.lastFooterLines = renderedFooterLines
 
     let cursorMove = ''
     const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.skillsPanel
@@ -6087,9 +6118,11 @@ export class TuiApp {
         ? `\r\x1b[${upLines}A\x1b[${Math.max(1, (caretCol ?? 0) + 1)}G\x1b[?25h`
         : `\r\x1b[${Math.max(1, (caretCol ?? 0) + 1)}G\x1b[?25h`
       this.lastCursorRowInFooter = rowInFooter
+      this.lastCursorColumnInFooter = caretCol ?? 0
     } else {
       cursorMove = '\x1b[?25l'
       this.lastCursorRowInFooter = footerLines.length - 1
+      this.lastCursorColumnInFooter = widthOf(visibleOf(renderedFooterLines.at(-1) ?? ''))
     }
 
     process.stdout.write(`${erase}${content}${footerText}${cursorMove}`)
@@ -6264,26 +6297,21 @@ export class TuiApp {
     const columns = Math.max(60, process.stdout.columns || 100)
     const rows = Math.max(16, process.stdout.rows || 30)
     const footerLines = this.buildFooter(columns, rows)
-    const footerText = footerLines.map((line) => `${truncateAnsi(line, columns)}\x1b[K`).join('\n')
+    const renderedFooterLines = footerLines.map((line) => truncateAnsi(line, columns))
+    const footerText = renderedFooterLines.map((line) => `${line}\x1b[K`).join('\n')
 
     let erase = ''
     if (this.lastFooterHeight > 0) {
-      let up = this.lastCursorRowInFooter ?? 0
-      if (this.lastColumns && this.lastColumns > columns) {
-        const scale = this.lastColumns / columns
-        up = Math.max(up, Math.ceil(this.lastFooterHeight * scale) + 1)
-      }
+      const up = this.footerCursorRows(columns)
       if (up > 0) {
-        erase = `\x1b[?25l\r\x1b[${up}A`
+        erase = `\x1b[?25l\r\x1b[${up}A\x1b[J`
       } else {
-        erase = `\x1b[?25l\r`
-      }
-      if (footerLines.length < this.lastFooterHeight) {
-        erase += '\x1b[J'
+        erase = `\x1b[?25l\r\x1b[J`
       }
     }
     this.lastFooterHeight = footerLines.length
     this.lastColumns = columns
+    this.lastFooterLines = renderedFooterLines
 
     let cursorMove = ''
     const hasOverlay = this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.commandPalette || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.skillsPanel
@@ -6300,9 +6328,11 @@ export class TuiApp {
         cursorMove = `\r\x1b[${Math.max(1, (caretCol ?? 0) + 1)}G\x1b[?25h`
       }
       this.lastCursorRowInFooter = rowInFooter
+      this.lastCursorColumnInFooter = caretCol ?? 0
     } else {
       cursorMove = '\x1b[?25l'
       this.lastCursorRowInFooter = footerLines.length - 1
+      this.lastCursorColumnInFooter = widthOf(visibleOf(renderedFooterLines.at(-1) ?? ''))
     }
 
     process.stdout.write(`${erase}${footerText}${cursorMove}`)

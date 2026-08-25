@@ -160,6 +160,9 @@ export function tuiSettingsSchema(value) {
   if (source.persistHistory !== undefined && typeof source.persistHistory !== 'boolean') {
     throw new TypeError('dsh-omc-tui.settings.persistHistory must be boolean')
   }
+  if (source.importSystemShellHistory !== undefined && typeof source.importSystemShellHistory !== 'boolean') {
+    throw new TypeError('dsh-omc-tui.settings.importSystemShellHistory must be boolean')
+  }
   if (source.hudGit !== undefined && typeof source.hudGit !== 'boolean') {
     throw new TypeError('dsh-omc-tui.settings.hudGit must be boolean')
   }
@@ -191,6 +194,7 @@ export function tuiSettingsSchema(value) {
     visionProvider,
     visionModel,
     persistHistory: source.persistHistory ?? true,
+    importSystemShellHistory: source.importSystemShellHistory ?? false,
     hudGit: source.hudGit ?? true,
     hudSpeed: source.hudSpeed ?? true,
     hudTools: source.hudTools ?? true,
@@ -211,6 +215,7 @@ tuiSettingsSchema.toJSON = () => ({
     visionProvider: { type: 'string' },
     visionModel: { type: 'string' },
     persistHistory: { type: 'boolean', default: true },
+    importSystemShellHistory: { type: 'boolean', default: false },
     hudGit: { type: 'boolean', default: true },
     hudSpeed: { type: 'boolean', default: true },
     hudTools: { type: 'boolean', default: true },

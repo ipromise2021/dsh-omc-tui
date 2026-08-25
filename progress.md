@@ -48,6 +48,16 @@
   - 复跑 `npm test`、`npm run verify`、`git diff --check` 与 npm 打包预检，全部通过。
   - 运行并通过全量 `npm test` 和 `npm run verify`。
 
+### 阶段 6：Shell 补全与历史边界整改
+- **状态：** complete
+- 本轮复审新增并关闭 CR-009、CR-010：系统 Shell 历史改为 `/settings` 中默认关闭的独立开关；关闭历史持久化时直接返回空历史；启用后只读取 `$HISTFILE` 或当前 Shell 对应的单一文件的末尾 256 KiB。
+- 运行 `npm test`、`npm run verify`、`git diff --check` 和 npm 打包预检，全部通过。
+
+### 阶段 7：窗口 resize 全量重放整改
+- **状态：** complete
+- 根据用户截图新增并关闭 CR-011。用户明确选择“resize 优先布局稳定，全量重放可接受，历史重复暂不处理”；因此 resize 从局部 footer 重绘改为 `repaint(true)`，让整个会话按当前终端宽度重新格式化。普通增量输出仍保留精确 footer 清除。
+- 运行 `npm test`、`npm run verify`、`git diff --check`，全部通过。
+
 ## 测试结果
 | 测试 | 预期结果 | 实际结果 | 状态 |
 |------|---------|---------|------|

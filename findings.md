@@ -16,8 +16,11 @@
 | CR-004 | P2 | resolved | Jobs 输出 | 增量文本块之间被强制插入换行，导致日志内容失真 |
 | CR-005 | P2 | resolved | 文档 | Browser 自动回收描述与“保留并安全重连”实现相反 |
 | CR-006 | P1 | resolved | 测试安全 | 进程终止回归测试可能向真实进程组 `12345` 发送信号 |
-| CR-007 | P1 | resolved | Transcript 渲染 | turn/end 与 resize 均不再全量回放历史，真实 resize 处理器已覆盖 |
+| CR-007 | P1 | resolved | Transcript 渲染 | turn/end 保持增量输出；resize 按用户选择全量重放以适配新宽度 |
 | CR-008 | P2 | resolved | 输入编辑器 | Option+←/→ 已使用 Unicode 文本段导航，中文不再整段首尾跳转 |
+| CR-009 | P1 | resolved | Shell 补全 | 关闭历史持久化时仍读取系统 Shell 历史 |
+| CR-010 | P2 | resolved | Shell 补全 | 同时读取多个完整历史文件，可能混入旧 Shell 数据并拖慢启动 |
+| CR-011 | P1 | resolved | Footer / resize | 终端宽度变化后旧 footer 的软换行残留，造成输入区与状态栏错位 |
 
 ## 详细发现
 
@@ -91,9 +94,9 @@
 - **位置：** `src/index.js:1136-1143`, `src/index.js:345-354`
 - **现象：** assistant 流式内容和工具事件已经通过 `commitToScrollback()` 增量写入；收到 `turn/end` 或触发终端 `onResize` 时又调用 `repaint(true)`，先发送 `ESC[3J ESC[2J ESC[H`，再把 welcome 和全部 durable events 全量写入一次。
 - **影响：** VS Code Terminal、tmux 或部分终端对 `ESC[3J` 清除 scrollback 的实现不一致时，旧历史不会真正删除，全量回放内容会追加到旧内容后；用户向上滚动便看到整段重复。
-- **建议修复：** 第一阶段保持 native scrollback，改为 append-only：`turn/end` 只完成增量 flush 并重绘 footer（`scheduleRender(true)`），`onResize` 仅执行 `clearFooter()` 与 `render()`，不调用 `repaint(true)` 进行全量 transcript replay。全量 `repaint(true)` 仅保留给初始化、切换会话和用户显式展开等确实需要重建历史的场景。
-- **验收标准：** `turn/end` 与 resize 期间不再触发 `repaint(true)`；单测验证 `turn/end` 与 resize 均仅触发 Footer 刷新重绘。
-- **关闭验证：** resize 防抖后直接调用 `render()`，保留其既有的终端缩窄补偿。回归测试创建真实 `TuiApp` 实例、调用 `app.onResize()` 并断言只执行一次 `render()`，既不调用 `repaint()`，也不提前清空 footer 状态。`npm test` 通过。
+- **建议修复：** `turn/end` 保持增量 flush 并重绘 footer（`scheduleRender(true)`）；resize 的策略由产品取舍决定。若优先保证内容按新宽度稳定布局，则 resize 采用 `repaint(true)`，清屏后重新格式化并输出当前会话。
+- **验收标准：** `turn/end` 不触发 `repaint(true)`；resize 防抖后调用一次 `repaint(true)`，完整会话使用当前 `process.stdout.columns` 格式化。
+- **关闭验证：** 根据用户确认，resize 改为清屏并全量重放，以优先保证窗口变化后的正文、工具块、输入区和状态栏布局稳定。回归测试验证真实 `TuiApp.onResize()` 仅触发一次 `repaint(true)`；`turn/end` 仍为增量收尾。已知取舍是少数终端可能保留旧 scrollback，导致历史重复，当前按用户要求暂不处理。
 
 ### CR-008：Option+左右无法对 Unicode 文本按词移动
 - **优先级：** P2
@@ -103,6 +106,36 @@
 - **关闭验证：** `moveWordLeft/Right()` 已改用 `Intl.Segmenter` 的 Unicode word 分段，并将非空白标点、emoji 等作为可导航文本段。测试覆盖中文、英文标点、首尾边界以及 `Esc+b/f`、`CSI 1;3D/C` 两类序列；中文 `这是一个测试输入框` 从开头向右移动到 index 1，从结尾向左移动到 index 8。`npm test` 通过。
 - **建议修复：** 使用 Node 20 可用的 `Intl.Segmenter`（`granularity: 'word'`）或等价 Unicode-aware 边界算法，统一产出左右移动目标；保留空白跳过语义并确保索引落在 grapheme 边界。不要在首尾循环：cursor 0 + Option+← 保持 0，cursor end + Option+→ 保持 end。
 - **验收标准：** 覆盖中文、英文空格、标点、emoji/组合字符、多行文本，以及 `Esc+b/f`、`CSI 1;3D/C` 两类终端序列；所有首尾越界操作保持原位。
+
+### CR-009：关闭历史持久化时仍读取系统 Shell 历史
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/input/history.js:loadShellHistoryFile`
+- **现象：** `persistHistory=false` 的分支仍先调用系统 Shell 历史加载器，并将结果作为补全来源。
+- **影响：** 用户明确关闭历史后，TUI 仍会读取工作区外的命令记录；这既违背设置含义，也可能暴露敏感命令。
+- **建议修复：** 系统 Shell 历史应默认为关闭的独立 opt-in；当历史持久化关闭时，任何系统历史读取都必须直接跳过。
+- **验收标准：** 关闭持久化时，无论系统历史导入开关如何设置，返回空历史且不访问系统文件。
+- **关闭验证：** 新增 `importSystemShellHistory` 设置，默认 `false`；`persistHistory=false` 在读取前直接返回空数组。回归测试覆盖关闭持久化和未显式启用两种路径。
+
+### CR-010：系统历史来源和读取范围过宽
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/input/history.js:loadSystemShellHistory`
+- **现象：** 实现同时读取 `$HISTFILE`、`.zsh_history`、`.bash_history` 的全部内容，再取末尾条目。
+- **影响：** 可能重复导入、让旧 Shell 历史覆盖当前 Shell 的较新命令，并在大历史文件下增加启动时间和内存占用。
+- **建议修复：** 仅选择 `$HISTFILE` 或当前 Shell 对应的单一历史文件，并以固定尾部字节上限读取。
+- **验收标准：** 不混合多个文件；只返回末尾范围内的可解析命令；不可读文件安全降级为空历史。
+- **关闭验证：** `$HISTFILE` 优先，否则只选择当前 Shell 的 `.zsh_history` 或 `.bash_history`；通过文件句柄只读取末尾 256 KiB，并丢弃可能截断的首行。回归测试验证显式文件不混入其他 Shell 历史、zsh 扩展格式解析和不可见的默认导入路径。
+
+### CR-011：窗口 resize 后 footer 残留导致布局错位
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:clearFooter`, `src/index.js:render`
+- **现象：** 旧实现只保存逻辑行数和上次光标行，窗口变窄后依赖宽度比例估算上移行数；Footer 的实际软换行高度与该估算不一致时，旧分隔线、输入框或状态栏会残留。
+- **影响：** 内容区底部出现重复分隔线、状态栏和输入区域错位，截图所示布局无法恢复。
+- **建议修复：** resize 时清屏并以新列宽重放当前会话；普通增量输出仍保留精确 footer 擦除，处理非 resize 的 footer 更新。
+- **验收标准：** 缩窄及放大窗口时触发一次 `repaint(true)`，正文和 footer 都由新列宽重新格式化。
+- **关闭验证：** 根据用户确认，resize 采用全量重放而非局部 footer 修补；普通增量输出仍记录 footer 实际文本并精确清除。回归测试验证 resize 调用 `repaint(true)`。
 
 ## 当前验证基线
 

@@ -1,6 +1,6 @@
 import { ANSI as defaultAnsi } from '../renderer/themes.js'
 
-export const SETTINGS_KEYS = ['theme', 'statusline', 'contextMode', 'contextWarnAt', 'contextCriticalAt', 'autoCompact', 'promptSuggestions', 'hudGit', 'hudSpeed', 'hudTools', 'persistHistory']
+export const SETTINGS_KEYS = ['theme', 'statusline', 'contextMode', 'contextWarnAt', 'contextCriticalAt', 'autoCompact', 'promptSuggestions', 'hudGit', 'hudSpeed', 'hudTools', 'persistHistory', 'importSystemShellHistory']
 
 export function renderSettingsPicker(settingsPicker, preferences, ANSI = defaultAnsi) {
   const descriptions = {
@@ -14,7 +14,8 @@ export function renderSettingsPicker(settingsPicker, preferences, ANSI = default
     'statusline git': 'show git branch & dirty status in statusline',
     'statusline speed': 'show token speed & turn timing in statusline',
     'statusline tools': 'show recent tool activity in statusline',
-    'history persistence': 'save sessions to disk for /resume'
+    'history persistence': 'save sessions to disk for /resume',
+    'system shell history': 'read the current shell history for ! command completion'
   }
   const entries = [
     ['theme', preferences.theme, descriptions.theme],
@@ -27,7 +28,8 @@ export function renderSettingsPicker(settingsPicker, preferences, ANSI = default
     ['statusline git', (preferences.hudGit ?? true) ? 'on' : 'off', descriptions['statusline git']],
     ['statusline speed', (preferences.hudSpeed ?? true) ? 'on' : 'off', descriptions['statusline speed']],
     ['statusline tools', (preferences.hudTools ?? true) ? 'on' : 'off', descriptions['statusline tools']],
-    ['history persistence', preferences.persistHistory ? 'on' : 'off', descriptions['history persistence']]
+    ['history persistence', preferences.persistHistory ? 'on' : 'off', descriptions['history persistence']],
+    ['system shell history', preferences.importSystemShellHistory ? 'on' : 'off', descriptions['system shell history']]
   ]
   return [
     `${ANSI.muted}TUI SETTINGS${ANSI.reset} ${ANSI.dim}· stored in $DSH_HOME/settings.yaml (default ~/.dsh/settings.yaml)${ANSI.reset}`,

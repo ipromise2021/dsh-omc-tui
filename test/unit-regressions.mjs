@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { TuiApp, registerTuiSkillOverrides, registerBundledSkills, repeatedActionIntent } from '../src/index.js'
 import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
 import { pngDimensions } from '../src/image-protocol.js'
@@ -16,6 +18,7 @@ import { formatEvents } from '../src/renderer/transcript.js'
 import { BrowserLease, chromeApprovalReason, chromeConnectionApprovalReason, chromeLaunchArgs, chromeToolRisk, isChromeTool, registerBrowserLease } from '../src/browser-lease.js'
 import { ANSI, applyTheme } from '../src/renderer/themes.js'
 import { safe, visibleOf, widthOf } from '../src/renderer/ansi.js'
+import { loadShellHistoryFile, loadSystemShellHistory } from '../src/input/history.js'
 
 const noop = () => {}
 
@@ -269,6 +272,18 @@ assert.equal(TuiApp.prototype.acceptShellCompletion.call(shellCompletionApp), tr
 assert.equal(shellCompletionApp.input, '! git push --force')
 assert.equal(TuiApp.prototype.acceptShellCompletion.call(shellCompletionApp), true)
 assert.equal(shellCompletionApp.input, '! git pull --rebase')
+
+const freshShellApp = {
+  input: '! npm r',
+  cursor: '! npm r'.length,
+  shellHistory: [],
+  inBashMode: TuiApp.prototype.inBashMode,
+  shellCompletionMatches: TuiApp.prototype.shellCompletionMatches,
+  scheduleRender: noop
+}
+assert.equal(TuiApp.prototype.shellCompletionGhost.call(freshShellApp), 'un dev')
+assert.equal(TuiApp.prototype.acceptShellCompletion.call(freshShellApp), true)
+assert.equal(freshShellApp.input, '! npm run dev')
 
 const promptSuggestionApp = {
   input: '',
@@ -1193,7 +1208,52 @@ assert.throws(() => tuiSettingsSchema({ contextWarnAt: 80, contextCriticalAt: 80
 assert.throws(() => tuiSettingsSchema({ visionProvider: 'deepseek' }), /must be configured together/)
 assert.throws(() => tuiSettingsSchema({ hudGit: 'invalid' }), /hudGit must be boolean/)
 assert.throws(() => tuiSettingsSchema({ autoCompact: 'invalid' }), /autoCompact must be boolean/)
+assert.throws(() => tuiSettingsSchema({ importSystemShellHistory: 'invalid' }), /importSystemShellHistory must be boolean/)
 assert.throws(() => tuiSettingsSchema({ disabledSkills: ['Not a skill'] }), /disabledSkills must be an array/)
+
+const shellHistoryDir = await mkdtemp(join(tmpdir(), 'dsh-omc-tui-history-'))
+try {
+  const systemHistory = join(shellHistoryDir, 'zsh-history')
+  await writeFile(systemHistory, ': 1:0;git status\n: 2:0;npm test\n')
+  assert.deepEqual(
+    await loadShellHistoryFile(shellHistoryDir, '/workspace', false, 200, { importSystemHistory: true, historyFile: systemHistory }),
+    [],
+    'disabled persistence must not read or expose system shell history'
+  )
+  assert.deepEqual(
+    await loadShellHistoryFile(shellHistoryDir, '/workspace', true, 200, { historyFile: systemHistory }),
+    [],
+    'system shell history must be opt-in'
+  )
+  assert.deepEqual(
+    await loadSystemShellHistory(10, { historyFile: systemHistory }),
+    ['git status', 'npm test']
+  )
+  await writeFile(join(shellHistoryDir, '.zsh_history'), ': 3:0;ignored zsh history\n')
+  assert.deepEqual(
+    await loadSystemShellHistory(10, { historyFile: systemHistory, home: shellHistoryDir, shell: '/bin/zsh' }),
+    ['git status', 'npm test'],
+    'an explicit history file must not merge another shell history'
+  )
+  assert.deepEqual(
+    await loadShellHistoryFile(shellHistoryDir, '/workspace', true, 200, { importSystemHistory: true, historyFile: systemHistory }),
+    ['git status', 'npm test']
+  )
+} finally {
+  await rm(shellHistoryDir, { recursive: true, force: true })
+}
+
+let reloadedShellHistory = 0
+const settingsReloadApp = {
+  preferences: { theme: 'claude', persistHistory: true, importSystemShellHistory: false },
+  shellHistory: [],
+  agent: { session: { header: { cwd: '/workspace' } } },
+  clearPromptSuggestion: noop,
+  loadShellHistory() { reloadedShellHistory += 1; return Promise.resolve() },
+  scheduleRender: noop
+}
+TuiApp.prototype.applySettings.call(settingsReloadApp, { theme: 'claude', persistHistory: true, importSystemShellHistory: true })
+assert.equal(reloadedShellHistory, 1, 'changing system shell history import should reload completion history')
 
 const skillRows = renderSkillsPanel({ selected: 0 }, [
   { name: 'enabled-skill', description: 'available', enabled: true },
@@ -1685,7 +1745,7 @@ TuiApp.prototype.appendJobOutput.call(cacheApp, 'j1', 'compil')
 TuiApp.prototype.appendJobOutput.call(cacheApp, 'j1', 'ing\n')
 assert.equal(cacheApp.jobOutputCache.get('j1'), 'compiling\n')
 
-// CR-007 regression: turn/end and resize do not trigger repaint(true) / full replay
+// CR-007 regression: turn/end remains incremental and does not replay history.
 let turnEndRepaintCalls = 0
 let turnEndScheduleRenderCalls = 0
 const turnEndApp = {
@@ -1707,20 +1767,32 @@ TuiApp.prototype.onSessionEvent.call(turnEndApp, turnEndApp.agent.session, {
 assert.equal(turnEndRepaintCalls, 0)
 assert.equal(turnEndScheduleRenderCalls, 1)
 
-// CR-007 regression: the real resize handler re-renders the footer without replaying history
+// Resize is intentionally a full replay so all transcript rows use the new terminal width.
 const resizeApp = new TuiApp({})
 let resizeRepaintCalls = 0
 let resizeRenderCalls = 0
-let resizeClearFooterCalls = 0
+let resizeRepaintClearScreen
 resizeApp.terminalOpen = true
-resizeApp.repaint = () => { resizeRepaintCalls += 1 }
+resizeApp.repaint = (clearScreen) => { resizeRepaintCalls += 1; resizeRepaintClearScreen = clearScreen }
 resizeApp.render = () => { resizeRenderCalls += 1 }
-resizeApp.clearFooter = () => { resizeClearFooterCalls += 1 }
 resizeApp.onResize()
 await new Promise((resolve) => setTimeout(resolve, 150))
-assert.equal(resizeRepaintCalls, 0)
-assert.equal(resizeClearFooterCalls, 0)
-assert.equal(resizeRenderCalls, 1)
+assert.equal(resizeRepaintCalls, 1)
+assert.equal(resizeRepaintClearScreen, true)
+assert.equal(resizeRenderCalls, 0)
 for (const dispose of [...resizeApp.disposers].reverse()) dispose()
 
+// CR-011 regression: footer cleanup uses the old rendered rows reflowed at the new width.
+const footerResizeApp = new TuiApp({})
+footerResizeApp.lastFooterHeight = 2
+footerResizeApp.lastFooterLines = ['1234567890', 'ok']
+footerResizeApp.lastCursorRowInFooter = 1
+footerResizeApp.lastCursorColumnInFooter = 0
+assert.equal(footerResizeApp.footerCursorRows(5), 2)
+footerResizeApp.lastCursorRowInFooter = 0
+footerResizeApp.lastCursorColumnInFooter = 7
+assert.equal(footerResizeApp.footerCursorRows(5), 1)
+for (const dispose of [...footerResizeApp.disposers].reverse()) dispose()
+
 console.log('unit regressions: ok')
+process.exit(0)
