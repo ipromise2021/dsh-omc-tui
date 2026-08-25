@@ -1,6 +1,6 @@
 ---
 name: git-commit
-description: 规范化 Git 代码提交技能：自动分析工作区变动、生成符合 Conventional Commits 规范的优雅提交信息，并通过 bash 工具安全执行提交。当用户输入 /git-commit、提到“提交代码”、“帮我commit”、“提交这次改动”时激活。
+description: 规范化 Git 代码提交技能：分析工作区变动、生成符合 Conventional Commits 的提交信息，并通过 bash 工具安全执行提交。仅在用户明确要求提交（如“提交代码”“帮我 commit”“提交这次改动”或 /git-commit）时激活；任务完成后绝不自主提交或推送。
 user-invocable: true
 allowed-tools: "bash read"
 metadata:
@@ -9,7 +9,9 @@ metadata:
 
 # Git Commit 规范提交技能
 
-当用户提到“提交代码”、“帮我 commit”、“提交改动”或输入 `/git-commit` 时，严格按照本 SOP 自动化执行。
+> ⚠️ **触发铁律**：本技能只在用户明确要求提交时执行（如“提交代码”“帮我 commit”“提交这次改动”或 `/git-commit`）。任务完成、代码改完或用户未表达提交意图时，**绝不**主动执行 `git commit`，也**绝不**主动 `git push`。
+
+当用户提到“提交代码”、“帮我 commit”、“提交改动”或输入 `/git-commit` 时，严格按照本 SOP 执行。
 
 ---
 
@@ -39,4 +41,4 @@ git add <涉及的文件> && git commit -m "<type>(<scope>): <summary>"
 ```
 
 ### 步骤 4：向用户清晰汇报
-输出本次提交的 Commit Hash、类型与核心修改点，并提示是否需要执行 `git push`。
+输出本次提交的 Commit Hash、类型与核心修改点。**不要主动执行 `git push`**；仅在用户明确要求推送时才推送。

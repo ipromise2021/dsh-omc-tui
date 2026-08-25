@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { TuiApp, registerTuiSkillOverrides, repeatedActionIntent } from '../src/index.js'
+import { TuiApp, registerTuiSkillOverrides, registerBundledSkills, repeatedActionIntent } from '../src/index.js'
 import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
 import { pngDimensions } from '../src/image-protocol.js'
 import { alignCodePoint, moveCursorLine, moveWordLeft, moveWordRight } from '../src/input/editor.js'
@@ -31,6 +31,20 @@ assert.deepEqual(tuiSkillOverride, {
   content: '',
   invocation: { modelInvocable: false, userInvocable: false }
 })
+
+const bundledSkills = new Map()
+registerBundledSkills({
+  get(name) {
+    return name === 'skills' ? { register(skill) { bundledSkills.set(skill.name, skill); return () => bundledSkills.delete(skill.name) } } : undefined
+  },
+  logger: { warn() {} }
+})
+assert.ok(bundledSkills.has('git-commit'), 'bundled git-commit skill should register')
+assert.ok(bundledSkills.has('grill-me'), 'bundled grill-me skill should register')
+assert.equal(bundledSkills.get('git-commit').invocation.modelInvocable, true)
+assert.equal(bundledSkills.get('git-commit').invocation.userInvocable, true)
+assert.match(bundledSkills.get('git-commit').content, /git add/)
+assert.match(bundledSkills.get('git-commit').content, /绝不/)
 
 assert.equal(repeatedActionIntent('提交代码。提交代码。提交代码。提交代码。提交代码。提交代码。'), 'commit')
 assert.equal(repeatedActionIntent('先检查改动。然后执行测试。最后总结结果。'), undefined)

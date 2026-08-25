@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, realpath, unlink, writeFile } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { homedir, tmpdir } from 'node:os'
 import { ImageParser, formatImageBytes, pngDimensions } from './image-protocol.js'
 import { registerVisionRouter } from './vision-router.js'
@@ -97,6 +98,76 @@ export function registerTuiSkillOverrides(agentCtx, names = DEFAULT_DISABLED_SKI
       invocation: { modelInvocable: false, userInvocable: false }
     })
     if (typeof dispose === 'function') disposers.set(name, dispose)
+  }
+  return disposers
+}
+
+const BUNDLED_SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '.agents', 'skills')
+
+function parseBundledSkillFrontmatter(raw) {
+  if (!raw.startsWith('---')) return undefined
+  const headerStart = raw.indexOf('\n', 3)
+  if (headerStart < 0) return undefined
+  const headerEnd = raw.indexOf('\n---', headerStart)
+  if (headerEnd < 0) return undefined
+  const bodyStart = raw.indexOf('\n', headerEnd + 1)
+  if (bodyStart < 0) return undefined
+  const data = {}
+  for (const line of raw.slice(headerStart + 1, headerEnd).split('\n')) {
+    const match = /^([a-z0-9-]+):\s*(.*)$/.exec(line)
+    if (match) data[match[1]] = match[2].trim()
+  }
+  const name = data.name
+  const description = data.description
+  if (!name || !description) return undefined
+  return {
+    name,
+    description,
+    content: raw.slice(bodyStart + 1).trim(),
+    invocation: {
+      modelInvocable: frontmatterBoolean(data['disable-model-invocation']) !== true,
+      userInvocable: frontmatterBoolean(data['user-invocable']) !== false
+    }
+  }
+}
+
+function frontmatterBoolean(value) {
+  if (value === 'true' || value === 'yes' || value === 'on' || value === '1') return true
+  if (value === 'false' || value === 'no' || value === 'off' || value === '0') return false
+  return undefined
+}
+
+export function registerBundledSkills(ctx) {
+  const disposers = new Map()
+  let skills
+  try {
+    skills = typeof ctx?.get === 'function' ? ctx.get('skills') : ctx?.skills
+  } catch {
+    return disposers
+  }
+  if (typeof skills?.register !== 'function') return disposers
+  let entries
+  try {
+    entries = readdirSync(BUNDLED_SKILLS_DIR, { withFileTypes: true })
+  } catch {
+    return disposers
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    let raw
+    try {
+      raw = readFileSync(join(BUNDLED_SKILLS_DIR, entry.name, 'SKILL.md'), 'utf8')
+    } catch {
+      continue
+    }
+    const skill = parseBundledSkillFrontmatter(raw)
+    if (!skill) continue
+    try {
+      const dispose = skills.register(skill)
+      if (typeof dispose === 'function') disposers.set(skill.name, dispose)
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-omc-tui: failed to register bundled skill ${skill.name}: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
   return disposers
 }
@@ -6251,6 +6322,7 @@ export function apply(ctx) {
     order: 110,
     text: 'For long-running Bash commands such as npm install, dev servers, watchers, or builds, set run_in_background: true so the call returns immediately with a job id. Do not emulate this with nohup or a trailing & in a foreground call. The user can inspect and stop the job from /jobs.'
   })
+  const skillDisposers = registerBundledSkills(ctx)
   const app = new TuiApp(ctx)
   const removeVisionRouter = registerVisionRouter(app)
   const removeBrowserLease = registerBrowserLease(ctx)
@@ -6258,6 +6330,9 @@ export function apply(ctx) {
     await removeBrowserLease()
     removeVisionRouter()
     await app.stop({ ignoreJobErrors: true })
+    for (const dispose of skillDisposers.values()) {
+      try { dispose() } catch {}
+    }
     process.stderr.write(`dsh-omc-tui: ${error instanceof Error ? error.message : String(error)}\n`)
     ctx.get('appExit')?.(1)
   })
@@ -6265,5 +6340,8 @@ export function apply(ctx) {
     await removeBrowserLease()
     removeVisionRouter()
     await app.stop({ ignoreJobErrors: true })
+    for (const dispose of skillDisposers.values()) {
+      try { dispose() } catch {}
+    }
   }
 }
