@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { TuiApp, registerTuiSkillOverrides, repeatedActionIntent } from '../src/index.js'
 import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
 import { pngDimensions } from '../src/image-protocol.js'
-import { alignCodePoint, moveCursorLine } from '../src/input/editor.js'
+import { alignCodePoint, moveCursorLine, moveWordLeft, moveWordRight } from '../src/input/editor.js'
 import { handleCompact } from '../src/commands/compact.js'
 import { renderMarkdownRows } from '../src/renderer/markdown.js'
 import { renderStatusRows } from '../src/renderer/statusline.js'
@@ -309,6 +309,34 @@ assert.equal(widthOf('👨‍👩‍👧‍👦'), 2)
 assert.equal(widthOf('🇨🇳'), 2)
 assert.equal(widthOf('❤️'), 2)
 assert.equal(widthOf('1️⃣'), 2)
+
+const cjkWords = '这是一个测试输入框'
+assert.equal(moveWordLeft(cjkWords, 0), 0)
+assert.equal(moveWordRight(cjkWords, cjkWords.length), cjkWords.length)
+assert.equal(moveWordRight(cjkWords, 0), 1)
+assert.equal(moveWordLeft(cjkWords, cjkWords.length), 8)
+assert.equal(moveWordRight('hello,world', 0), 5)
+assert.equal(moveWordRight('hello,world', 5), 6)
+assert.equal(moveWordLeft('hello,world', 6), 5)
+
+const wordKeyApp = {
+  input: cjkWords,
+  cursor: 0,
+  clearPromptSuggestion: noop,
+  clearShellCompletion: noop,
+  clearSelection: noop,
+  maybeOpenFilePicker: noop,
+  scheduleRender: noop,
+  moveWordLeft: TuiApp.prototype.moveWordLeft,
+  moveWordRight: TuiApp.prototype.moveWordRight
+}
+TuiApp.prototype.handleToken.call(wordKeyApp, '\x1bf')
+assert.equal(wordKeyApp.cursor, 1)
+TuiApp.prototype.onEscapeSequence.call(wordKeyApp, '\x1b[1;3C')
+assert.equal(wordKeyApp.cursor, 2)
+wordKeyApp.cursor = cjkWords.length
+TuiApp.prototype.handleToken.call(wordKeyApp, '\x1bb')
+assert.equal(wordKeyApp.cursor, 8)
 
 let filePickerRefreshes = 0
 const recalledPrompt = {
@@ -1559,5 +1587,126 @@ const hiddenTools = renderStatusRows({
   recent: { toolDetails: ['✓ Read: hidden.js'], jobs: [] }
 })
 assert.equal(visibleOf(hiddenTools.rows.join('\n')).includes('hidden.js'), false)
+
+// CR-001 regression: permission presets error handling
+let permissionPresetSetCalls = []
+let permissionSettled = []
+const permissionFailApp = {
+  agent: { session: { events: [] } },
+  ctx: {
+    permissionPresets: {
+      set: () => { throw new Error('durable write error') },
+      current: () => 'workspace-read'
+    }
+  },
+  permissionName: 'workspace-read',
+  pendingApproval: { settle: (s) => permissionSettled.push(s) },
+  approvalChoice: 1,
+  log: noop,
+  scheduleRender: noop
+}
+TuiApp.prototype.handleToken.call(permissionFailApp, '\r')
+assert.equal(permissionFailApp.permissionName, 'workspace-read')
+assert.deepEqual(permissionSettled, ['rejected'])
+
+const permissionSuccessApp = {
+  agent: { session: { events: [{ type: 'permission/preset', data: { preset: 'workspace-write' } }] } },
+  ctx: {
+    permissionPresets: {
+      set: (session, name) => permissionPresetSetCalls.push({ session, name }),
+      current: () => 'workspace-write'
+    }
+  },
+  permissionName: 'workspace-read',
+  pendingApproval: { settle: (s) => permissionSettled.push(s) },
+  approvalChoice: 1,
+  log: noop,
+  scheduleRender: noop
+}
+TuiApp.prototype.handleToken.call(permissionSuccessApp, '\r')
+assert.equal(permissionSuccessApp.permissionName, 'workspace-write')
+assert.deepEqual(permissionPresetSetCalls.length, 1)
+assert.deepEqual(permissionSettled, ['rejected', 'allowed-once'])
+
+// CR-002 regression: remote jobs without kill API
+const remoteNoKillApp = {
+  activeBash: undefined,
+  localBackgroundJobs: [],
+  agent: { status: 'idle' },
+  jobsService: {},
+  jobSnapshots: () => [{ id: 'remote-running-job', status: 'running' }],
+  stopLocalJob: TuiApp.prototype.stopLocalJob,
+  jobOutputCache: new Map()
+}
+await assert.rejects(
+  TuiApp.prototype.stopRunningJobs.call(remoteNoKillApp),
+  /cannot stop 1 remote background job: jobsService\.kill is not available/
+)
+
+// CR-003 & CR-006 regression: stopLocalJob signals SIGKILL if job still running regardless of child.killed (without sending signals to real PIDs)
+let killedSignals = []
+const fakeJobChild = {
+  pid: 'fake-non-integer-pid',
+  killed: true,
+  kill(sig) { killedSignals.push(sig) }
+}
+const testLocalJob = {
+  id: 'local-1',
+  child: fakeJobChild,
+  status: 'running',
+  done: new Promise(() => {}) // never resolves
+}
+const localJobStopApp = {
+  signalLocalJob: TuiApp.prototype.signalLocalJob
+}
+const stopPromise = TuiApp.prototype.stopLocalJob.call(localJobStopApp, testLocalJob)
+// wait for timeout
+await stopPromise
+assert.ok(killedSignals.includes('SIGTERM'))
+assert.ok(killedSignals.includes('SIGKILL'))
+
+// CR-004 regression: appendJobOutput preserves exact stream chunks without inserting \n
+const cacheApp = { jobOutputCache: new Map() }
+TuiApp.prototype.appendJobOutput.call(cacheApp, 'j1', 'compil')
+TuiApp.prototype.appendJobOutput.call(cacheApp, 'j1', 'ing\n')
+assert.equal(cacheApp.jobOutputCache.get('j1'), 'compiling\n')
+
+// CR-007 regression: turn/end and resize do not trigger repaint(true) / full replay
+let turnEndRepaintCalls = 0
+let turnEndScheduleRenderCalls = 0
+const turnEndApp = {
+  agent: { session: { events: [] } },
+  commitUnprintedEvents: noop,
+  flushThinking: noop,
+  flushStreamBuffer: noop,
+  onTurnEnd: noop,
+  repaint: () => { turnEndRepaintCalls += 1 },
+  scheduleRender: (force) => { if (force) turnEndScheduleRenderCalls += 1 },
+  refreshContextTokens: noop,
+  streaming: { text: '', reasoning: '', tool: undefined }
+}
+TuiApp.prototype.onSessionEvent.call(turnEndApp, turnEndApp.agent.session, {
+  type: 'turn/end',
+  seq: 10,
+  data: { reason: { kind: 'completed' } }
+})
+assert.equal(turnEndRepaintCalls, 0)
+assert.equal(turnEndScheduleRenderCalls, 1)
+
+// CR-007 regression: the real resize handler re-renders the footer without replaying history
+const resizeApp = new TuiApp({})
+let resizeRepaintCalls = 0
+let resizeRenderCalls = 0
+let resizeClearFooterCalls = 0
+resizeApp.terminalOpen = true
+resizeApp.repaint = () => { resizeRepaintCalls += 1 }
+resizeApp.render = () => { resizeRenderCalls += 1 }
+resizeApp.clearFooter = () => { resizeClearFooterCalls += 1 }
+resizeApp.onResize()
+await new Promise((resolve) => setTimeout(resolve, 150))
+assert.equal(resizeRepaintCalls, 0)
+assert.equal(resizeClearFooterCalls, 0)
+assert.equal(resizeRenderCalls, 1)
+for (const dispose of [...resizeApp.disposers].reverse()) dispose()
 
 console.log('unit regressions: ok')

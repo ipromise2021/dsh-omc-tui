@@ -43,18 +43,34 @@ export function alignCodePoint(text, index, direction) {
 }
 
 export function moveWordLeft(text, cursor) {
-  if (cursor === 0) return 0
-  let index = cursor - 1
-  while (index > 0 && /\s/.test(text[index])) index -= 1
-  while (index > 0 && !/\s/.test(text[index - 1])) index -= 1
-  return index
+  const position = Math.max(0, Math.min(cursor, text.length))
+  let previous = 0
+  for (const segment of new Intl.Segmenter(undefined, { granularity: 'word' }).segment(text)) {
+    if (!/\S/u.test(segment.segment)) continue
+    const start = segment.index
+    const end = start + segment.segment.length
+    if (position <= start) return previous
+    if (position <= end) return start
+    previous = start
+  }
+  return previous
 }
 
 export function moveWordRight(text, cursor) {
-  let index = cursor
-  while (index < text.length && !/\s/.test(text[index])) index += 1
-  while (index < text.length && /\s/.test(text[index])) index += 1
-  return index
+  const position = Math.max(0, Math.min(cursor, text.length))
+  let withinSegment = false
+  for (const segment of new Intl.Segmenter(undefined, { granularity: 'word' }).segment(text)) {
+    if (!/\S/u.test(segment.segment)) continue
+    const start = segment.index
+    const end = start + segment.segment.length
+    if (position < start) return start
+    if (position >= start && position < end) {
+      withinSegment = true
+      continue
+    }
+    if (withinSegment) return start
+  }
+  return text.length
 }
 
 export function moveCursorLine(text, cursor, delta) {

@@ -347,7 +347,7 @@ export class TuiApp {
       clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         if (!this.terminalOpen) return
-        this.repaint(true)
+        this.render()
       }, 80)
     }
     this.disposers.push(() => clearTimeout(resizeTimer))
@@ -636,7 +636,7 @@ export class TuiApp {
   openTerminal() {
     this.terminalOpen = true
     process.stdout.write(`${TERMINAL_MOUSE_OFF}\x1b[?2004h\x1b[?25h`)
-    process.stdin.setRawMode(true)
+    if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') process.stdin.setRawMode(true)
     process.stdin.resume()
     process.stdin.on('data', this.onData)
     process.stdout.on('resize', this.onResize)
@@ -1139,7 +1139,7 @@ export class TuiApp {
         this.flushStreamBuffer(true)
         this.commitUnprintedEvents()
         this.onTurnEnd(event.data.reason)
-        this.repaint(true)
+        this.scheduleRender(true)
         break
       }
       default:
@@ -3864,7 +3864,7 @@ export class TuiApp {
   }
 
   signalLocalJob(job, signal) {
-    if (!job?.child || job.child.killed || !isRunningJob(job)) return
+    if (!job?.child || !isRunningJob(job)) return
     try {
       if (process.platform !== 'win32' && Number.isInteger(job.child.pid)) process.kill(-job.child.pid, signal)
       else job.child.kill(signal)
@@ -3874,7 +3874,7 @@ export class TuiApp {
   }
 
   async stopLocalJob(job) {
-    if (!job?.child || job.child.killed || !isRunningJob(job)) return
+    if (!job?.child || !isRunningJob(job)) return
     job.stopRequested = true
     job.status = 'stopping'
     this.signalLocalJob(job, 'SIGTERM')
@@ -3898,6 +3898,9 @@ export class TuiApp {
     const localIds = new Set(localJobs.map((job) => String(job.id)))
     const remoteJobs = this.jobSnapshots().filter((job) => isRunningJob(job) && !localIds.has(String(job.id)))
     const stopLocal = localJobs.map((job) => this.stopLocalJob(job))
+    if (remoteJobs.length > 0 && typeof this.jobsService?.kill !== 'function') {
+      throw new Error(`cannot stop ${remoteJobs.length} remote background job${remoteJobs.length === 1 ? '' : 's'}: jobsService.kill is not available`)
+    }
     const stopRemote = typeof this.jobsService?.kill === 'function'
       ? remoteJobs.map(async (job) => {
         let timeout
@@ -3932,7 +3935,7 @@ export class TuiApp {
     if (this.activeBash) jobs.push(this.activeBash)
     jobs.push(...(this.localBackgroundJobs ?? []))
     for (const job of jobs) {
-      if (!job.child || job.child.killed || (job.status !== 'running' && job.status !== 'stopping')) continue
+      if (!job.child || (job.status !== 'running' && job.status !== 'stopping')) continue
       job.stopRequested = true
       job.status = 'stopping'
       this.signalLocalJob(job, 'SIGTERM')
@@ -3979,7 +3982,7 @@ export class TuiApp {
     const delta = String(text ?? '')
     if (!delta || delta === '(no new output)') return this.jobOutputCache.get(id) ?? ''
     const previous = this.jobOutputCache.get(id) ?? ''
-    const joined = previous && !previous.endsWith('\n') ? `${previous}\n${delta}` : `${previous}${delta}`
+    const joined = `${previous}${delta}`
     const capped = joined.length > 65536 ? joined.slice(-65536) : joined
     this.jobOutputCache.set(id, capped)
     return capped
@@ -4972,19 +4975,27 @@ export class TuiApp {
         return
       }
       if (chosenIndex === 1) {
-        if (this.agent?.session && this.ctx.permissionPresets) {
-          try {
-            if (typeof this.ctx.permissionPresets.set === 'function') {
-              this.ctx.permissionPresets.set(this.agent.session, 'workspace-write')
-            } else if (typeof this.ctx.permissionPresets.select === 'function') {
-              this.ctx.permissionPresets.select(this.agent.session, 'workspace-write')
-            }
-          } catch {}
+        if (!this.agent?.session || !this.ctx.permissionPresets || typeof this.ctx.permissionPresets.set !== 'function') {
+          this.log('error', 'permission presets service unavailable', 'Shift+Tab')
+          this.pendingApproval.settle('rejected')
+          this.approvalChoice = 0
+          this.scheduleRender()
+          return
         }
-        this.permissionName = 'workspace-write'
-        this.pendingApproval.settle('allowed-once')
-        this.approvalChoice = 0
-        this.log('ok', 'permission mode · workspace-write (session wide)', 'Shift+Tab')
+        try {
+          this.ctx.permissionPresets.set(this.agent.session, 'workspace-write')
+          this.permissionName = permissionFromEvents(
+            this.agent.session.events,
+            this.ctx.permissionPresets.current?.(this.agent.session.events) ?? 'workspace-write'
+          )
+          this.pendingApproval.settle('allowed-once')
+          this.approvalChoice = 0
+          this.log('ok', 'permission mode · workspace-write (session wide)', 'Shift+Tab')
+        } catch (error) {
+          this.log('error', `failed to set workspace-write: ${error instanceof Error ? error.message : String(error)}`, 'Shift+Tab')
+          this.pendingApproval.settle('rejected')
+          this.approvalChoice = 0
+        }
         this.scheduleRender()
         return
       }

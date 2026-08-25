@@ -48,8 +48,8 @@
 - **Harness rc.1 契约适配**：全面对齐 `@deepseek-ai/dsh@0.1.1-rc.1`，适配模型 Reasoning Effort 级联与预设重组（`f94d400`）；
 - **Vision 旁路视觉路由**：新增 `src/vision-router.js` 与 `/vision` 命令，实现主模型无视觉时自主调度旁路 Agent 识别图片（`45dd5c8`）；
 - **渲染与交互微调**：高对比度 Markdown 代码块与表格边框渲染优化、Context 消耗预警与 Skills 开关修复（`4d0cecc`）；
-- **托管 Browser 租约与生命周期**：新增 `src/browser-lease.js` 托管浏览器生命周期、多选/自定义问卷交互提升（`7f276fd`）；
-- **输入控制与 Jobs 交互增强**：输入历史去重与导航增强、Jobs 面板支持流式输出读取与任务取消、退出确认面板（`src/panels/exit-confirm.js`）及退出时 Browser 租约自动回收（`b328df5`）。
+- **托管 Browser 租约与生命周期**：新增 `src/browser-lease.js` 托管专用浏览器生命周期，退出时保留专用 Chrome（供用户完成登录与安全重连），多选/自定义问卷交互提升（`7f276fd`）；
+- **输入控制与 Jobs 交互增强**：输入历史去重与导航增强、Jobs 面板支持流式输出读取与任务取消、退出确认面板（`src/panels/exit-confirm.js`）及退出时后台 Jobs 安全终止（`b328df5`）。
 
 ---
 
@@ -201,8 +201,8 @@
 
 ### 16. 托管 Browser 租约生命周期与优雅退出保护
 * **健壮性保障**：
-  * 引入 [src/browser-lease.js](src/browser-lease.js)，管理 Playwright / Browser 工具会话的租约状态与生命周期。
-  * 新增 [src/panels/exit-confirm.js](src/panels/exit-confirm.js) 退出确认面板，防止后台长任务或活跃连接误退出；在进程退出（`beforeExit` / `SIGINT`）时自动安全回收托管的 Browser 租约与后台资源。
+  * 引入 [src/browser-lease.js](src/browser-lease.js)，管理 Playwright / Browser 工具会话的租约状态与生命周期。专用 Chrome 实例在退出后保留，通过 PID、端口、用户目录与受管标记在下次启动时安全重连，保障用户登录态不中断。
+  * 新增 [src/panels/exit-confirm.js](src/panels/exit-confirm.js) 退出确认面板，防止后台长任务或活跃连接误退出；在退出时可靠终止活跃本地与远程后台 Jobs。
   * 升级 Jobs 管理面板（[src/panels/jobs-panel.js](src/panels/jobs-panel.js)），支持实时流式阅读任务输出与一键取消。
 
 ---
