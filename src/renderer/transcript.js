@@ -56,12 +56,16 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
   // First group events into semantic items (activity spans, user messages, etc.)
   const groupedItems = groupActivitySpans(events)
   let turnHeaderPrinted = false
+  let lastTurnStartTime = undefined
 
   for (let itemIndex = 0; itemIndex < groupedItems.length; itemIndex++) {
     const item = groupedItems[itemIndex]
 
     if (item.kind === 'activity') {
       const span = item.span
+      if (!lastTurnStartTime && span.events[0]?.time) {
+        lastTurnStartTime = span.events[0].time
+      }
       const blockKey = span.key
       const isExpanded = expandedKeys.has(blockKey)
       const isFocused = focusedBlockKey === blockKey
@@ -210,6 +214,7 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
 
       case 'user/message': {
         turnHeaderPrinted = false
+        lastTurnStartTime = event.time || Date.now()
         if (event.data?.source?.kind !== 'user') break
         const contentBlocks = event.data.content ?? []
         const isBashCmd = contentBlocks.some((b) => b.type === 'text' && b.text?.startsWith('!') && !b.text?.startsWith('!!'))
@@ -303,6 +308,7 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
       }
 
       case 'assistant': {
+        if (!lastTurnStartTime) lastTurnStartTime = event.time || Date.now()
         const fullAnswerText = textOf(event.data?.message?.content)
         const answerText = fullAnswerText
         const reasoningText = reasoningOf(event.data?.message?.content)
@@ -396,26 +402,36 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
           logicalLines.push(`error: ${error?.message ?? ''}`)
         }
 
-        if (event.data?.cost?.totalTokens) {
-          const cost = event.data.cost
-          const durMs = event.data.durationMs ? ` · ${formatDurationMs(event.data.durationMs)}` : ''
-          const tokStr = `${cost.totalTokens} tokens`
-          const toolCount = event.data.toolCallsCount ? ` · ${event.data.toolCallsCount} tools` : ''
-          rows.push(`  ${ANSI.dim}✻ finished in ${tokStr}${durMs}${toolCount}${ANSI.reset}`)
-          logicalLines.push(`finished in ${tokStr}${durMs}${toolCount}`)
+        const durationMs = event.data?.durationMs || (lastTurnStartTime ? Math.max(100, (event.time || Date.now()) - lastTurnStartTime) : undefined)
+        const cost = event.data?.cost
+        const durStr = durationMs ? formatDurationMs(durationMs) : ''
+        const tokStr = cost?.totalTokens ? `${cost.totalTokens} tokens` : ''
+        const toolCount = event.data?.toolCallsCount ? `${event.data.toolCallsCount} tools` : ''
+
+        let summary = ''
+        if (durStr && tokStr) {
+          summary = `✻ finished in ${tokStr} · ${durStr}${toolCount ? ` · ${toolCount}` : ''}`
+        } else if (durStr) {
+          summary = `✻ Worked for ${durStr}${toolCount ? ` · ${toolCount}` : ''}`
+        } else if (tokStr) {
+          summary = `✻ finished in ${tokStr}`
+        } else {
+          summary = `✻ finished`
         }
 
-        if (rows.length > 0) {
-          rows.push('')
-          addBlock({
-            key: `turn-end-${event.seq || item.index}`,
-            kind: 'turn-end',
-            startSeq: event.seq,
-            endSeq: event.seq,
-            rows,
-            logicalLines
-          })
-        }
+        rows.push(`  ${ANSI.dim}${summary}${ANSI.reset}`)
+        logicalLines.push(summary)
+        lastTurnStartTime = undefined
+
+        rows.push('')
+        addBlock({
+          key: `turn-end-${event.seq || item.index}`,
+          kind: 'turn-end',
+          startSeq: event.seq,
+          endSeq: event.seq,
+          rows,
+          logicalLines
+        })
         break
       }
 
@@ -441,10 +457,11 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
       case 'approval/decided': {
         const rows = []
         const logicalLines = []
-        const decision = event.data?.decision === 'allow' ? `${ANSI.green}✓ Approved${ANSI.reset}` : `${ANSI.coral}✗ Denied${ANSI.reset}`
-        rows.push(`  ${decision}`)
+        const outcome = event.data?.outcome === 'allow' ? 'Approved' : 'Denied'
+        const color = event.data?.outcome === 'allow' ? ANSI.green : ANSI.coral
+        rows.push(`  ${color}⚙ Permission ${outcome}${ANSI.reset}`)
         rows.push('')
-        logicalLines.push(event.data?.decision === 'allow' ? 'Approved' : 'Denied')
+        logicalLines.push(`Permission ${outcome}`)
 
         addBlock({
           key: `approval-decided-${event.seq || item.index}`,
@@ -454,6 +471,16 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
           rows,
           logicalLines
         })
+        break
+      }
+
+      case 'hook/invoked':
+      case 'hook/result':
+        // Hooks are rendered in activity tree or omitted in main stream
+        break
+
+      case 'session/title': {
+        // Handled in statusline/header
         break
       }
 
@@ -492,9 +519,9 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
     }
   }
 
-  // Active stream block (live in-progress assistant streaming)
+  // Active stream block (live in-progress assistant streaming following the message flow)
   const activeStream = options.activeStream
-  if (activeStream && (activeStream.text || activeStream.reasoning || activeStream.tool)) {
+  if (activeStream) {
     if (!turnHeaderPrinted) {
       turnHeaderPrinted = true
       const modelName = activeStream.model || (activeModel?.model ?? defaultModel ?? 'DeepSeek')
@@ -513,16 +540,31 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
 
     if (activeStream.reasoning) {
       const isExpanded = expandedKeys.has('active-reasoning')
-      const lines = activeStream.reasoning.split('\n').length
+      const rawLines = activeStream.reasoning.split('\n').filter((l) => l.trim().length > 0)
+      const lines = rawLines.length
+      const charCount = activeStream.reasoning.length
       const expandHint = isExpanded ? '(ctrl+o to collapse)' : '(ctrl+o to expand)'
+      const frame = activeStream.frame || '⠋'
+      const dots = activeStream.dots || '...'
+      const elapsedSec = activeStream.elapsedSec || 1
+
       const reasonRows = [
-        `  ${ANSI.detail}⚛ Thought for ${lines} lines ${ANSI.dim}${expandHint}${ANSI.reset}`
+        `  ${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ${charCount} chars) ${ANSI.dim}${expandHint}${ANSI.reset}`
       ]
-      const reasonLogical = [`Thought for ${lines} lines`]
+      const reasonLogical = [`Thinking (${elapsedSec}s · ${charCount} chars)`]
+
       if (isExpanded) {
         for (const line of wrap(activeStream.reasoning, contentWidth - 4)) {
           reasonRows.push(`    ${ANSI.detail}${line}${ANSI.reset}`)
           reasonLogical.push(line)
+        }
+      } else {
+        const recent = rawLines.slice(-3)
+        for (let i = 0; i < recent.length; i++) {
+          const isLast = i === recent.length - 1
+          const cursor = isLast ? `${ANSI.blue}▋${ANSI.reset}` : ''
+          reasonRows.push(`    ${ANSI.dim}│ ${shorten(recent[i].trim(), contentWidth - 12)}${cursor}${ANSI.reset}`)
+          reasonLogical.push(recent[i])
         }
       }
       reasonRows.push('')
@@ -532,18 +574,17 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
         startSeq: 999999,
         endSeq: 999999,
         collapsed: !isExpanded,
-        summary: `Thought for ${lines} lines`,
+        summary: `Thinking (${elapsedSec}s · ${charCount} chars)`,
         rows: reasonRows,
         logicalLines: reasonLogical
       })
     }
 
     if (activeStream.text) {
-      const mdRows = renderMarkdownRows(activeStream.text, contentWidth, ANSI.answer, ANSI)
-      const answerRows = []
-      for (const r of mdRows) {
-        if (r === null) answerRows.push('')
-        else answerRows.push(r[0] + r[1])
+      const doc = renderMarkdownDocument(activeStream.text, contentWidth, ANSI.answer, ANSI)
+      const answerRows = [...doc.rows]
+      if (answerRows.length > 0) {
+        answerRows[answerRows.length - 1] += `${ANSI.blue}▋${ANSI.reset}`
       }
       answerRows.push('')
       addBlock({
@@ -552,19 +593,60 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
         startSeq: 999999,
         endSeq: 999999,
         rows: answerRows,
-        logicalLines: [activeStream.text]
+        logicalLines: [activeStream.text],
+        plainText: doc.plainText,
+        rowSpans: doc.rowSpans
       })
     }
 
     if (activeStream.tool) {
+      const frame = activeStream.frame || '⠋'
+      const dots = activeStream.dots || '...'
       const toolName = safe(activeStream.tool.name || 'tool')
+      const rawArgs = typeof activeStream.tool.args === 'string' ? activeStream.tool.args : JSON.stringify(activeStream.tool.args ?? '')
+      const cleanArgs = rawArgs.replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim()
+      const toolSec = activeStream.tool.startTime ? Math.max(1, Math.floor((Date.now() - activeStream.tool.startTime) / 1000)) : (activeStream.elapsedSec || 1)
+      const toolRows = [
+        `  ${ANSI.amber}${frame} Calling ${toolName}${dots} (${toolSec}s)${ANSI.reset}`
+      ]
+      if (cleanArgs) {
+        const argLines = wrap(cleanArgs, contentWidth - 12).slice(0, 2)
+        for (let i = 0; i < argLines.length; i++) {
+          const prefix = i === 0 ? '└ $ ' : '  '
+          toolRows.push(`    ${ANSI.dim}${prefix}${shorten(argLines[i], contentWidth - 12)}${ANSI.reset}`)
+        }
+      }
+      if (activeStream.message) {
+        toolRows.push(`    ${ANSI.dim}  [${activeStream.message}]${ANSI.reset}`)
+      }
+      toolRows.push('')
       addBlock({
         key: 'active-tool',
         kind: 'activity',
         startSeq: 999999,
         endSeq: 999999,
-        rows: [`  ${ANSI.amber}⚙ Calling ${toolName}...${ANSI.reset}`, ''],
-        logicalLines: [`Calling ${toolName}`]
+        rows: toolRows,
+        logicalLines: toolRows.map(visibleOf)
+      })
+    }
+
+    if (!activeStream.reasoning && !activeStream.text && !activeStream.tool) {
+      const frame = activeStream.frame || '⠋'
+      const dots = activeStream.dots || '...'
+      const elapsedSec = activeStream.elapsedSec || 1
+      const phrase = activeStream.phrase || 'Thinking'
+      const spinnerRows = [
+        `  ${ANSI.blueSoft}${frame} ${phrase}${dots} (${elapsedSec}s)${ANSI.reset}`,
+        `    ${ANSI.dim}│ processing prompt...${ANSI.reset}`,
+        ''
+      ]
+      addBlock({
+        key: 'active-spinner',
+        kind: 'activity',
+        startSeq: 999999,
+        endSeq: 999999,
+        rows: spinnerRows,
+        logicalLines: spinnerRows.map(visibleOf)
       })
     }
   }

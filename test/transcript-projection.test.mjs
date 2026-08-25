@@ -107,7 +107,7 @@ const streamDoc = projectTranscript(singleToolEvents, 80, {
 })
 const streamRowsText = streamDoc.rows.join('\n')
 assert.ok(streamRowsText.includes('Live streaming answer in progress...'), 'Active streaming text must be projected in document')
-assert.ok(streamRowsText.includes('Thought for 1 lines'), 'Active reasoning must be projected in document')
+assert.ok(streamRowsText.includes('Thinking') || streamRowsText.includes('Thought for'), 'Active reasoning must be projected in document')
 
 // 9. Block metadata realignment test: startRow and rowCount must strictly match cleanedRows indices
 for (const block of streamDoc.blocks) {

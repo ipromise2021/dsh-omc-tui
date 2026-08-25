@@ -831,6 +831,9 @@ export class TuiApp {
           }
           const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.providerPanel || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.exitConfirm || this.skillsPanel
           if (hasOverlay) return
+          if (this.screenRenderer?.isAltScreen) {
+            this.needsReproject = true
+          }
           this.scheduleRender()
         }, 100)
       }
@@ -922,13 +925,24 @@ export class TuiApp {
     const text = this.streaming?.text || ''
     const reasoning = this.streaming?.reasoning || this.currentTurnReasoning?.text || ''
     const tool = this.streaming?.tool || null
-    if (!text && !reasoning && !tool) return null
+    const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    const frame = frames[Math.floor(Date.now() / 80) % frames.length]
+    const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
+    const elapsedSec = this.reasoningAt
+      ? Math.max(1, Math.floor((Date.now() - this.reasoningAt) / 1000))
+      : (this.turnStartTime ? Math.max(1, Math.floor((Date.now() - this.turnStartTime) / 1000)) : 1)
+
     return {
       text,
       reasoning,
       tool,
+      frame,
+      dots,
+      elapsedSec,
+      phrase: this.activityPhrase(),
+      message: this.message,
       model: this.activeModel?.model ?? this.agent?.options?.model,
-      time: this.reasoningAt || this.currentTurnReasoning?.time || Date.now()
+      time: this.reasoningAt || this.currentTurnReasoning?.time || this.turnStartTime || Date.now()
     }
   }
 
@@ -6321,55 +6335,6 @@ export class TuiApp {
       : this.statusRows(columns)
     
     this.inputMaxRows = Math.max(3, Math.min(10, rows - 10))
-    if (this.active && !this.questionPanel && !this.pendingApproval) {
-      const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-      const frame = frames[Math.floor(Date.now() / 80) % frames.length]
-      const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
-      const elapsedSec = this.reasoningAt ? Math.max(1, Math.floor((Date.now() - this.reasoningAt) / 1000)) : 1
-
-      const maxCol = Math.max(20, columns - 12)
-
-      if (this.streaming.reasoning) {
-        const rawLines = this.streaming.reasoning.split('\n').filter((l) => l.trim().length > 0)
-        const charCount = this.streaming.reasoning.length
-        lines.push(`  ${ANSI.blueSoft}${frame} Thinking${dots} (${elapsedSec}s · ${charCount} chars)${ANSI.reset}`)
-        const recent = rawLines.slice(-3)
-        while (recent.length < 3) recent.unshift('')
-        for (let i = 0; i < 3; i++) {
-          const line = recent[i]
-          const isLast = i === 2
-          const preview = line ? shorten(line.trim(), maxCol) : ''
-          const cursor = isLast ? `${ANSI.blue}▋${ANSI.reset}` : ''
-          lines.push(`    ${ANSI.dim}│ ${preview}${cursor}${ANSI.reset}`)
-        }
-      } else if (this.streaming.tool) {
-        const toolName = this.streaming.tool.name || 'tool'
-        const rawArgs = typeof this.streaming.tool.args === 'string' ? this.streaming.tool.args : JSON.stringify(this.streaming.tool.args ?? '')
-        const cleanArgs = rawArgs.replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim()
-        const toolSec = this.streaming.tool.startTime ? Math.max(1, Math.floor((Date.now() - this.streaming.tool.startTime) / 1000)) : elapsedSec
-        lines.push(`  ${ANSI.amber}${frame} Calling ${toolName}${dots} (${toolSec}s)${ANSI.reset}`)
-        const argLines = wrap(cleanArgs || toolName, maxCol - 4).slice(0, 2)
-        while (argLines.length < 2) argLines.push('')
-        lines.push(`    ${ANSI.dim}└ $ ${shorten(argLines[0] || toolName, maxCol)}${ANSI.reset}`)
-        lines.push(`    ${ANSI.dim}  ${shorten(argLines[1] || '', maxCol)}${ANSI.reset}`)
-        lines.push(`    ${ANSI.dim}  ${this.message ? `[${this.message}]` : 'executing in sandbox...'}${ANSI.reset}`)
-      } else if (this.streaming.text || this.streamBuffer) {
-        const rawStream = (this.streamBuffer || this.streaming.text || '').split('\n').filter((l) => l.trim().length > 0)
-        lines.push(`  ${ANSI.blue}${frame} Generating response${dots} (${elapsedSec}s)${ANSI.reset}`)
-        const recent = rawStream.slice(-3)
-        while (recent.length < 3) recent.unshift('')
-        for (let i = 0; i < 3; i++) {
-          const line = recent[i]
-          const preview = line ? shorten(line.trim(), maxCol) : ''
-          lines.push(`    ${ANSI.dim}│ ${preview || (i === 2 ? 'streaming markdown output...' : '')}${ANSI.reset}`)
-        }
-      } else {
-        lines.push(`  ${ANSI.blue}${ANSI.bold}${frame} ${this.activityPhrase()}${dots} (${elapsedSec}s)${ANSI.reset}`)
-        lines.push(`    ${ANSI.dim}│ analyzing workspace...${ANSI.reset}`)
-        lines.push(`    ${ANSI.dim}│ preparing next step...${ANSI.reset}`)
-        lines.push(`    ${ANSI.dim}│ processing...${ANSI.reset}`)
-      }
-    }
 
     if (this.compactState) {
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
