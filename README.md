@@ -137,8 +137,10 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 | `/jobs` | 查看后台任务、读取输出或取消任务 |
 | `/skills` | 浏览并在 TUI Profile 中切换 Skill 的 on/off 状态 |
 | `/resume` | 恢复当前工作目录下的历史会话 |
+| `/rename <标题>` | 重命名当前会话 |
 | `/mcp` / `/hooks` | 查看已挂载的 MCP 与 Hook 状态 |
 | `/export` | 将当前会话导出为 Markdown |
+| `/exit` | 安全退出终端（有活跃后台任务时弹出确认） |
 
 其他命令和快捷键可以在 TUI 中通过 `?`、`/help` 或 `Ctrl+P` 查看。
 

@@ -13,9 +13,9 @@
 
 ---
 
-## 📝 日常开发记录（2026-08-15 → 08-17）
+## 📝 日常开发记录（2026-08-15 → 08-24）
 
-以下按日期汇总最近几天的日常开发记录，共 124 次提交，涉及架构、渲染、交互、视觉与文档等方面。每个专题的详细记录见下文各节。
+以下按日期汇总日常开发记录，涉及架构、渲染、交互、视觉、上游适配与文档等方面。每个专题的详细记录见下文各节。
 
 ### 📅 2026-08-15 · 初建与集成（3 commits）
 
@@ -39,6 +39,17 @@
 - **工具链编排**：树遍历状态机模型（详见第 6 节）、连续混合工具自动聚合与工具组自动收起（`41ec6bc`、`d261455`、`759df6d`）；
 - **流式渲染稳定性**：文字重复与标题重复刷屏修复（详见第 7 节）、Scrollback 提交原子单次写入 0 闪烁（`d78c1f6`、`293c54f`）、回合结束高度差精确锚定（`0c00abf`、`e43a9e4`）、4 行活动抽屉锁定整轮（`103fe52`、`66a649d`）；
 - **文档与规范**：README 重做 + 产品宣传白皮书（`007d27e`、`9edd4da`）、AGENTS.md / CLAUDE.md 项目规范（`ca6a6cc`）、CHANGELOG 体系建立（`2d55c19`）、文档事实校正与 GitHub Issue 模板（详见第 10 节）。
+
+### 📅 2026-08-20 → 08-24 · 上游适配、Provider 生态、Vision 路由与生命周期管理（9 commits）
+
+- **Provider 管理与交互向导**：新增 `/provider` 命令及交互式 Provider 管理面板，支持自定义端点、鉴权与模型列表配置（`44dffcc`）；
+- **渲染与会话健壮性**：CJK 与 ANSI 宽字符截断强化、`/btw` 独立会话流程稳固、自动化 PTY 端到端测试套件（`95780a1`）；
+- **Statusline 深度上下文 HUD**：集成实时 Git 分支、工作区变更及 ahead/behind 监控（`src/core/git.js`），支持活跃 Jobs、MCP、Hooks、Skills 多维度指标可视化（`2643d3b`）；
+- **Harness rc.1 契约适配**：全面对齐 `@deepseek-ai/dsh@0.1.1-rc.1`，适配模型 Reasoning Effort 级联与预设重组（`f94d400`）；
+- **Vision 旁路视觉路由**：新增 `src/vision-router.js` 与 `/vision` 命令，实现主模型无视觉时自主调度旁路 Agent 识别图片（`45dd5c8`）；
+- **渲染与交互微调**：高对比度 Markdown 代码块与表格边框渲染优化、Context 消耗预警与 Skills 开关修复（`4d0cecc`）；
+- **托管 Browser 租约与生命周期**：新增 `src/browser-lease.js` 托管浏览器生命周期、多选/自定义问卷交互提升（`7f276fd`）；
+- **输入控制与 Jobs 交互增强**：输入历史去重与导航增强、Jobs 面板支持流式输出读取与任务取消、退出确认面板（`src/panels/exit-confirm.js`）及退出时 Browser 租约自动回收（`b328df5`）。
 
 ---
 
@@ -163,6 +174,36 @@
 * **解决方案**：
   * **原子单次写入**：将 `erase`、`content`、`footerText` 与 `cursorMove` 合并为单个 ANSI 缓冲区，通过单次 `process.stdout.write(buffer)` 原子输出，彻底根除任何中间空白帧，**流式输出 0 闪烁**。
   * **差值精确滚动推进**：在 `turn/end` 抽屉关闭的瞬间，计算新旧高度差（`heightDiff`），将完成行指标（`✻ finished in 15.7s · 3 tools`）与差值空行原子压入滚动区，正好抵消 4 行高度差，**输入框与 Statusline 绝对保持在原位，0 垂直跳跃**。
+
+---
+
+### 13. 交互式模型 Provider 管理与自定义 Provider 向导 (`/provider`)
+* **架构演进**：
+  * 新增 [src/panels/provider-panel.js](src/panels/provider-panel.js)，提供全交互式 Provider 管理入口。
+  * 支持查看当前 Provider 状态、切换默认 Provider，并提供步进式向导添加兼容 OpenAI/Anthropic/DeepSeek 接口规范的自定义端点与模型。
+  * 自动持久化配置至 Harness 官方模型配置服务，保持无缝生态兼容。
+
+---
+
+### 14. 旁路 Vision 视觉路由体系 (`/vision`)
+* **核心设计**：
+  * 引入 [src/vision-router.js](src/vision-router.js)，解决主会话模型不支持多模态视觉时的图片识别诉求。
+  * 机制：当向主模型发送图片且当前模型仅支持纯文本时，TUI 自主调度已配置的独立视觉 Agent（通过 `/vision <provider>/<model>` 设置）提取图片描述与 OCR 关键信息，将结果作为旁路工具输出无缝注入主会话上下文，既保证主模型无需切换，又赋予强大的多模态感知。
+
+---
+
+### 15. 状态栏 Git 深度状态与动态上下文 HUD
+* **增强内容**：
+  * 在 [src/core/git.js](src/core/git.js) 实现轻量级非阻塞 Git 状态探测引擎，精准采集当前分支、未提交变更统计（`staged`/`modified`/`untracked`）以及远程分支 `ahead/behind` 指标。
+  * Statusline 在 `detailed` 与 `compact` 模式下集成动态上下文 HUD：直观展示已挂载 MCP 工具服务、活跃 Hook、后台 Jobs 计数及 Skills 启停状态，并具备 Context 消耗水位预警。
+
+---
+
+### 16. 托管 Browser 租约生命周期与优雅退出保护
+* **健壮性保障**：
+  * 引入 [src/browser-lease.js](src/browser-lease.js)，管理 Playwright / Browser 工具会话的租约状态与生命周期。
+  * 新增 [src/panels/exit-confirm.js](src/panels/exit-confirm.js) 退出确认面板，防止后台长任务或活跃连接误退出；在进程退出（`beforeExit` / `SIGINT`）时自动安全回收托管的 Browser 租约与后台资源。
+  * 升级 Jobs 管理面板（[src/panels/jobs-panel.js](src/panels/jobs-panel.js)），支持实时流式阅读任务输出与一键取消。
 
 ---
 
