@@ -9,7 +9,7 @@
 
 **DeepSeek Harness 的终端原生 TUI**
 
-保留终端 Scrollback，提供多模态图片、行内审批、Plan/Jobs、模型选择和上下文状态栏。
+保留终端 Scrollback，提供自主决策视觉 Subagent、多模态图片直贴、行内审批、Plan/Jobs、模型选择和上下文状态栏。
 
 [界面与设计说明](PRODUCT_SHOWCASE.md) · [兼容性记录](HARNESS_COMPATIBILITY.md) · [变更日志](CHANGELOG.md)
 
@@ -21,7 +21,9 @@
 
 插件专注于终端渲染与键盘交互；模型、会话、工具、权限、后台任务及持久化均由 Harness 官方服务提供。
 
-项目参考了 Claude Code CLI 的交互习惯，适合希望在终端中使用 DSH，同时保留滚轮回看、文本选择和复制体验的用户。
+个人比较喜欢 Claude Code 终端的交互方式，项目参考了它的习惯，适合希望在终端中使用 DSH，同时保留滚轮回看、文本选择和复制体验的用户。
+
+> **个人尝试开发**的插件工具，功能会按需扩展，Bug 也会持续修复。欢迎使用、点 Star 和反馈问题。
 
 ## 插件功能
 
@@ -33,11 +35,16 @@
 
 会话恢复、Plan 模式、权限审批、Jobs、Skills、模型和图片附件都使用 Harness 官方服务与 durable event。TUI 只负责展示和交互。
 
-### 图片粘贴与多模态
+### 智能视觉 Subagent（全自动自主决策识别）
 
-支持 iTerm2 OSC 1337、Kitty Graphics 和 macOS 剪贴板图片。图片经过 Harness Attachment 管道保存：当前模型支持视觉时直接发送；否则主 Agent 可自主调用已配置的 `analyze_image` 旁路视觉工具，主会话模型保持不变。
+deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片的能力。传统方案往往要求用户**手动切换全局模型**、**手动调用特定技能/插件**，或在外部识别后再复制文本，严重打断编程思路。
 
-执行 `/vision` 可查看精简的常用视觉路由；再使用 `/vision <provider>/<model>` 配置其中一个模型。此后，主 Agent 会在需要识别图片时调用临时视觉 Agent，并将识别结果作为工具结果继续处理。
+`dsh-omc-tui` 插件实现了 **零手动干预的自主旁路视觉架构（说人话就是子代理，主agent会自主分配给该代理执行）**：
+
+- **图片无感直贴**：支持在终端直接按 `Cmd/Ctrl+V` 粘贴 macOS 剪贴板图片，或通过 iTerm2 OSC 1337、Kitty Graphics 协议直接发送图片。图片通过 Harness Attachment 管道自动管理与落盘。
+- **Agent 自主决策调用**：**用户无需手动使用技能、无需手动执行插件命令，也无需临时切换主模型**。主 Agent（纯文本/代码模型）在接收到带图片上下文的提问时，会结合当前任务意图**自主判断**何时需要读取图片，并在需要时自动触发底层的 `analyze_image` 视觉工具。
+- **瞬时旁路 Sidecar Subagent**：TUI 在后台动态拉起一个隔离的临时视觉 Subagent（使用通过 `/vision <provider>/<model>` 一次性配置好的视觉模型，如 Claude 3.5 Sonnet、GPT-4o 或 Gemini 等），定向解析图像细节、提取 OCR / UI 布局信息后立即销毁。
+- **主会话无缝协同**：视觉识别结果以标准工具结果形式返回给主 Agent，主模型保持原有的模型身份、推理链与上下文记忆继续处理任务，既享受了主模型的纯粹代码推理能力，又获得了强大的多模态感知。
 
 ### 行内审批与问题面板
 
@@ -45,7 +52,7 @@
 
 ### 自适应状态栏
 
-状态栏可以显示：
+状态栏可以显示（参考了claude-hud插件的风格）：
 
 - 当前模型、Plan/Build 模式和权限档位
 - 会话累计 Context 进度与水位预警
@@ -191,7 +198,7 @@ DSH_TEST_FIXTURE_HOME=/path/to/dsh-home npm run test:pty
 
 ## 反馈与贡献
 
-项目以实际终端使用体验为基础，按需持续完善。
+个人开发的开源项目，以实际终端使用体验为基础，按需开发、持续完善。欢迎使用、点 Star，也欢迎反馈 Bug 和提出功能建议。
 
 如果遇到问题，可以提交 [Issue](https://github.com/ipromise2021/dsh-omc-tui/issues)。建议附上 DSH 版本、Node.js 版本、操作系统、终端类型和复现步骤。也欢迎直接提交 PR。
 
