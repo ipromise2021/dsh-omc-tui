@@ -101,6 +101,24 @@ npx --yes @deepseek-ai/dsh@latest --profile tui
 dsh --profile tui
 ```
 
+### 💡 快捷启动别名（推荐）
+
+日常使用与开发中，我更习惯在终端配置文件（如 `~/.zshrc` 或 `~/.bashrc`）中添加别名，直接输入 `dsh-omc-tui` 或 `omc` 快速启动（主要就是想少敲点键盘）：
+
+```sh
+# 添加到 ~/.zshrc 或 ~/.bashrc
+alias dsh-omc-tui="dsh --profile tui"
+alias omc="dsh --profile tui"
+```
+
+配置后，在任意工作目录下直接执行：
+
+```sh
+dsh-omc-tui
+# 或
+omc
+```
+
 ### 本地开发安装
 
 建议使用单独的 `DSH_HOME`，避免影响日常配置：
