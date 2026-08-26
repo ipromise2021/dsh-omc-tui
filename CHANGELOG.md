@@ -8,6 +8,7 @@
 
 | 版本 | 日期 | 说明 |
 | :--- | :--- | :--- |
+| **v0.2.3** | 2026-08-26 | **模型检索、生命周期加固与 Windows 防护**。Model Picker 交互式搜索过滤（多词匹配、命中高亮、空态与计数提示）；Windows PowerShell / CMD 危险命令拦截（`Remove-Item -Recurse -Force C:\`、`Clear-Disk`、`Initialize-Disk`、`Format-Volume`、`format C:`、`powershell -EncodedCommand` 混淆载荷还原审查、`cmd /c` 穿透）；会话生命周期加固（stop 幂等并释放当前 handle 与技能覆盖、followup 失败回滚状态、审批队列 aborted 信号跳过、凭据持久化前能力检查）；shell rc 严格 `export` 解析并纳入 `.bashrc`/`.bash_profile`；`/compact` 用量即时刷新、`/clear` alt-screen 感知清屏、`/btw` 旁路代理禁用工具调用；预览用量（recentInput）兜底消除 Context 误报。 |
 | **v0.2.2** | 2026-08-26 | **npm 安装方式上线**。发布至 npm registry，README 安装指引改为 npm 包名直装优先（`dsh plugin --profile tui add dsh-omc-tui`），GitHub 源码安装作为备选；无需 pnpm 对 Git 依赖的构建授权步骤。 |
 | **v0.2.1** | 2026-08-26 | **危险命令守卫（Danger Guard）上线与加固**。新增 `src/core/danger-guard.js` 原生 watchdog，挂载 Harness `tools/pre-execute` 拦截点与 `ctx.tools.guard()`：结构化 AST/Tokenizer 识别 `rm -rf /`、`chmod -R 777 /`、`git push -f`、`mkfs`/`dd` 直写磁盘、fork 炸弹、`find -delete` 等破坏性命令；支持子 shell 注释感知提取、`sh -c` 引号/粘连载荷、包装命令带值选项解析、ANSI-C 全转义解码与路径规范化逃逸拦截；`.dsh/danger-rules.json` 自定义 block/allow 全段锚定；递归深度与命令长度 fail-closed 保守拦截；会话生命周期全程接管与释放。 |
 | **v0.2.0** | 2026-08-26 | **视口投影渲染架构升级与性能优化**。Document + Viewport 纯投影渲染管线（`projectTranscript` → 视口差分重绘与语义锚点）；流式活动状态投影进视口 + 单 spinner 活动 HUD（耗时 / tokens / tok/s / effort 标注）；base 转写缓存 + live 尾流分层合并，流式阶段不再全量重投影；Alt/Meta 导航键回归修复；拖拽选区边缘自动滚动；`autocomplete` 路径穿越防护；会话切换/恢复失败回滚加固；live reasoning 列宽自适应与折叠交互。 |
