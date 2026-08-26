@@ -2104,6 +2104,10 @@ export class TuiApp {
     const panel = this.questionPanel
     if (!panel) return
     this.saveCurrentQuestionAnswer()
+    if (panel.questions.length === 1) {
+      this.finishQuestion(undefined, { answers: panel.answers.filter(Boolean) })
+      return
+    }
     const totalTabs = panel.questions.length + 1
     if (panel.index + 1 < totalTabs) {
       panel.index += 1
@@ -2266,6 +2270,10 @@ export class TuiApp {
         this.enterCustomQuestionInput()
         return
       }
+      const isMulti = !!(question?.multiSelect || question?.multi_select)
+      if (!isMulti) {
+        panel.selectedOptions = new Set([panel.selected])
+      }
       this.answerQuestion()
       return
     }
@@ -2315,7 +2323,17 @@ export class TuiApp {
       return
     }
     if (/^[1-9]$/.test(value)) {
-      this.toggleQuestionOption(Number(value) - 1)
+      const idx = Number(value) - 1
+      if (idx < options.length) {
+        const isMulti = !!(question?.multiSelect || question?.multi_select)
+        if (isMulti) {
+          this.toggleQuestionOption(idx)
+        } else {
+          panel.selected = idx
+          panel.selectedOptions = new Set([idx])
+          this.answerQuestion()
+        }
+      }
     }
   }
 

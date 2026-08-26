@@ -848,6 +848,58 @@ const emptyCustomRestoreApp = {
 TuiApp.prototype.restoreCurrentQuestionAnswer.call(emptyCustomRestoreApp)
 assert.deepEqual([emptyCustomRestoreApp.input, emptyCustomRestoreApp.cursor], ['', 0])
 
+// Test question panel single-select without radio brackets & direct Enter submit
+let directEnterResult
+const directEnterApp = {
+  questionPanel: {
+    questions: [{ id: 'q-publish', question: 'How to tag?', options: ['Full release', 'Tag only'] }],
+    index: 0,
+    selected: 0,
+    selectedOptions: new Set(),
+    answers: [],
+    customs: [],
+    customModes: [],
+    customEditing: false
+  },
+  currentQuestion: TuiApp.prototype.currentQuestion,
+  saveCurrentQuestionAnswer: TuiApp.prototype.saveCurrentQuestionAnswer,
+  restoreCurrentQuestionAnswer: TuiApp.prototype.restoreCurrentQuestionAnswer,
+  answerQuestion: TuiApp.prototype.answerQuestion,
+  scheduleRender: noop,
+  finishQuestion(_error, answer) { directEnterResult = answer }
+}
+
+const renderedQuestionRows = renderQuestionPanel(directEnterApp.questionPanel, directEnterApp.questionPanel.questions[0], 80, 24)
+const renderedQuestionText = visibleOf(renderedQuestionRows.join('\n'))
+assert.ok(!renderedQuestionText.includes('( )'), 'Single select options must NOT have ( ) brackets')
+assert.ok(!renderedQuestionText.includes('(•)'), 'Single select options must NOT have (•) brackets')
+assert.match(renderedQuestionText, /1\.\s+Full release/, 'Option label rendered cleanly')
+
+TuiApp.prototype.handleQuestionToken.call(directEnterApp, '\r')
+assert.deepEqual(directEnterResult, { answers: [{ id: 'q-publish', selected: ['Full release'] }] }, 'Direct Enter submits selected option on single question')
+
+let digitSelectResult
+const digitSelectApp = {
+  questionPanel: {
+    questions: [{ id: 'q-publish', question: 'How to tag?', options: ['Full release', 'Tag only'] }],
+    index: 0,
+    selected: 0,
+    selectedOptions: new Set(),
+    answers: [],
+    customs: [],
+    customModes: [],
+    customEditing: false
+  },
+  currentQuestion: TuiApp.prototype.currentQuestion,
+  saveCurrentQuestionAnswer: TuiApp.prototype.saveCurrentQuestionAnswer,
+  restoreCurrentQuestionAnswer: TuiApp.prototype.restoreCurrentQuestionAnswer,
+  answerQuestion: TuiApp.prototype.answerQuestion,
+  scheduleRender: noop,
+  finishQuestion(_error, answer) { digitSelectResult = answer }
+}
+TuiApp.prototype.handleQuestionToken.call(digitSelectApp, '2')
+assert.deepEqual(digitSelectResult, { answers: [{ id: 'q-publish', selected: ['Tag only'] }] }, 'Digit 2 directly selects and submits option 2')
+
 let commandArgs
 const commandApp = {
   ctx: {

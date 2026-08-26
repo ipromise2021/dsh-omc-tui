@@ -144,17 +144,23 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
     }
     const option = options[optionIndex]
     const chosen = panel.selectedOptions.has(optionIndex)
-    const marker = isMulti ? (chosen ? '[x]' : '[ ]') : (chosen ? '(•)' : '( )')
     const num = `${optionIndex + 1}.`
     const labelText = safe(option?.label ?? (typeof option === 'string' ? option : ''))
-    if (current) {
-      const chosenColor = chosen ? (ANSI.bash ?? ANSI.blue) : ANSI.blue
-      const prefix = `${chosenColor}${marker}${ANSI.reset} `
-      lines.push(`  ${ANSI.blue}${num} ${prefix}${ANSI.userBg ?? '\x1b[48;5;237m'}${ANSI.ink}${ANSI.bold} ${labelText} ${ANSI.reset}`)
-    } else {
-      const markerColor = chosen ? (ANSI.bash ?? ANSI.blue) : ANSI.dim
+    if (isMulti) {
+      const marker = chosen ? '[x]' : '[ ]'
+      const markerColor = chosen ? (ANSI.bash ?? ANSI.blue) : (current ? ANSI.blue : ANSI.dim)
       const prefix = `${markerColor}${marker}${ANSI.reset} `
-      lines.push(`  ${ANSI.dim}${num} ${prefix}${ANSI.answer}${labelText}${ANSI.reset}`)
+      if (current) {
+        lines.push(`  ${ANSI.blue}${num} ${prefix}${ANSI.userBg ?? '\x1b[48;5;237m'}${ANSI.ink}${ANSI.bold} ${labelText} ${ANSI.reset}`)
+      } else {
+        lines.push(`  ${ANSI.dim}${num} ${prefix}${ANSI.answer}${labelText}${ANSI.reset}`)
+      }
+    } else {
+      if (current) {
+        lines.push(`  ${ANSI.blue}${num}${ANSI.reset} ${ANSI.userBg ?? '\x1b[48;5;237m'}${ANSI.ink}${ANSI.bold} ${labelText} ${ANSI.reset}`)
+      } else {
+        lines.push(`  ${ANSI.dim}${num}${ANSI.reset} ${ANSI.answer}${labelText}${ANSI.reset}`)
+      }
     }
     if (option?.description) {
       const descWrapped = wrap(safe(option.description), Math.max(20, columns - 10)).slice(0, 2)
@@ -169,8 +175,8 @@ export function renderQuestionPanel(panel, question, columns, rows, ANSI = defau
   lines.push('')
   const quickSelect = options.length > 0 ? ` · 1-${Math.min(9, options.length)} quick select` : ''
   const hint = isMulti
-    ? '↑↓ choose · Space toggle · Enter type own answer · Tab next · Esc cancel'
-    : `↑↓ choose · Enter select/type own answer${quickSelect} · Tab next · Esc cancel`
+    ? '↑↓ choose · Space toggle · Enter next · Tab next · Esc cancel'
+    : `↑↓ choose · Enter select${quickSelect} · Esc cancel`
   lines.push(...wrap(hint, Math.max(20, columns - 4)).map((line) => `  ${ANSI.muted}${line}${ANSI.reset}`))
   return lines
 }
