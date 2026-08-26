@@ -8,6 +8,7 @@ import { homedir, tmpdir } from 'node:os'
 import { ImageParser, formatImageBytes, pngDimensions } from './image-protocol.js'
 import { registerVisionRouter } from './vision-router.js'
 import { registerBrowserLease } from './browser-lease.js'
+import { createDangerGuard } from './core/danger-guard.js'
 import {
   THEMES,
   defaultTheme,
@@ -395,6 +396,7 @@ export class TuiApp {
     this.needsLiveProjection = false
     this.edgeScrollTimer = undefined
     this.edgeScrollDelta = 0
+    this.dangerGuardDispose = undefined
     this.backgroundInitTimer = undefined
     this.autoCompactTimer = undefined
     this.animationTimer = undefined
@@ -587,6 +589,7 @@ export class TuiApp {
       this.presetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? (isResumed ? resumeRecord?.header.agentPreset : requestedPreset)
       this.reasoningEffort = selection.reasoningEffort
       this.attachRequestOverride(agent)
+      this.dangerGuardDispose = await this.createDangerGuardDisposer(agent)
       this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
       this.usage = foldUsage(agent.session.events)
       this.refreshContextTokens?.()
@@ -777,6 +780,8 @@ export class TuiApp {
     this.inputRouter?.dispose?.()
     try { this.requestOverrideDispose?.() } catch {}
     this.requestOverrideDispose = undefined
+    try { this.dangerGuardDispose?.() } catch {}
+    this.dangerGuardDispose = undefined
     for (const dispose of this.disposers.splice(0).reverse()) {
       try {
         dispose?.()
@@ -941,6 +946,19 @@ export class TuiApp {
     this.requestOverrideDispose?.()
     this.requestOverrideDispose = dispose
     return dispose
+  }
+
+  /**
+   * Create a dangerous-command watchdog disposer for `agent` (pure, no state
+   * mutation — the caller owns commit/rollback via commitSessionState).
+   */
+  async createDangerGuardDisposer(agent) {
+    return createDangerGuard(agent, {
+      rulesPath: `${process.cwd()}/.dsh/danger-rules.json`,
+      onBlocked: (hit) => {
+        this.log('error', `危险命令已拦截 · ${hit.rule} · ${shorten(String(hit.command), 80)} (见 .dsh/danger-rules.json)`, 'guard')
+      }
+    })
   }
 
   activeStreamPayload() {
@@ -3898,6 +3916,7 @@ export class TuiApp {
     presetName,
     reasoningEffort,
     requestOverrideDispose,
+    dangerGuardDispose,
     usage,
     permissionName,
     reasoningBlocks = [],
@@ -3911,6 +3930,7 @@ export class TuiApp {
     this.reasoningEffort = reasoningEffort
     this.activeModel = undefined
     this.requestOverrideDispose = requestOverrideDispose
+    this.dangerGuardDispose = dangerGuardDispose
     this.usage = usage
     this.permissionName = permissionName
     this.viewClearedSeq = 0
@@ -3947,8 +3967,9 @@ export class TuiApp {
     this.refreshContextTokens?.()
   }
 
-  async cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers) {
+  async cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers, previousDangerGuardDispose) {
     try { previousRequestOverrideDispose?.() } catch {}
+    try { previousDangerGuardDispose?.() } catch {}
     for (const disposeOverride of previousSkillOverrideDisposers?.values?.() ?? []) {
       try { disposeOverride() } catch {}
     }
@@ -3983,6 +4004,7 @@ export class TuiApp {
     let candidate
     let candidateSkillOverrides
     let candidateRequestOverrideDispose
+    let candidateDangerGuardDispose
     try {
       const selection = this.ctx.agentDefaultModel.currentSelection()
       let skillOverrideDisposers
@@ -4004,11 +4026,13 @@ export class TuiApp {
       const candidatePermissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
       const candidateUsage = foldUsage(agent.session.events)
       candidateRequestOverrideDispose = this.createRequestOverride(agent)
+      candidateDangerGuardDispose = await this.createDangerGuardDisposer(agent)
 
       this.stopLocalBackgroundJobs?.()
       const previousHandle = this.handle
       const previousRequestOverrideDispose = this.requestOverrideDispose
       const previousSkillOverrideDisposers = this.skillOverrideDisposers
+      const previousDangerGuardDispose = this.dangerGuardDispose
 
       this.commitSessionState({
         handle: candidate,
@@ -4016,13 +4040,14 @@ export class TuiApp {
         presetName: candidatePresetName,
         reasoningEffort: selection.reasoningEffort,
         requestOverrideDispose: candidateRequestOverrideDispose,
+        dangerGuardDispose: candidateDangerGuardDispose,
         usage: candidateUsage,
         permissionName: candidatePermissionName,
         reasoningBlocks: [],
         isResumed: false
       })
 
-      await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers)
+      await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers, previousDangerGuardDispose)
 
       void this.refreshSkills()
       this.log('ok', isNewSession ? 'New session started.' : `New session started with preset "${id}"`, source)
@@ -4034,6 +4059,7 @@ export class TuiApp {
     } catch (error) {
       if (candidate && this.handle?.agent !== candidate.agent) {
         try { candidateRequestOverrideDispose?.() } catch {}
+        try { candidateDangerGuardDispose?.() } catch {}
         for (const disposeOverride of candidateSkillOverrides?.values?.() ?? []) {
           try { disposeOverride() } catch {}
         }
@@ -4697,6 +4723,7 @@ export class TuiApp {
     let candidate
     let candidateSkillOverrides
     let candidateRequestOverrideDispose
+    let candidateDangerGuardDispose
     try {
       const selection = this.ctx.agentDefaultModel.currentSelection()
       let skillOverrideDisposers
@@ -4724,11 +4751,13 @@ export class TuiApp {
       const candidatePermissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
       const candidateReasoningBlocks = this.extractReasoningBlocks(agent.session.events)
       candidateRequestOverrideDispose = this.createRequestOverride(agent)
+      candidateDangerGuardDispose = await this.createDangerGuardDisposer(agent)
 
       this.stopLocalBackgroundJobs?.()
       const previousHandle = this.handle
       const previousRequestOverrideDispose = this.requestOverrideDispose
       const previousSkillOverrideDisposers = this.skillOverrideDisposers
+      const previousDangerGuardDispose = this.dangerGuardDispose
 
       this.commitSessionState({
         handle: candidate,
@@ -4736,6 +4765,7 @@ export class TuiApp {
         presetName: candidatePresetName,
         reasoningEffort: candidateReasoningEffort,
         requestOverrideDispose: candidateRequestOverrideDispose,
+        dangerGuardDispose: candidateDangerGuardDispose,
         usage: candidateUsage,
         permissionName: candidatePermissionName,
         reasoningBlocks: candidateReasoningBlocks,
@@ -4743,7 +4773,7 @@ export class TuiApp {
         sessionEvents: agent.session.events
       })
 
-      await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers)
+      await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers, previousDangerGuardDispose)
 
       this.touchMru(record.header.id)
       void this.refreshSkills()
@@ -4756,6 +4786,7 @@ export class TuiApp {
     } catch (error) {
       if (candidate && this.handle?.agent !== candidate.agent) {
         try { candidateRequestOverrideDispose?.() } catch {}
+        try { candidateDangerGuardDispose?.() } catch {}
         for (const disposeOverride of candidateSkillOverrides?.values?.() ?? []) {
           try { disposeOverride() } catch {}
         }

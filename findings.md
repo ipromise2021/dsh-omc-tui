@@ -242,6 +242,56 @@
 - **建议：** 封装通用的 `withTimeout` 工具函数，在 `finally` 块中自动执行 `clearTimeout`，并在所有超时竞速路径中统一替换。
 - **关闭验证：** 实现并导出 `withTimeout`，统一替换 `stop()`、`cleanupPreviousSession()`、`applyPresetConfirm()`、`resumeSelected()`、`stopLocalJob()` 和 `stopRunningJobs()` 中的竞速定时器；新增单元测试覆盖快速完成、超时 fallback 与超时 reject 场景，确认定时器正常清理。
 
+### CR-023：危险命令参数分离与路径别名规避
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:150-250`
+- **现象：** 原始正则只覆盖了紧邻组合参数和直接根路径形式。实际验证中 `rm -rf -- /`、`rm -r -f /`、`rm --recursive --force /`、`rm -rf /.`、`chmod -R 777 -- /` 等变体未被拦截。
+- **影响：** 破坏了危险命令守卫的完备性，易被参数排列组合或路径别名绕过。
+- **建议：** 引入结构化参数解析与路径规范化判定，准确识别递归、强制标志与根/主目录目标变体。
+- **关闭验证：** 实现 `splitShellSegments`、`tokenizeArgs`、`checkDestructiveRm`、`checkDestructiveChmod` 及 `checkDangerousGitPush`；新增 15+ 项参数分离、`--`、路径别名（`/.`、`/..`、`/*`、`~/*`、`$HOME`、`${HOME}`）以及 `chmod -R 777 -- /` 的拦截回归断言，全部通过。
+
+### CR-024：复合命令与子命令注入下 allow 规则子串穿透
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:85-185`, `src/core/danger-guard.js:560-630`
+- **现象：** `allow` 规则在整行或子串上非锚定匹配，如配置 `allow: ["git status"]` 时，`git status $(rm -rf /)`、`git status `r\m -rf /`` 或 `git status rm -rf /` 会因包含 `git status` 前缀被整条放行。
+- **影响：** 攻击者可借由前置安全命令或子 shell 命令替换（Command Substitution）掩护高危破坏性操作。
+- **建议：**
+  1. `allow` 模式编译强制应用全段精确锚定（`^(?:pattern)$`）；
+  2. 实现 `extractSubshells`，递归提取并独立校验 `$(...)`、`` `...` `` 等命令替换子命令。
+- **关闭验证：** 新增 `extractSubshells` 与全段锚定 `compileAllowPattern`；新增 `git status $(rm -rf /)`、`git status `r\m -rf /``、`echo "$(rm -rf ~)"` 拦截断言，确认子 shell 注入 100% 被拦截，普通合规 `git status` 正常放行。
+
+### CR-025：新源码文件打包权限为 0600
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js`
+- **现象：** 新建的 `src/core/danger-guard.js` 默认文件权限为 0600 (mode 384)，npm 打包发布后非所有者用户安装可能无法读取该模块。
+- **关闭验证：** 文件权限已修复为 0644 (`-rw-r--r--`)，并通过 `npm pack` 校验打包 tarball 中的文件属性确为 `-rw-r--r--`。
+
+### CR-026：rulesPath 参数未传递给加载函数
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:275-285`, `src/core/danger-guard.js:355-365`
+- **现象：** `createDangerGuard` 将 `options.rulesPath` 仅作为布尔判断，随后仍调用无参 `loadDangerRules()`，导致自定义配置文件路径被忽略。
+- **关闭验证：** `loadDangerRules` 接受 `rulesPathOrCwd` 参数，可读取任意显式 `.json` 文件或目录下的 `.dsh/danger-rules.json`；新增自定义临时路径规则加载与拦截回归测试。
+
+### CR-027：Shell 转义与引号拼接绕过命令名检测
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:230-310`, `src/core/danger-guard.js:340-420`
+- **现象：** 直接按源码字符串前缀匹配 `rm` 时，`r\m -rf /`、`r''m -rf /`、`"r"m -rf /`、`'rm' -rf /`、`\r\m -r -f -- /.` 均可绕过检测。
+- **建议：** 引入 `unquoteToken()` 对命令名与所有参数进行规范化反转义，还原为真实可执行文件名（如 `rm`、`chmod`、`git`）后再匹配。
+- **关闭验证：** 实现 `unquoteToken` 与 `getCommandFromTokens`，新增 `r\m -rf /`、`r''m -rf /`、`"r"m -rf /`、`'rm' -rf /`、`\r\m -r -f -- /.`、`\c\h\m\o\d -R 777 -- /` 及 `g\i\t push -f` 拦截回归测试，全部通过。
+
+### CR-028：Shell 注释与代码数据字符串误拦截
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:185-230`, `src/core/danger-guard.js:630-670`
+- **现象：** 全文正则兜底扫描不区分 shell 注释和数据参数，导致 `echo safe # rm -rf /` 被误判为删根目录，`node -e "console.log('git push --force origin main')"`、`grep -rn "rm -rf /" src/` 被误判为高危操作。
+- **建议：** 去除未加引号的 shell 注释，并基于真实可执行命令及其 AST 参数结构化校验，不在安全命令（`echo`、`node`、`grep` 等）的数据参数中盲目进行全局危险正则扫描。
+- **关闭验证：** 实现 `stripComments`，并将危险检测绑定到提取出的 `cmdName` 和 `args`；新增 `echo safe # rm -rf /`、`node -e "..."`、`grep -rn "..."` 及 `echo "rm -rf /"` 放行回归断言，全部通过。
+
 ## 主分支界面渲染与输出折叠分析（2026-08-25）
 
 ### 当前架构事实

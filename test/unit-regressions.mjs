@@ -20,6 +20,7 @@ import { ANSI, applyTheme } from '../src/renderer/themes.js'
 import { safe, visibleOf, widthOf } from '../src/renderer/ansi.js'
 import { loadShellHistoryFile, loadSystemShellHistory } from '../src/input/history.js'
 import { listDir } from '../src/input/autocomplete.js'
+import { createDangerGuard, checkDangerCommand, compileDangerRules, DEFAULT_DANGER_RULES } from '../src/core/danger-guard.js'
 
 const noop = () => {}
 
@@ -2342,6 +2343,175 @@ for (const dispose of [...altApp.disposers].reverse()) dispose()
 for (const dispose of [...panelLayoutApp.disposers].reverse()) dispose()
 
 for (const dispose of [...histApp.disposers].reverse()) dispose()
+
+// ── dangerous-command watchdog (src/core/danger-guard.js) ──────────────────
+const defaultRules = compileDangerRules()
+const blockedCommands = [
+  ['rm -rf /', /根目录/],
+  ['r\\m -rf /', /根目录/],
+  ["r''m -rf /", /根目录/],
+  ['"r"m -rf /', /根目录/],
+  ["'rm' -rf /", /根目录/],
+  ['\\r\\m -r -f -- /.', /根目录/],
+  ['rm -rf -- /', /根目录/],
+  ['rm -r -f /', /根目录/],
+  ['rm -f -r /', /根目录/],
+  ['rm --recursive --force /', /根目录/],
+  ['rm --force --recursive /', /根目录/],
+  ['rm -rf /.', /根目录/],
+  ['rm -rf /..', /根目录/],
+  ['rm -rf /*', /根目录/],
+  ['rm -rf /.*', /根目录/],
+  ['sudo rm -rf /*', /根目录/],
+  ['rm -rf / && echo done', /根目录/],
+  ['echo $(rm -rf /)', /根目录/],
+  ['echo `r\\m -rf /`', /根目录/],
+  ['echo "$(rm -rf ~)"', /主目录/],
+  ['rm -rf ~', /主目录/],
+  ['rm -rf ~/*', /主目录/],
+  ['rm -fr $HOME', /主目录/],
+  ['rm -rf "$HOME"', /主目录/],
+  ['rm -rf ${HOME}', /主目录/],
+  [':(){ :|:& };:', /fork/],
+  ['mkfs.ext4 /dev/sda1', /格式化磁盘/],
+  ['dd if=/dev/zero of=/dev/sda', /直写磁盘/],
+  ['git push --force origin main', /强制推送/],
+  ['git push -f', /强制推送/],
+  ['g\\i\\t push -f', /强制推送/],
+  ['git push origin +main', /强制推送/],
+  ['chmod -R 777 /', /根目录/],
+  ['\\c\\h\\m\\o\\d -R 777 -- /', /根目录/],
+  ['chmod -R 777 /.', /根目录/],
+  ['chmod --recursive 777 /', /根目录/],
+  ['chmod -R a+rwx /', /根目录/]
+]
+for (const [cmd, labelRe] of blockedCommands) {
+  const hit = checkDangerCommand(cmd, defaultRules)
+  assert.ok(hit, `Dangerous command must be blocked: ${cmd}`)
+  assert.match(hit.rule, labelRe, `Blocked reason label matches for: ${cmd}`)
+}
+const safeCommands = [
+  'rm -rf /tmp/build',
+  'rm -rf ./node_modules',
+  'rm file.txt',
+  'rm -r src/',
+  'chmod 755 /tmp/script.sh',
+  'chmod -R 755 ./dist',
+  'git push',
+  'git push --force-with-lease origin main',
+  'git push origin main --force-with-lease=main',
+  'git status',
+  'ls -la /',
+  'echo safe # rm -rf /',
+  'node -e "console.log(\'git push --force origin main\')"',
+  'grep -rn "rm -rf /" src/',
+  'echo "rm -rf /"'
+]
+for (const cmd of safeCommands) {
+  assert.equal(checkDangerCommand(cmd, defaultRules), null, `Safe command must pass: ${cmd}`)
+}
+assert.equal(checkDangerCommand('', defaultRules), null, 'Empty command passes')
+assert.equal(checkDangerCommand(undefined, defaultRules), null, 'Undefined command passes')
+
+// User allow-list overrides a built-in block for matching segment
+const allowRules = compileDangerRules({ block: [], allow: ['^rm -rf /$'] })
+assert.equal(checkDangerCommand('rm -rf /', allowRules), null, 'User allow rule overrides built-in pattern')
+const extendedRules = compileDangerRules({ block: ['custom-danger-xyz'] })
+assert.ok(checkDangerCommand('custom-danger-xyz', extendedRules), 'User block pattern extends built-ins')
+
+// Unanchored user allow pattern MUST NOT allow substring injection
+const unanchoredAllowRules = compileDangerRules({ block: [], allow: ['git status'] })
+assert.equal(checkDangerCommand('git status', unanchoredAllowRules), null, 'Exact allowed command passes')
+assert.ok(checkDangerCommand('git status $(rm -rf /)', unanchoredAllowRules), 'Subshell injection in allowed command must be blocked')
+assert.ok(checkDangerCommand('git status `r\\m -rf /`', unanchoredAllowRules), 'Backtick subshell injection in allowed command must be blocked')
+
+// Compound command: allow rule for one segment must NOT permit a dangerous sibling segment
+const compoundAllowRules = compileDangerRules({ block: [], allow: ['git status', 'echo safe'] })
+assert.ok(checkDangerCommand('git status; rm -rf /', compoundAllowRules), 'Compound command with allowed prefix and dangerous suffix must be blocked')
+assert.ok(checkDangerCommand('git status && rm -rf -- /', compoundAllowRules), 'Compound command with && must be blocked')
+assert.ok(checkDangerCommand('echo safe | rm -rf /.', compoundAllowRules), 'Compound pipeline with allowed source must block dangerous pipe destination')
+assert.equal(checkDangerCommand('git status; echo safe', compoundAllowRules), null, 'Compound command with all safe/allowed segments passes')
+
+// Custom rulesPath loading from explicit file path
+const customRulesDir = await mkdtemp(join(tmpdir(), 'dsh-danger-rules-'))
+const customRulesPath = join(customRulesDir, 'custom-rules.json')
+try {
+  await writeFile(customRulesPath, JSON.stringify({
+    enabled: true,
+    block: ['^custom-nonstandard-danger$'],
+    allow: ['^rm -rf /allowed-root$']
+  }))
+  let customGuardFn
+  const customAgent = {
+    ctx: {
+      tools: {
+        guard(fn) {
+          customGuardFn = fn
+          return () => {}
+        }
+      }
+    }
+  }
+  await createDangerGuard(customAgent, { rulesPath: customRulesPath })
+  assert.equal(typeof customGuardFn, 'function', 'Guard registered with custom rulesPath')
+  assert.match(customGuardFn({ name: 'bash', arguments: { command: 'custom-nonstandard-danger' } }), /危险命令已被拦截/, 'Custom rule from rulesPath is enforced')
+  assert.equal(customGuardFn({ name: 'bash', arguments: { command: 'rm -rf /allowed-root' } }), undefined, 'Allow rule from custom rulesPath is respected')
+} finally {
+  await rm(customRulesDir, { recursive: true, force: true })
+}
+
+// tools.guard registration path
+let capturedGuard
+let guardDisposed = false
+const guardAgent = {
+  ctx: {
+    tools: {
+      guard(fn) {
+        capturedGuard = fn
+        return () => { guardDisposed = true }
+      }
+    }
+  }
+}
+const guardDispose = await createDangerGuard(guardAgent, { rules: defaultRules })
+assert.equal(typeof capturedGuard, 'function', 'tools.guard must be registered')
+assert.match(capturedGuard({ name: 'bash', arguments: { command: 'git push -f' } }), /危险命令已被拦截/, 'Bash force-push denied by guard')
+assert.equal(capturedGuard({ name: 'read', arguments: { file_path: 'a.js' } }), undefined, 'Non-shell tool passes the guard')
+assert.equal(capturedGuard({ name: 'bash', arguments: { command: 'git push --force-with-lease' } }), undefined, 'Safe force-with-lease passes')
+assert.ok(capturedGuard({ name: 'bash', arguments: { CommandLine: 'rm -rf ~' } }), 'CommandLine args shape is inspected')
+guardDispose()
+assert.equal(guardDisposed, true, 'Guard disposer unregisters')
+
+// Fallback waterfall listener path (harness without ctx.tools.guard)
+let fallbackEvent = ''
+let fallbackListener = null
+let fallbackInvocations = 0
+const fallbackAgent = {
+  ctx: {
+    on(event, listener) {
+      fallbackEvent = event
+      fallbackListener = listener
+      return () => { fallbackInvocations += 1 }
+    }
+  }
+}
+const fallbackDispose = await createDangerGuard(fallbackAgent, { rules: defaultRules })
+assert.equal(fallbackEvent, 'tools/pre-execute', 'Fallback listens on tools/pre-execute')
+let nextCalled = false
+const denyDecision = await fallbackListener({ name: 'bash', arguments: { cmd: 'rm -rf /' } }, () => { nextCalled = true; return { kind: 'allow' } })
+assert.equal(denyDecision.kind, 'deny', 'Fallback waterfall denies dangerous command')
+assert.match(denyDecision.reason, /危险命令已被拦截/, 'Deny reason is model-visible')
+assert.equal(nextCalled, false, 'next() must not run for a denied call')
+const allowDecision = await fallbackListener({ name: 'bash', arguments: { cmd: 'git status' } }, () => { nextCalled = true; return { kind: 'allow' } })
+assert.equal(allowDecision.kind, 'allow', 'Safe command delegates via next()')
+assert.equal(nextCalled, true, 'next() runs for safe calls')
+fallbackDispose()
+assert.equal(fallbackInvocations, 1, 'Fallback disposer registered')
+
+// createDangerGuard with no ctx tools/on support degrades to no-op
+const inertDispose = await createDangerGuard({ ctx: {} }, { rules: defaultRules })
+assert.equal(typeof inertDispose, 'function', 'Degraded guard still returns a disposer')
+inertDispose()
 
 console.log('unit regressions: ok')
 process.exit(0)
