@@ -33,6 +33,14 @@ assert.equal(controller.clickCount, 2)
 const selWord = controller.getSelectedText(mockViewport)
 assert.equal(selWord, 'answer')
 
+// A click without a drag must preserve its click counter for the next press.
+controller.clear()
+controller.handleMouseDown({ row: 0, col: 8 }, mockViewport)
+controller.handleMouseUp({ row: 0, col: 8 }, mockViewport, { write() {} })
+controller.handleMouseDown({ row: 0, col: 8 }, mockViewport)
+assert.equal(controller.clickCount, 2)
+controller.clear()
+
 // 3. Double-click word selection (CJK)
 controller.clear()
 controller.handleMouseDown({ row: 1, col: 4 }, mockViewport)

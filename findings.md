@@ -159,6 +159,89 @@
 - `verified`：PTY 或实际交互场景验证通过。
 - 每项关闭必须附带测试名称、命令结果或人工复现记录。
 
+## 发布前完整审查整改（2026-08-26）
+
+| ID | 状态 | 处理与验证 |
+|---|---|---|
+| CR-012 | resolved | `cyclePermission()` 仅在 `permissionPresets.set()` 成功后更新投影；失败保留原权限并记录错误。`togglePlanMode()` 移除直接 session append 回退，服务缺失或写入失败均明确报错。|
+| CR-013 | resolved | `/new` 保留旧会话为活动投影，直到候选会话完成权限 durable 写入；失败时释放候选 handle 和技能覆盖。request override 在切会话和退出时释放，避免遗留订阅。|
+| CR-014 | resolved | 退出时取消当前与排队审批并释放输入路由；无拖拽鼠标抬起不再重置多击计数。|
+| CR-015 | resolved | 文件补全通过 realpath 与相对路径边界检查，拒绝 `@../` 和解析后位于工作区外的目录。|
+| CR-016 | resolved | 候选路径先完成元数据与订阅准备，再一次性提交活动会话；候选准备失败安全释放所有临时资源。|
+| CR-017 | resolved | 会话切换字段在 viewport 重建前完整提交；重绘异常仅记录可恢复错误，不回滚已成功的会话切换。|
+| CR-018 | resolved | 状态读取、目标计算与服务写入收敛于同一 try/catch 边界内。|
+| CR-019 | resolved | 同步原子提交全部新会话状态，旧 handle 异步带超时 (flush 500ms, dispose 1000ms) 清理，杜绝半提交窗口。|
+| CR-020 | resolved | `/new` 与 `/resume` 共享统一 session-scoped 状态重置逻辑，彻底隔离历史 localLog、expandedKeys、草稿与流状态。|
+| CR-021 | resolved | `refreshSkills()` 异常时保留 `skillOverrideDisposers` 映射，保证 override 释放引用不丢失。|
+| CR-022 | resolved | 封装 `withTimeout` 工具函数，在 finally 中自动 `clearTimeout`，彻底消除异步竞速遗留定时器。|
+
+**验证：** `npm test`、`npm run verify`、`git diff --check` 以及 `npm pack --dry-run` 均通过。
+
+**保留设计项：** 现有 durable event 未提供可靠的工具子树父子边界；`groupActivitySpans()` 仍以事件连续性分组。本轮未把 assistant 中间消息强行合并，避免把不同子树误折叠。应在 Harness 暴露 parent/turn/activity 边界后，再实现真正的“子树完成即整体折叠”。
+
+### CR-016：会话切换仍不是完整事务
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:3891`, `src/index.js:4618`
+- **现象：** `/preset` 在候选会话完成权限写入后立即赋值 `this.handle`、`this.agent`，但随后仍会执行 `composedPreset()`、`attachRequestOverride()`、状态投影等可抛错操作。catch 只会在候选尚未赋为活动会话时释放候选；提交点之后的异常会留下半初始化新会话。`/resume` 仍沿用同类早提交模式，且没有候选清理分支。
+- **影响：** 用户可失去原会话的可用投影，或留下未释放的恢复会话/请求订阅；这与 CR-013 的“失败保持旧会话”目标不一致。
+- **建议：** 将所有不会触及 `this` 的候选状态计算、订阅准备和 durable 投影先完成；最后一次性替换 app 的 session fields。若提交后仍需要失败操作，保存并恢复旧 handle、agent、override disposer 及投影状态。两条路径共用同一切换 helper，避免 `/preset` 与 `/resume` 再次漂移。
+- **关闭验证：** 候选路径现在先完成预设/权限/usage 投影、reasoning 预计算和请求订阅，再一次性替换 app 会话；候选准备失败会释放 request override、技能覆盖和 Harness handle。回归测试注入 `/preset`、`/resume` 的候选预设投影失败，确认旧会话保持活动、候选被释放。`npm test`、`npm run verify`、`git diff --check` 和 npm 打包预检通过；PTY 测试仍因缺少 Harness fixture 阻塞。
+
+### CR-017：`/resume` 提交后仍可能留下混合投影
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:4664-4698`
+- **现象：** 新 handle/agent 和 request override 已提交、旧 handle 已 dispose 后，代码才执行 `restoreImageAttachments()`、usage/permission 赋值、`reprojectDocument()` 和 viewport 定位。其中图片历史或 transcript 投影抛错时，catch 因 `this.handle.agent === candidate.agent` 不会释放或回滚候选。
+- **影响：** app 可能保留新 agent，但仍混用旧 session 的 usage、permission、document 或附件投影；用户看到 `/resume` 失败，实际当前会话却已切换。
+- **测试缺口：** 现有 `latePresetFailureApp` 和 `resumeFailureApp` 都让 `composedPreset()` 在提交前抛错，只证明候选准备失败可清理，并未覆盖提交后的失败。
+- **建议：** 在提交前构造所有纯投影数据；提交时一次性写完所有 session fields。提交后的 MRU、viewport 更新和重绘应改为不会改变切换成败的 best-effort UI 刷新，或保存旧投影并提供完整回滚。新增由 `restoreImageAttachments`/`reprojectDocument` 抛错的测试，明确最终 agent、handle、override 和投影状态。
+- **关闭验证：** session fields 在 viewport 重建前完整赋值；`reprojectDocument()`/viewport 定位失败仅记录“已恢复但渲染失败”的可恢复错误，不再进入切换失败分支。图片附件内容非数组时安全跳过。新增提交后 `reprojectDocument()` 抛错的回归测试，确认新 agent/handle 保持活动、旧 handle 已释放。
+
+### CR-018：状态读取发生在错误边界之外
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/index.js:2331`, `src/index.js:4482`
+- **现象：** `cyclePermission()` 的 `service.current()` 和 `togglePlanMode()` 的首次 `service.get()` 均在 try/catch 之前执行。服务读取异常会直接穿过输入/命令处理器，绕过新增的错误提示与状态保持逻辑。
+- **建议：** 将 current/get、目标状态计算和 durable 写入放进同一 try/catch；失败时仅记录错误并保持现有投影。
+- **关闭验证：** `cyclePermission()` 和 `togglePlanMode()` 均将状态读取、目标计算和服务写入放入同一 try/catch；新增 current/get 抛错回归测试，确认只记录错误而不向输入处理器抛出。
+
+### CR-019：会话提交点之后仍等待旧 handle 释放
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:3902-3919`, `src/index.js:4659-4675`
+- **现象：** `/new`、`/preset` 和 `/resume` 在替换 `this.handle`、`this.agent` 与 request override 后，才 `await previous.dispose()`；其后才重置 reasoning、stream、usage、permission 和 transcript 相关字段。`previous.dispose()` 没有超时边界。
+- **影响：** 旧 handle 释放变慢或一直 pending 时，应用已经指向新 agent，却长期保留旧会话的投影字段；期间的状态事件或重绘会显示混合会话，命令本身也无法完成收尾。
+- **建议：** 候选准备完成后先一次性提交全部新会话字段，再把旧 handle 清理作为 best-effort 后置操作；或在提交前完成有界清理。不得在半提交状态跨越 `await`。
+- **关闭验证：** 重构为同步原子调用 `commitSessionState(...)` 先行提交所有新会话引用与 session-scoped 状态；旧会话清理通过 `cleanupPreviousSession()` 封装，包含 flush (500ms) 和 dispose (1000ms) 超时防护与异常捕获，不再产生跨越 await 的半提交状态。
+
+### CR-020：`/resume` 继承旧会话的本地投影状态
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:4676-4691`
+- **现象：** `/resume` 只替换 reasoning、usage、permission 等部分字段，没有像新会话路径一样重置 `localLog`、`expandedKeys`、`streamBuffer`、`currentTurnReasoning`、`pendingImages`、提交标记和排队输入。
+- **影响：** `reprojectDocument()` 会把旧会话的 `localLog` 合并进恢复会话；相同 seq 生成的折叠 key 还可能继承旧会话的展开状态。未提交的图片或排队输入也可能被带到另一个会话。
+- **建议：** 明确定义并复用 session-scoped projection reset/snapshot；`/new` 与 `/resume` 使用同一字段清单，仅保留真正属于应用级的设置。
+- **关闭验证：** `/new`、`/preset` 和 `/resume` 统一共用 `commitSessionState(...)` 重置逻辑，彻底清空 `localLog`、`expandedKeys`、`streamBuffer`、`streamActionText`、`streamLoopStopped`、`currentTurnReasoning`、`turnStats`、`turnHeaderCommitted`、`streamHeaderCommitted`、`lastQueuedText`、`queuedSubmissions`、`pendingImages`、`focusedBlockKey`、`baseTranscriptDocument`。新增单元回归测试验证旧日志、折叠键与输入状态均不泄漏到目标恢复会话中。
+
+### CR-021：技能列表刷新失败会遗失已注册 override 的释放引用
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/index.js:4762-4778`
+- **现象：** `refreshSkills()` 捕获列表异常时把 `skillOverrideDisposers` 直接替换为空 Map，但没有调用原 disposer；agent ctx 中的 override 仍然注册。
+- **影响：** 服务短暂失败后，用户再次启用技能只能更新设置，无法移除遗留 override；技能可能直到重启会话才真正恢复。
+- **建议：** 列表失败只降级 `skills` 展示，不应改动当前注册生命周期 Map；若确实要清空，必须先逐项 dispose。
+- **关闭验证：** `refreshSkills()` 异常捕获中保留 `skillOverrideDisposers` 不变，仅降级展示 `this.skills = []`；新增回归测试注入列表异常，确认 override disposer 完好且后续可正常调用。旧会话清理时由 `cleanupPreviousSession` 逐项执行释放。
+
+### CR-022：超时竞速遗留定时器
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/index.js:78-98`, `src/index.js:804`, `src/index.js:3939`, `src/index.js:4028`, `src/index.js:4204`, `src/index.js:4228`, `src/index.js:4745`
+- **现象：** 使用原生 `Promise.race` 与 `setTimeout` 竞速时，操作在超时前快速完成不会取消另一侧的 timer，导致每次会话切换或作业取消都在事件循环中遗留活跃的定时器句柄。
+- **影响：** 导致 Node.js 进程退出延迟与无意义的异步句柄占用。
+- **建议：** 封装通用的 `withTimeout` 工具函数，在 `finally` 块中自动执行 `clearTimeout`，并在所有超时竞速路径中统一替换。
+- **关闭验证：** 实现并导出 `withTimeout`，统一替换 `stop()`、`cleanupPreviousSession()`、`applyPresetConfirm()`、`resumeSelected()`、`stopLocalJob()` 和 `stopRunningJobs()` 中的竞速定时器；新增单元测试覆盖快速完成、超时 fallback 与超时 reject 场景，确认定时器正常清理。
+
 ## 主分支界面渲染与输出折叠分析（2026-08-25）
 
 ### 当前架构事实

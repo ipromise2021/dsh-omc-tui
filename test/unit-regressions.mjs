@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { TuiApp, registerTuiSkillOverrides, registerBundledSkills, repeatedActionIntent } from '../src/index.js'
+import { TuiApp, registerTuiSkillOverrides, registerBundledSkills, repeatedActionIntent, withTimeout } from '../src/index.js'
 import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
 import { pngDimensions } from '../src/image-protocol.js'
 import { alignCodePoint, moveCursorLine, moveWordLeft, moveWordRight } from '../src/input/editor.js'
@@ -19,6 +19,7 @@ import { BrowserLease, chromeApprovalReason, chromeConnectionApprovalReason, chr
 import { ANSI, applyTheme } from '../src/renderer/themes.js'
 import { safe, visibleOf, widthOf } from '../src/renderer/ansi.js'
 import { loadShellHistoryFile, loadSystemShellHistory } from '../src/input/history.js'
+import { listDir } from '../src/input/autocomplete.js'
 
 const noop = () => {}
 
@@ -443,7 +444,7 @@ assert.equal(stderrFooterRendered, true)
 
 let oldDisposed = false
 let repaintCleared = false
-const freshAgent = { ctx: {}, session: { events: [], seq: 0 } }
+const freshAgent = { ctx: { on: () => noop }, session: { events: [], seq: 0 } }
 const presetApp = {
   presetConfirm: { requestedId: 'deepseek' },
   handle: { agent: { session: { events: [], seq: 3 } }, dispose: async () => { oldDisposed = true } },
@@ -455,7 +456,7 @@ const presetApp = {
   },
   message: '',
   scheduleRender: noop,
-  attachRequestOverride: noop,
+  createRequestOverride: () => noop,
   refreshSkills: async () => {},
   sessionsService: { flush: async () => {} },
   localLog: [{ kind: 'ok', text: 'old session output', seq: 1, time: Date.now() }],
@@ -470,9 +471,10 @@ const presetApp = {
   viewClearedSeq: 3,
   lastCommittedSeq: 3,
   active: true,
-  log(kind, text, command) { this.localLog.push({ kind, text, command, seq: this.agent.session.seq, time: Date.now() }) },
+  log(kind, text, command) { this.localLog.push({ kind, text, command, seq: this.agent?.session?.seq, time: Date.now() }) },
   repaint(clearScreen) { repaintCleared = clearScreen }
 }
+Object.setPrototypeOf(presetApp, TuiApp.prototype)
 await TuiApp.prototype.applyPresetConfirm.call(presetApp, true)
 assert.equal(oldDisposed, true)
 assert.equal(presetApp.localLog.length, 1)
@@ -484,7 +486,7 @@ assert.equal(repaintCleared, true)
 
 let newSessionDisposed = false
 let newSessionPermission
-const newSessionAgent = { ctx: {}, session: { events: [], seq: 0 } }
+const newSessionAgent = { ctx: { on: () => noop }, session: { events: [], seq: 0 } }
 const newSessionApp = {
   presetConfirm: { kind: 'new-session', requestedId: 'deepseek' },
   handle: { agent: { session: { events: [], seq: 3 } }, dispose: async () => { newSessionDisposed = true } },
@@ -496,7 +498,7 @@ const newSessionApp = {
   },
   message: '',
   scheduleRender: noop,
-  attachRequestOverride: noop,
+  createRequestOverride: () => noop,
   refreshSkills: async () => {},
   sessionsService: { flush: async () => {} },
   localLog: [],
@@ -513,10 +515,176 @@ const newSessionApp = {
   log(kind, text, command) { this.localLog.push({ kind, text, command }) },
   repaint: noop
 }
+Object.setPrototypeOf(newSessionApp, TuiApp.prototype)
 await TuiApp.prototype.applyPresetConfirm.call(newSessionApp, true)
 assert.equal(newSessionDisposed, true)
 assert.equal(newSessionPermission, 'workspace-write')
 assert.deepEqual(newSessionApp.localLog, [{ kind: 'ok', text: 'New session started.', command: '/new' }])
+
+let rejectedCandidateDisposed = false
+const existingAgent = { session: { events: [], seq: 7 } }
+const presetFailureApp = {
+  presetConfirm: { kind: 'new-session', requestedId: 'deepseek' },
+  handle: { agent: existingAgent, dispose: noop },
+  agent: existingAgent,
+  ctx: {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock-v2' }) },
+    agents: { create: async ({ setup }) => { await setup({}); return { agent: { ctx: {}, session: { events: [], seq: 0 } }, dispose: async () => { rejectedCandidateDisposed = true } } } },
+    agentPresets: { mount: async () => {}, composedPreset: () => 'deepseek' },
+    permissionPresets: { set: () => { throw new Error('durable write failed') } }
+  },
+  permissionName: 'workspace-write',
+  message: '',
+  scheduleRender: noop,
+  log: noop
+}
+await TuiApp.prototype.applyPresetConfirm.call(presetFailureApp, true)
+assert.equal(presetFailureApp.agent, existingAgent, 'A failed preset candidate must not replace the active session')
+assert.equal(rejectedCandidateDisposed, true, 'A failed preset candidate must be disposed')
+
+let latePresetCandidateDisposed = false
+const latePresetExistingAgent = { session: { events: [], seq: 8 } }
+const latePresetFailureApp = {
+  presetConfirm: { requestedId: 'deepseek' },
+  handle: { agent: latePresetExistingAgent, dispose: noop },
+  agent: latePresetExistingAgent,
+  ctx: {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock-v2' }) },
+    agents: { create: async ({ setup }) => { await setup({}); return { agent: { ctx: { on: () => noop }, session: { events: [], seq: 0 } }, dispose: async () => { latePresetCandidateDisposed = true } } } },
+    agentPresets: { mount: async () => {}, composedPreset: () => { throw new Error('preset projection failed') } },
+    permissionPresets: { current: () => undefined }
+  },
+  message: '',
+  scheduleRender: noop,
+  log: noop
+}
+await TuiApp.prototype.applyPresetConfirm.call(latePresetFailureApp, true)
+assert.equal(latePresetFailureApp.agent, latePresetExistingAgent, 'A preset projection failure must retain the old session')
+assert.equal(latePresetCandidateDisposed, true, 'A preset projection failure must dispose the candidate')
+
+let resumeCandidateDisposed = false
+const resumeExistingAgent = { session: { events: [], seq: 9 } }
+const resumeFailureApp = {
+  picker: { loaded: false, selected: 0, sessions: [{ header: { id: 'session-target', agentPreset: 'deepseek' } }] },
+  input: 'resume',
+  cursor: 6,
+  handle: { agent: resumeExistingAgent, dispose: noop },
+  agent: resumeExistingAgent,
+  ctx: {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock-v2' }) },
+    sessionQuery: { readSession: async () => ({ events: [] }) },
+    agents: { resume: async ({ setup }) => { await setup({}); return { agent: { ctx: { on: () => noop }, session: { events: [], requestHeader: () => ({ config: {} }) } }, dispose: async () => { resumeCandidateDisposed = true } } } },
+    agentPresets: { defaultId: 'deepseek', mount: async () => {}, composedPreset: () => { throw new Error('resume projection failed') } },
+    permissionPresets: { current: () => undefined }
+  },
+  message: '',
+  scheduleRender: noop,
+  log: noop
+}
+await TuiApp.prototype.resumeSelected.call(resumeFailureApp)
+assert.equal(resumeFailureApp.agent, resumeExistingAgent, 'A resume projection failure must retain the old session')
+assert.equal(resumeCandidateDisposed, true, 'A resume projection failure must dispose the candidate')
+
+let oldResumeDisposed = false
+const resumedAgent = { ctx: { on: () => noop }, session: { events: [], seq: 10, requestHeader: () => ({ config: {} }) } }
+const resumeRenderLogs = []
+const resumeRenderFailureApp = {
+  picker: { loaded: false, selected: 0, sessions: [{ header: { id: 'session-render-failure', agentPreset: 'deepseek' } }] },
+  input: 'resume',
+  cursor: 6,
+  handle: { agent: resumeExistingAgent, dispose: async () => { oldResumeDisposed = true } },
+  agent: resumeExistingAgent,
+  ctx: {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock-v2' }) },
+    sessionQuery: { readSession: async () => ({ events: [] }) },
+    agents: { resume: async ({ setup }) => { await setup({}); return { agent: resumedAgent, dispose: noop } } },
+    agentPresets: { defaultId: 'deepseek', mount: async () => {}, composedPreset: () => 'deepseek' },
+    permissionPresets: { current: () => undefined }
+  },
+  createRequestOverride: () => noop,
+  restoreImageAttachments: noop,
+  touchMru: noop,
+  reprojectDocument: () => { throw new Error('renderer failed') },
+  viewport: { scrollToBottom: noop },
+  message: '',
+  scheduleRender: noop,
+  log(kind, text) { resumeRenderLogs.push({ kind, text }) }
+}
+Object.setPrototypeOf(resumeRenderFailureApp, TuiApp.prototype)
+await TuiApp.prototype.resumeSelected.call(resumeRenderFailureApp)
+assert.equal(resumeRenderFailureApp.agent, resumedAgent, 'A post-commit render error must not undo a completed resume')
+assert.equal(resumeRenderFailureApp.handle.agent, resumedAgent)
+assert.equal(oldResumeDisposed, true)
+assert.equal(resumeRenderFailureApp.permissionName, undefined)
+assert.match(resumeRenderLogs.at(-1).text, /resumed but failed to render/)
+
+const cycleErrors = []
+const cycleApp = {
+  agent: { session: { events: [] } },
+  ctx: { permissionPresets: { names: ['workspace-read', 'workspace-write'], current: () => 'workspace-read', set: () => { throw new Error('write failed') } } },
+  permissionName: 'workspace-read',
+  log(kind, text) { cycleErrors.push({ kind, text }) },
+  scheduleRender: noop
+}
+TuiApp.prototype.cyclePermission.call(cycleApp)
+assert.equal(cycleApp.permissionName, 'workspace-read')
+assert.equal(cycleErrors[0].kind, 'error')
+
+const cycleReadErrors = []
+TuiApp.prototype.cyclePermission.call({
+  agent: { session: { events: [] } },
+  ctx: { permissionPresets: { names: ['workspace-read'], current: () => { throw new Error('read failed') } } },
+  log(kind, text) { cycleReadErrors.push({ kind, text }) },
+  scheduleRender: noop
+})
+assert.equal(cycleReadErrors[0].kind, 'error')
+assert.match(cycleReadErrors[0].text, /read failed/)
+
+const planLogs = []
+const planApp = {
+  agent: { session: { append() { throw new Error('must not append locally') } } },
+  planModeService: () => ({ get: () => ({ active: false }), set: () => { throw new Error('durable write failed') } }),
+  log(kind, text) { planLogs.push({ kind, text }) },
+  scheduleRender: noop
+}
+await TuiApp.prototype.togglePlanMode.call(planApp)
+assert.equal(planLogs[0].kind, 'error')
+assert.match(planLogs[0].text, /durable write failed/)
+
+const planReadLogs = []
+await TuiApp.prototype.togglePlanMode.call({
+  agent: {},
+  planModeService: () => ({ get: () => { throw new Error('plan read failed') } }),
+  log(kind, text) { planReadLogs.push({ kind, text }) },
+  scheduleRender: noop
+})
+assert.equal(planReadLogs[0].kind, 'error')
+assert.match(planReadLogs[0].text, /plan read failed/)
+
+const cancelledApprovals = []
+let routerDisposed = false
+await TuiApp.prototype.stop.call({
+  clearPromptSuggestion: noop,
+  stopRunningJobs: async () => {},
+  questionPanel: undefined,
+  approvalQueue: [{ resolve: (outcome) => cancelledApprovals.push(outcome) }],
+  pendingApproval: { settle: (outcome) => cancelledApprovals.push(outcome) },
+  inputRouter: { dispose: () => { routerDisposed = true } },
+  disposers: [],
+  terminalOpen: false
+})
+assert.deepEqual(cancelledApprovals, ['cancelled', 'cancelled'])
+assert.equal(routerDisposed, true)
+
+const autocompleteRoot = await mkdtemp(join(tmpdir(), 'dsh-omc-autocomplete-'))
+try {
+  await mkdir(join(autocompleteRoot, 'nested'))
+  await writeFile(join(autocompleteRoot, 'nested', 'ok.txt'), 'ok')
+  assert.deepEqual(await listDir(autocompleteRoot, '../'), { dirs: [], files: [] })
+  assert.deepEqual(await listDir(autocompleteRoot, 'nested'), { dirs: [], files: ['nested/ok.txt'] })
+} finally {
+  await rm(autocompleteRoot, { recursive: true, force: true })
+}
 
 const questionApp = {
   questionPanel: {
@@ -902,6 +1070,7 @@ assert.deepEqual(failedImageSubmitApp.pendingImages, [retryImage])
 let requestOverrideHandler
 const requestOverrideApp = {
   disposers: [],
+  createRequestOverride: TuiApp.prototype.createRequestOverride,
   reasoningEffort: 'high',
   activeModel: { provider: 'deepseek-official', model: 'deepseek-v4-vision' },
   llmService: {
@@ -1984,6 +2153,135 @@ if (benchApp.turnStartTime) {
   benchApp.scheduleRender()
 }
 assert.equal(benchApp.needsReproject, false, 'Animation timer must not dirty transcript projection')
+
+// 4. CR-019 & CR-020: Session switch atomic commit & state isolation
+const sessionIsolationApp = new TuiApp({})
+sessionIsolationApp.localLog = [{ kind: 'ok', text: 'stale log from previous session', seq: 1, time: 1000 }]
+sessionIsolationApp.expandedKeys = new Set(['seq-1', 'reason-1'])
+sessionIsolationApp.streamBuffer = 'half-baked buffer'
+sessionIsolationApp.currentTurnReasoning = { text: 'stale reasoning', time: 1000 }
+sessionIsolationApp.turnHeaderCommitted = true
+sessionIsolationApp.streamHeaderCommitted = true
+sessionIsolationApp.lastQueuedText = 'stale prompt'
+sessionIsolationApp.queuedSubmissions = [{ draft: 'stale queued text' }]
+sessionIsolationApp.pendingImages = [{ name: 'stale.png' }]
+sessionIsolationApp.focusedBlockKey = 'reason-1'
+sessionIsolationApp.active = true
+sessionIsolationApp.activeModel = { provider: 'test', model: 'test' }
+
+const candidateSessionEvents = [
+  { seq: 1, type: 'user/message', time: 2000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Resumed user message' }] } },
+  { seq: 2, type: 'assistant/message', time: 2005, data: { message: { content: [{ type: 'reasoning', text: 'Resumed thinking' }, { type: 'text', text: 'Resumed response' }] } } }
+]
+const candidateTargetAgent = { ctx: { on: () => noop }, session: { id: 'session-resumed-isolated', events: candidateSessionEvents, seq: 2 } }
+const candidateTargetHandle = { agent: candidateTargetAgent, dispose: async () => {} }
+
+sessionIsolationApp.commitSessionState({
+  handle: candidateTargetHandle,
+  skillOverrideDisposers: new Map(),
+  presetName: 'deepseek',
+  reasoningEffort: 'DEFAULT',
+  requestOverrideDispose: noop,
+  usage: { input: 100, output: 50 },
+  permissionName: 'workspace-write',
+  reasoningBlocks: sessionIsolationApp.extractReasoningBlocks(candidateSessionEvents),
+  isResumed: true,
+  sessionEvents: candidateSessionEvents
+})
+
+assert.equal(sessionIsolationApp.agent, candidateTargetAgent, 'Agent updated to candidate')
+assert.equal(sessionIsolationApp.localLog.length, 0, 'localLog must be empty after session commit')
+assert.equal(sessionIsolationApp.expandedKeys.size, 0, 'expandedKeys must be reset after session commit')
+assert.equal(sessionIsolationApp.streamBuffer, '', 'streamBuffer must be empty after session commit')
+assert.equal(sessionIsolationApp.currentTurnReasoning, null, 'currentTurnReasoning must be null after session commit')
+assert.equal(sessionIsolationApp.turnHeaderCommitted, false, 'turnHeaderCommitted must be reset')
+assert.equal(sessionIsolationApp.streamHeaderCommitted, false, 'streamHeaderCommitted must be reset')
+assert.equal(sessionIsolationApp.lastQueuedText, undefined, 'lastQueuedText must be reset')
+assert.equal(sessionIsolationApp.queuedSubmissions.length, 0, 'queuedSubmissions must be empty')
+assert.equal(sessionIsolationApp.pendingImages.length, 0, 'pendingImages must be empty')
+assert.equal(sessionIsolationApp.focusedBlockKey, null, 'focusedBlockKey must be reset')
+assert.equal(sessionIsolationApp.active, false, 'active must be false')
+assert.equal(sessionIsolationApp.activeModel, undefined, 'activeModel must be reset')
+assert.equal(sessionIsolationApp.reasoningBlocks.length, 1, 'Reasoning block extracted for resumed session')
+assert.equal(sessionIsolationApp.reasoningBlocks[0].text, 'Resumed thinking')
+
+// Verify transcript re-projection contains ONLY resumed session events without old localLog
+sessionIsolationApp.reprojectDocument(true)
+const projectedLines = sessionIsolationApp.viewport.allRows.join('\n')
+assert.ok(projectedLines.includes('Resumed user message'), 'Resumed user message must be in document')
+assert.ok(projectedLines.includes('Resumed response'), 'Resumed response must be in document')
+assert.ok(!projectedLines.includes('stale log from previous session'), 'Stale localLog must NOT leak into document')
+
+// 5. CR-021: refreshSkills failure preserves skillOverrideDisposers
+let skillOverrideCleanedUp = false
+const skillApp = new TuiApp({})
+skillApp.agent = { session: { header: { cwd: process.cwd() } } }
+skillApp.preferences = { disabledSkills: ['image-recognize'] }
+skillApp.skillOverrideDisposers = new Map([
+  ['image-recognize', () => { skillOverrideCleanedUp = true }]
+])
+skillApp.ctx = {
+  get: (name) => name === 'skills' ? { list: async () => { throw new Error('disk read failure') } } : undefined
+}
+
+await skillApp.refreshSkills()
+assert.deepEqual(skillApp.skills, [], 'Skills list reset to empty on fetch error')
+assert.equal(skillApp.skillOverrideDisposers.has('image-recognize'), true, 'skillOverrideDisposers must NOT be cleared on list error')
+const storedDisposer = skillApp.skillOverrideDisposers.get('image-recognize')
+assert.equal(typeof storedDisposer, 'function', 'Disposer function remains intact')
+storedDisposer()
+assert.equal(skillOverrideCleanedUp, true, 'Stored disposer can be invoked to unregister override')
+
+// 6. Previous session cleanup disposes overrides & handle with timeout
+let prevOverrideDisposed = false
+let prevHandleDisposed = false
+let prevSessionFlushed = false
+const prevHandle = {
+  agent: { session: { events: [] } },
+  dispose: async () => { prevHandleDisposed = true }
+}
+const prevOverrides = new Map([['test-skill', () => { prevOverrideDisposed = true }]])
+let prevReqOverrideDisposed = false
+const prevReqDispose = () => { prevReqOverrideDisposed = true }
+
+const cleanupApp = new TuiApp({})
+cleanupApp.ctx = {
+  get: (name) => name === 'sessions' ? { flush: async () => { prevSessionFlushed = true } } : undefined
+}
+await cleanupApp.cleanupPreviousSession(prevHandle, prevReqDispose, prevOverrides)
+assert.equal(prevReqOverrideDisposed, true, 'Previous request override disposed')
+assert.equal(prevOverrideDisposed, true, 'Previous skill overrides disposed')
+assert.equal(prevSessionFlushed, true, 'Previous session flushed')
+assert.equal(prevHandleDisposed, true, 'Previous handle disposed')
+
+// 7. withTimeout lifecycle & timer cancellation
+const fastResult = await withTimeout(Promise.resolve('quick'), 5000)
+assert.equal(fastResult, 'quick', 'Fast promise resolves normally')
+
+const timedOutFallback = await withTimeout(new Promise(() => {}), 10, { fallback: 'timed-out' })
+assert.equal(timedOutFallback, 'timed-out', 'Timed out promise returns fallback')
+
+let rejectErrorCaught = false
+try {
+  await withTimeout(new Promise(() => {}), 10, { rejectOnTimeout: true, errorMessage: 'custom timeout error' })
+} catch (err) {
+  rejectErrorCaught = true
+  assert.equal(err.message, 'custom timeout error')
+}
+assert.equal(rejectErrorCaught, true, 'rejectOnTimeout throws specified error')
+
+let fastRejectCaught = false
+try {
+  await withTimeout(Promise.reject(new Error('immediate fail')), 5000)
+} catch (err) {
+  fastRejectCaught = true
+  assert.equal(err.message, 'immediate fail')
+}
+assert.equal(fastRejectCaught, true, 'Immediate promise rejection propagates')
+
+for (const dispose of [...sessionIsolationApp.disposers].reverse()) dispose()
+for (const dispose of [...skillApp.disposers].reverse()) dispose()
+for (const dispose of [...cleanupApp.disposers].reverse()) dispose()
 
 for (const dispose of [...benchApp.disposers].reverse()) dispose()
 

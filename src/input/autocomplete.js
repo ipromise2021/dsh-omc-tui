@@ -1,5 +1,5 @@
-import { readdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readdir, realpath } from 'node:fs/promises'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { safe } from '../renderer/ansi.js'
 
 export const EXCLUDED_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.next', '.dsh'])
@@ -25,7 +25,14 @@ export function matchName(name, query) {
 }
 
 export async function listDir(root, relDir) {
-  const base = relDir ? join(root, relDir) : root
+  const rootPath = await realpath(root).catch(() => resolve(root))
+  const requestedPath = resolve(rootPath, relDir || '.')
+  const base = await realpath(requestedPath).catch(() => undefined)
+  if (!base) return { dirs: [], files: [] }
+  const baseRel = relative(rootPath, base)
+  if (baseRel === '..' || baseRel.startsWith(`..${sep}`) || isAbsolute(baseRel)) {
+    return { dirs: [], files: [] }
+  }
   let entries
   try {
     entries = await readdir(base, { withFileTypes: true })
@@ -36,7 +43,7 @@ export async function listDir(root, relDir) {
   const files = []
   for (const entry of entries) {
     if (entry.name.startsWith('.') || EXCLUDED_DIRS.has(entry.name)) continue
-    const rel = relDir ? `${relDir}/${entry.name}` : entry.name
+    const rel = baseRel ? `${baseRel}/${entry.name}` : entry.name
     if (entry.isDirectory()) dirs.push(rel)
     else if (entry.isFile()) files.push(rel)
   }
@@ -46,4 +53,3 @@ export async function listDir(root, relDir) {
 }
 
 export { compactExpandedFileReferences, compactFileReferenceTitle } from '../core/events.js'
-

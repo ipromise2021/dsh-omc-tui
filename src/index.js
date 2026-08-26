@@ -76,6 +76,26 @@ function isRunningJob(job) {
   return job?.status === 'running' || job?.status === 'stopping'
 }
 
+export async function withTimeout(promise, ms, { fallback, rejectOnTimeout = false, errorMessage } = {}) {
+  let timer
+  try {
+    return await Promise.race([
+      Promise.resolve(promise),
+      new Promise((resolve, reject) => {
+        timer = setTimeout(() => {
+          if (rejectOnTimeout) {
+            reject(new Error(errorMessage ?? `Operation timed out after ${ms}ms`))
+          } else {
+            resolve(fallback)
+          }
+        }, ms)
+      })
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 export function repeatedActionIntent(text, threshold = 6) {
   const counts = new Map()
   for (const sentence of String(text ?? '').split(/[\n。！？.!?]+/)) {
@@ -573,21 +593,7 @@ export class TuiApp {
       this.viewClearedSeq = isResumed ? 0 : agent.session.seq
       if (isResumed) {
         this.restoreImageAttachments(agent.session.events)
-        this.reasoningBlocks = []
-        for (const event of agent.session.events) {
-          if (event.type === 'assistant/message') {
-            const reasoningText = reasoningOf(event.data?.message?.content)
-            if (reasoningText) {
-              this.reasoningBlocks.unshift({
-                key: `reason-${event.seq}`,
-                seq: event.seq,
-                lines: reasoningText.split('\n').length,
-                text: reasoningText
-              })
-            }
-          }
-        }
-        if (this.reasoningBlocks.length > 20) this.reasoningBlocks.length = 20
+        this.reasoningBlocks = this.extractReasoningBlocks(agent.session.events)
         this.streaming = { text: '', reasoning: '', tool: undefined }
         this.reasoningAt = undefined
         this.message = ''
@@ -765,6 +771,12 @@ export class TuiApp {
       if (!ignoreJobErrors) throw error
     }
     if (this.questionPanel) this.finishQuestion(new Error('user cancelled the question'))
+    const queuedApprovals = this.approvalQueue.splice(0)
+    for (const item of queuedApprovals) item.resolve('cancelled')
+    this.pendingApproval?.settle?.('cancelled')
+    this.inputRouter?.dispose?.()
+    try { this.requestOverrideDispose?.() } catch {}
+    this.requestOverrideDispose = undefined
     for (const dispose of this.disposers.splice(0).reverse()) {
       try {
         dispose?.()
@@ -792,10 +804,7 @@ export class TuiApp {
     this.screenRenderer.restoreTerminal(this.viewport?.allRows ?? [])
     if (this.agent?.session) {
       try {
-        await Promise.race([
-          this.sessionsService?.flush?.(this.agent.session),
-          new Promise((resolve) => setTimeout(resolve, 500))
-        ])
+        await withTimeout(this.sessionsService?.flush?.(this.agent.session), 500)
       } catch {}
       const sessionId = this.agent.session.header?.id
       if (sessionId) {
@@ -903,8 +912,8 @@ export class TuiApp {
     }, 0)
   }
 
-  attachRequestOverride(agent) {
-    this.disposers.push(agent.ctx.on('agent/request', async (_payload, next) => {
+  createRequestOverride(agent) {
+    return agent.ctx.on('agent/request', async (_payload, next) => {
       const request = await next()
       let result = request
       if (this.activeModel) result = { ...result, provider: this.activeModel.provider, model: this.activeModel.model }
@@ -924,7 +933,14 @@ export class TuiApp {
       }
 
       return result
-    }))
+    })
+  }
+
+  attachRequestOverride(agent) {
+    const dispose = this.createRequestOverride(agent)
+    this.requestOverrideDispose?.()
+    this.requestOverrideDispose = dispose
+    return dispose
   }
 
   activeStreamPayload() {
@@ -2314,14 +2330,19 @@ export class TuiApp {
   cyclePermission() {
     if (!this.agent) return
     const service = this.ctx.permissionPresets
-    const names = service.names
-    if (names.length === 0) return
-    const current = this.permissionName ?? service.current(this.agent.session.events)
-    const index = Math.max(0, names.indexOf(current))
-    const next = names[(index + 1) % names.length]
-    this.permissionName = next
-    service.set(this.agent.session, next)
-    this.log('ok', `permission mode · ${next}`, 'Shift+Tab')
+    try {
+      const names = service?.names ?? []
+      if (names.length === 0) return
+      const current = this.permissionName ?? service.current(this.agent.session.events)
+      const index = Math.max(0, names.indexOf(current))
+      const next = names[(index + 1) % names.length]
+      if (typeof service.set !== 'function') throw new Error('permission presets service unavailable')
+      service.set(this.agent.session, next)
+      this.permissionName = permissionFromEvents(this.agent.session.events, service.current?.(this.agent.session.events))
+      this.log('ok', `permission mode · ${this.permissionName}`, 'Shift+Tab')
+    } catch (error) {
+      this.log('error', `failed to set permission mode: ${error instanceof Error ? error.message : String(error)}`, 'Shift+Tab')
+    }
     this.scheduleRender()
   }
 
@@ -2598,7 +2619,7 @@ export class TuiApp {
   }
 
   rememberImageAttachments(content = []) {
-    for (const block of content) {
+    for (const block of Array.isArray(content) ? content : []) {
       const attachment = block?.type === 'image' ? block.attachment : undefined
       if (attachment?.attachmentId) this.imageAttachments?.set(String(attachment.attachmentId), attachment)
       if (block?.type !== 'text' || typeof block.text !== 'string') continue
@@ -3836,6 +3857,92 @@ export class TuiApp {
     this.scheduleRender()
   }
 
+  extractReasoningBlocks(events) {
+    const blocks = []
+    for (const event of events ?? []) {
+      if (event.type !== 'assistant/message') continue
+      const reasoningText = reasoningOf(event.data?.message?.content)
+      if (!reasoningText) continue
+      blocks.unshift({
+        key: `reason-${event.seq}`,
+        seq: event.seq,
+        lines: reasoningText.split('\n').length,
+        text: reasoningText
+      })
+    }
+    if (blocks.length > 20) blocks.length = 20
+    return blocks
+  }
+
+  commitSessionState({
+    handle,
+    skillOverrideDisposers,
+    presetName,
+    reasoningEffort,
+    requestOverrideDispose,
+    usage,
+    permissionName,
+    reasoningBlocks = [],
+    isResumed = false,
+    sessionEvents = null
+  }) {
+    this.handle = handle
+    this.agent = handle.agent
+    this.skillOverrideDisposers = skillOverrideDisposers ?? new Map()
+    this.presetName = presetName
+    this.reasoningEffort = reasoningEffort
+    this.activeModel = undefined
+    this.requestOverrideDispose = requestOverrideDispose
+    this.usage = usage
+    this.permissionName = permissionName
+    this.viewClearedSeq = 0
+    this.lastCommittedSeq = handle.agent.session.events[handle.agent.session.events.length - 1]?.seq ?? 0
+
+    this.reasoningBlocks = reasoningBlocks
+    this.streaming = { text: '', reasoning: '', tool: undefined }
+    this.streamBuffer = ''
+    this.streamActionText = ''
+    this.streamLoopStopped = false
+    this.currentTurnReasoning = null
+    this.reasoningAt = undefined
+    this.turnStats = { speed: 0, durationMs: 0, active: false }
+    this.turnStartTime = undefined
+    this.turnStartOutputTokens = 0
+    this.turnHeaderCommitted = false
+    this.streamHeaderCommitted = false
+    this.lastQueuedText = undefined
+    this.queuedSubmissions = []
+    this.pendingImages = []
+    this.localLog = []
+    this.expandedKeys = new Set()
+    this.active = false
+    this.focusedBlockKey = null
+    this.baseTranscriptDocument = undefined
+    this.baseTranscriptColumns = undefined
+    this.needsLiveProjection = false
+
+    if (isResumed && sessionEvents) {
+      this.restoreImageAttachments(sessionEvents)
+    } else {
+      this.imageAttachments?.clear()
+    }
+    this.refreshContextTokens?.()
+  }
+
+  async cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers) {
+    try { previousRequestOverrideDispose?.() } catch {}
+    for (const disposeOverride of previousSkillOverrideDisposers?.values?.() ?? []) {
+      try { disposeOverride() } catch {}
+    }
+    if (!previousHandle) return
+    try {
+      await withTimeout(this.sessionsService?.flush?.(previousHandle.agent.session), 500)
+    } catch {}
+    try {
+      await withTimeout(previousHandle.dispose?.(), 1000)
+    } catch {}
+  }
+
   async applyPresetConfirm(confirm) {
     const request = this.presetConfirm
     const id = request?.requestedId
@@ -3855,8 +3962,10 @@ export class TuiApp {
     const permissionName = isNewSession ? this.permissionName : undefined
     this.message = isNewSession ? 'starting new session…' : `switching preset · ${id}…`
     this.scheduleRender()
+    let candidate
+    let candidateSkillOverrides
+    let candidateRequestOverrideDispose
     try {
-      const previous = this.handle
       const selection = this.ctx.agentDefaultModel.currentSelection()
       let skillOverrideDisposers
       const { agent, dispose } = await this.ctx.agents.create({
@@ -3868,54 +3977,57 @@ export class TuiApp {
           skillOverrideDisposers = registerTuiSkillOverrides(agentCtx, this.preferences?.disabledSkills ?? DEFAULT_DISABLED_SKILLS)
         }
       })
-      this.handle = { agent, dispose }
-      this.agent = agent
-      this.skillOverrideDisposers = skillOverrideDisposers ?? new Map()
-      this.presetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? id
-      this.reasoningEffort = selection.reasoningEffort
-      this.activeModel = undefined
-      this.attachRequestOverride(agent)
+      candidate = { agent, dispose }
+      candidateSkillOverrides = skillOverrideDisposers ?? new Map()
       if (permissionName) {
         this.ctx.permissionPresets.set(agent.session, permissionName)
       }
-      if (previous) {
-        this.stopLocalBackgroundJobs?.()
-        await Promise.race([
-          this.sessionsService?.flush?.(previous.agent.session),
-          new Promise((resolve) => setTimeout(resolve, 500))
-        ]).catch(() => {})
-        try {
-          await previous.dispose()
-        } catch {}
-      }
-      this.reasoningBlocks = []
-      this.streaming = { text: '', reasoning: '', tool: undefined }
-      this.streamBuffer = ''
-      this.reasoningAt = undefined
-      this.turnStats = { speed: 0, durationMs: 0, active: false }
-      this.turnStartTime = undefined
-      this.turnStartOutputTokens = 0
-      this.usage = foldUsage(agent.session.events)
-      this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
-      this.viewClearedSeq = 0
-      this.lastCommittedSeq = agent.session.events[agent.session.events.length - 1]?.seq ?? 0
-      this.localLog = []
-      this.expandedKeys = new Set()
-      this.pendingImages = []
-      this.imageAttachments?.clear()
-      this.turnHeaderCommitted = false
-      this.streamHeaderCommitted = false
-      this.lastQueuedText = undefined
-      this.queuedSubmissions = []
-      this.active = false
+      const candidatePresetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? id
+      const candidatePermissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
+      const candidateUsage = foldUsage(agent.session.events)
+      candidateRequestOverrideDispose = this.createRequestOverride(agent)
+
+      this.stopLocalBackgroundJobs?.()
+      const previousHandle = this.handle
+      const previousRequestOverrideDispose = this.requestOverrideDispose
+      const previousSkillOverrideDisposers = this.skillOverrideDisposers
+
+      this.commitSessionState({
+        handle: candidate,
+        skillOverrideDisposers: candidateSkillOverrides,
+        presetName: candidatePresetName,
+        reasoningEffort: selection.reasoningEffort,
+        requestOverrideDispose: candidateRequestOverrideDispose,
+        usage: candidateUsage,
+        permissionName: candidatePermissionName,
+        reasoningBlocks: [],
+        isResumed: false
+      })
+
+      await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers)
+
       void this.refreshSkills()
       this.log('ok', isNewSession ? 'New session started.' : `New session started with preset "${id}"`, source)
-      this.repaint(true)
+      try {
+        this.repaint(true)
+      } catch (error) {
+        this.log('error', `session started but failed to render: ${error instanceof Error ? error.message : String(error)}`, source)
+      }
     } catch (error) {
+      if (candidate && this.handle?.agent !== candidate.agent) {
+        try { candidateRequestOverrideDispose?.() } catch {}
+        for (const disposeOverride of candidateSkillOverrides?.values?.() ?? []) {
+          try { disposeOverride() } catch {}
+        }
+        try {
+          await withTimeout(candidate.dispose?.(), 1000)
+        } catch {}
+      }
       this.log('error', error instanceof Error ? error.message : String(error), source)
+    } finally {
+      this.message = ''
+      this.scheduleRender()
     }
-    this.message = ''
-    this.scheduleRender()
   }
 
   async refreshJobsPanel() {
@@ -4089,16 +4201,14 @@ export class TuiApp {
     job.stopRequested = true
     job.status = 'stopping'
     this.signalLocalJob(job, 'SIGTERM')
-    await Promise.race([
-      Promise.resolve(job.done).catch(() => undefined),
-      new Promise((resolve) => setTimeout(resolve, 1500))
-    ])
+    try {
+      await withTimeout(Promise.resolve(job.done).catch(() => undefined), 1500)
+    } catch {}
     if (isRunningJob(job)) {
       this.signalLocalJob(job, 'SIGKILL')
-      await Promise.race([
-        Promise.resolve(job.done).catch(() => undefined),
-        new Promise((resolve) => setTimeout(resolve, 250))
-      ])
+      try {
+        await withTimeout(Promise.resolve(job.done).catch(() => undefined), 250)
+      } catch {}
     }
   }
 
@@ -4114,17 +4224,11 @@ export class TuiApp {
     }
     const stopRemote = typeof this.jobsService?.kill === 'function'
       ? remoteJobs.map(async (job) => {
-        let timeout
-        try {
-          await Promise.race([
-            Promise.resolve(this.jobsService.kill(job.id, this.agent, 'session exited')),
-            new Promise((_, reject) => {
-              timeout = setTimeout(() => reject(new Error(`timed out stopping job ${job.id}`)), 5000)
-            })
-          ])
-        } finally {
-          clearTimeout(timeout)
-        }
+        await withTimeout(
+          this.jobsService.kill(job.id, this.agent, 'session exited'),
+          5000,
+          { rejectOnTimeout: true, errorMessage: `timed out stopping job ${job.id}` }
+        )
       })
       : []
     if (this.agent?.status === 'running') {
@@ -4138,7 +4242,7 @@ export class TuiApp {
     }
     this.activeBash = undefined
     this.localBackgroundJobs = []
-    this.jobOutputCache.clear()
+    this.jobOutputCache?.clear()
   }
 
   stopLocalBackgroundJobs() {
@@ -4153,7 +4257,7 @@ export class TuiApp {
     }
     this.activeBash = undefined
     this.localBackgroundJobs = []
-    this.jobOutputCache.clear()
+    this.jobOutputCache?.clear()
   }
 
   selectJob(index) {
@@ -4439,21 +4543,22 @@ export class TuiApp {
   }
 
   async togglePlanMode() {
-    const service = this.planModeService()
-    const current = service?.get?.(this.agent) ?? { active: false, pending: undefined }
-    const isActive = current.pending ?? current.active
-    const next = !isActive
     try {
-      if (typeof service?.set === 'function') {
-        await service.set(this.agent, next)
-      } else if (typeof service?.toggle === 'function') {
-        await service.toggle(this.agent)
-      } else if (this.agent?.session) {
-        this.agent.session.append('plan-mode/changed', { active: next })
+      const service = this.planModeService()
+      const current = service?.get?.(this.agent) ?? { active: false, pending: undefined }
+      const isActive = current.pending ?? current.active
+      const next = !isActive
+      if (typeof service?.set !== 'function' && typeof service?.toggle !== 'function') {
+        throw new Error('plan mode service unavailable')
       }
-    } catch {}
-    const stateName = next ? 'PLAN' : 'BUILD'
-    this.log('ok', `switched to ${stateName} mode`, '/plan')
+      if (typeof service.set === 'function') await service.set(this.agent, next)
+      else await service.toggle(this.agent)
+      const confirmed = service.get?.(this.agent)
+      const active = confirmed?.pending ?? confirmed?.active ?? next
+      this.log('ok', `switched to ${active ? 'PLAN' : 'BUILD'} mode`, '/plan')
+    } catch (error) {
+      this.log('error', `failed to switch plan mode: ${error instanceof Error ? error.message : String(error)}`, '/plan')
+    }
     this.scheduleRender()
   }
 
@@ -4571,8 +4676,10 @@ export class TuiApp {
     this.cursor = 0
     this.message = `resuming ${record.header.id.slice(-4)}…`
     this.scheduleRender()
+    let candidate
+    let candidateSkillOverrides
+    let candidateRequestOverrideDispose
     try {
-      const previous = this.handle
       const selection = this.ctx.agentDefaultModel.currentSelection()
       let skillOverrideDisposers
       let requestedPreset = record.header.agentPreset ?? this.ctx.agentPresets.defaultId
@@ -4591,53 +4698,53 @@ export class TuiApp {
           skillOverrideDisposers = registerTuiSkillOverrides(agentCtx, this.preferences?.disabledSkills ?? DEFAULT_DISABLED_SKILLS)
         }
       })
-      this.handle = { agent, dispose }
-      this.agent = agent
-      this.skillOverrideDisposers = skillOverrideDisposers ?? new Map()
-      this.presetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? requestedPreset
-      this.reasoningEffort = agent.session.requestHeader()?.config.reasoningEffort ?? selection.reasoningEffort
-      this.activeModel = undefined
-      this.attachRequestOverride(agent)
-      if (previous) {
-        await Promise.race([
-          this.sessionsService?.flush?.(previous.agent.session),
-          new Promise((resolve) => setTimeout(resolve, 500))
-        ]).catch(() => {})
-        try {
-          await previous.dispose()
-        } catch {}
-      }
-      this.reasoningBlocks = []
-      for (const event of agent.session.events) {
-        if (event.type === 'assistant/message') {
-          const reasoningText = reasoningOf(event.data?.message?.content)
-          if (reasoningText) {
-            this.reasoningBlocks.unshift({
-              key: `reason-${event.seq}`,
-              seq: event.seq,
-              lines: reasoningText.split('\n').length,
-              text: reasoningText
-            })
-          }
-        }
-      }
-      if (this.reasoningBlocks.length > 20) this.reasoningBlocks.length = 20
-      this.streaming = { text: '', reasoning: '', tool: undefined }
-      this.restoreImageAttachments(agent.session.events)
-      this.reasoningAt = undefined
-      this.turnStats = { speed: 0, durationMs: 0, active: false }
-      this.turnStartTime = undefined
-      this.turnStartOutputTokens = 0
-      this.usage = foldUsage(agent.session.events)
-      this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
-      this.viewClearedSeq = 0
+      candidate = { agent, dispose }
+      candidateSkillOverrides = skillOverrideDisposers ?? new Map()
+      const candidatePresetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? requestedPreset
+      const candidateReasoningEffort = agent.session.requestHeader()?.config.reasoningEffort ?? selection.reasoningEffort
+      const candidateUsage = foldUsage(agent.session.events)
+      const candidatePermissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
+      const candidateReasoningBlocks = this.extractReasoningBlocks(agent.session.events)
+      candidateRequestOverrideDispose = this.createRequestOverride(agent)
 
-      this.lastCommittedSeq = agent.session.events[agent.session.events.length - 1]?.seq ?? 0
+      this.stopLocalBackgroundJobs?.()
+      const previousHandle = this.handle
+      const previousRequestOverrideDispose = this.requestOverrideDispose
+      const previousSkillOverrideDisposers = this.skillOverrideDisposers
+
+      this.commitSessionState({
+        handle: candidate,
+        skillOverrideDisposers: candidateSkillOverrides,
+        presetName: candidatePresetName,
+        reasoningEffort: candidateReasoningEffort,
+        requestOverrideDispose: candidateRequestOverrideDispose,
+        usage: candidateUsage,
+        permissionName: candidatePermissionName,
+        reasoningBlocks: candidateReasoningBlocks,
+        isResumed: true,
+        sessionEvents: agent.session.events
+      })
+
+      await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers)
 
       this.touchMru(record.header.id)
-      this.reprojectDocument(true)
-      this.viewport.scrollToBottom()
+      void this.refreshSkills()
+      try {
+        this.reprojectDocument(true)
+        this.viewport?.scrollToBottom()
+      } catch (error) {
+        this.log('error', `session resumed but failed to render: ${error instanceof Error ? error.message : String(error)}`, '/resume')
+      }
     } catch (error) {
+      if (candidate && this.handle?.agent !== candidate.agent) {
+        try { candidateRequestOverrideDispose?.() } catch {}
+        for (const disposeOverride of candidateSkillOverrides?.values?.() ?? []) {
+          try { disposeOverride() } catch {}
+        }
+        try {
+          await withTimeout(candidate.dispose?.(), 1000)
+        } catch {}
+      }
       this.log('error', error instanceof Error ? error.message : String(error), '/resume')
     } finally {
       this.message = ''
@@ -4710,8 +4817,7 @@ export class TuiApp {
           enabled: !disabled.has(skill.name)
         }))
     } catch {
-    this.skills = []
-    this.skillOverrideDisposers = new Map()
+      this.skills = []
     }
     if (this.menu) this.updateMenu()
     this.scheduleRender()

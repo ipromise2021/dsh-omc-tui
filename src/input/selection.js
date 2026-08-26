@@ -309,8 +309,6 @@ export class SelectionController {
         copyToClipboard(selectedText, stdout)
         return true
       }
-    } else {
-      this.clear()
     }
     return false
   }
