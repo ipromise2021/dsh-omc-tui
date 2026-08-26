@@ -6808,6 +6808,7 @@ export class TuiApp {
     this.inputMaxRows = Math.max(3, Math.min(10, rows - 10))
 
     if (this.compactState) {
+      lines.push('')
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]
       const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
@@ -6823,6 +6824,7 @@ export class TuiApp {
         lines.push(`    ${ANSI.dim}└ ${this.compactState.tip}${ANSI.reset}`)
       }
     } else if (this.active && !this.questionPanel && !this.pendingApproval) {
+      lines.push('')
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]
       const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
