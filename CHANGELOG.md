@@ -8,6 +8,7 @@
 
 | 版本 | 日期 | 说明 |
 | :--- | :--- | :--- |
+| **v0.2.2** | 2026-08-26 | **npm 安装方式上线**。发布至 npm registry，README 安装指引改为 npm 包名直装优先（`dsh plugin --profile tui add dsh-omc-tui`），GitHub 源码安装作为备选；无需 pnpm 对 Git 依赖的构建授权步骤。 |
 | **v0.2.1** | 2026-08-26 | **危险命令守卫（Danger Guard）上线与加固**。新增 `src/core/danger-guard.js` 原生 watchdog，挂载 Harness `tools/pre-execute` 拦截点与 `ctx.tools.guard()`：结构化 AST/Tokenizer 识别 `rm -rf /`、`chmod -R 777 /`、`git push -f`、`mkfs`/`dd` 直写磁盘、fork 炸弹、`find -delete` 等破坏性命令；支持子 shell 注释感知提取、`sh -c` 引号/粘连载荷、包装命令带值选项解析、ANSI-C 全转义解码与路径规范化逃逸拦截；`.dsh/danger-rules.json` 自定义 block/allow 全段锚定；递归深度与命令长度 fail-closed 保守拦截；会话生命周期全程接管与释放。 |
 | **v0.2.0** | 2026-08-26 | **视口投影渲染架构升级与性能优化**。Document + Viewport 纯投影渲染管线（`projectTranscript` → 视口差分重绘与语义锚点）；流式活动状态投影进视口 + 单 spinner 活动 HUD（耗时 / tokens / tok/s / effort 标注）；base 转写缓存 + live 尾流分层合并，流式阶段不再全量重投影；Alt/Meta 导航键回归修复；拖拽选区边缘自动滚动；`autocomplete` 路径穿越防护；会话切换/恢复失败回滚加固；live reasoning 列宽自适应与折叠交互。 |
 | **v0.1.1** | 2026-08-25 | **功能与稳定性增强**。新增自主决策 Vision 旁路视觉 Subagent 路由 (`/vision`)；深度集成 Git 与扩展状态的 4 行 Statusline HUD；新增交互式 `/provider` 管理与配置向导；托管专用浏览器生命周期；Shell 模式系统历史与常用命令智能补全；终端 Resize 回放与权限预设多项健壮性修复；文档与快捷启动别名完善。 |

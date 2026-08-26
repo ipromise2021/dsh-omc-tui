@@ -87,7 +87,13 @@ deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片�
 
 ## 安装和启动
 
-从 GitHub 安装到 `tui` profile：
+从 npm 安装到 `tui` profile（推荐，直接分发构建产物，无需 Git 依赖构建授权）：
+
+```sh
+npx --yes @deepseek-ai/dsh@latest plugin --profile tui add dsh-omc-tui
+```
+
+也可以从 GitHub 安装（会拉取源码，首次需按 pnpm 提示授权 `prepare` 构建脚本）：
 
 ```sh
 npx --yes @deepseek-ai/dsh@latest plugin --profile tui add github:ipromise2021/dsh-omc-tui
