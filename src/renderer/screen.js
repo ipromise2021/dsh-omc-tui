@@ -146,14 +146,14 @@ export class ScreenRenderer {
     if (forceFullRepaint) {
       for (let i = 0; i < screenLines.length; i++) {
         const line = screenLines[i]
-        buf += `\x1b[${i + 1};1H\x1b[2K${line}`
+        buf += `\x1b[${i + 1};1H\x1b[2K${line}\x1b[0m`
       }
     } else {
       // Differential update: only redraw rows that actually changed!
       for (let i = 0; i < screenLines.length; i++) {
         const line = screenLines[i]
         if (line !== this.prevScreenLines[i]) {
-          buf += `\x1b[${i + 1};1H\x1b[2K${line}`
+          buf += `\x1b[${i + 1};1H\x1b[2K${line}\x1b[0m`
         }
       }
     }

@@ -21,7 +21,10 @@ export function handleStatus(app) {
   const out = usage.output || 0
   const cache = usage.cacheRead || 0
   const total = inp + out
-  const pct = Math.round((total / cw) * 100)
+  const activeTokens = Number.isFinite(app.contextTokens)
+    ? app.contextTokens
+    : (Number.isFinite(usage.recentInput) ? usage.recentInput : (usage.input || 0))
+  const pct = Math.round((activeTokens / cw) * 100)
 
   const skillCount = app.skills?.length ?? 0
   const mcpCount = app.mcpCount ?? 0
@@ -34,7 +37,7 @@ export function handleStatus(app) {
     `Mode:         ${modeStr} · Preset: ${presetStr}`,
     `Directory:    ${cwd}`,
     `Session:      ${sessionId} · "${sessionTitle}" (${turns} turns, ${events.length} events)`,
-    `Context:      ${formatTokens(total)} / ${formatTokens(cw)} tokens (${pct}%) · in ${formatTokens(inp)}, out ${formatTokens(out)}, cache ${formatTokens(cache)}`,
+    `Context:      ${formatTokens(activeTokens)} / ${formatTokens(cw)} tokens (${pct}%) · session total ${formatTokens(total)} (in ${formatTokens(inp)}, out ${formatTokens(out)}, cache ${formatTokens(cache)})`,
     `Permission:   ${perm}`,
     `Extensions:   ${skillCount} skills · ${mcpCount} MCPs · ${hookCount} hooks · ${runningJobs} active jobs`,
     `Preferences:  theme: ${app.preferences?.theme ?? 'claude'} · history: ${app.preferences?.persistHistory !== false ? 'on' : 'off'}`

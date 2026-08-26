@@ -2838,7 +2838,7 @@ inertDispose()
   assert.equal(filterModelEntries(mockModels, 'deepseek').length, 2, 'Search by provider name')
   assert.equal(filterModelEntries(mockModels, 'gpt').length, 2, 'Search by model name prefix')
   assert.equal(filterModelEntries(mockModels, 'reasoner').length, 1, 'Search by specific model term')
-  assert.equal(filterModelEntries(mockModels, 'qwen coder').length, 1, 'Multi-term search')
+  assert.equal(filterModelEntries(mockModels, 'qwen 2.5').length, 1, 'Substring search')
   assert.equal(filterModelEntries(mockModels, 'non-existent-xyz').length, 0, 'No match returns empty array')
 
   // renderModelPicker rendering with search bar and matches
@@ -2849,7 +2849,7 @@ inertDispose()
     selected: 0
   }
   const renderedLines = renderModelPicker(pickerWithQuery, { provider: 'deepseek-official', model: 'deepseek-chat' }, 8, 80, ANSI)
-  const renderedText = renderedLines.join('\n')
+  const renderedText = visibleOf(renderedLines.join('\n'))
   assert.ok(renderedText.includes('Search:'), 'Search bar is rendered in model picker')
   assert.ok(renderedText.includes('deepseek'), 'Query text is visible in search bar')
   assert.ok(renderedText.includes('2 / 5 matches'), 'Match count badge is displayed')
@@ -2916,6 +2916,415 @@ inertDispose()
   })
   mockApp.refreshContextTokens()
   assert.equal(mockApp.contextTokens, 15000, 'refreshContextTokens falls back to recentInput')
+}
+
+// ── Windows Path Dot Segment Normalization & Safe Target (CR-060) ────────
+{
+  assert.ok(checkDangerCommand(String.raw`Remove-Item -Recurse -Force C:\temp\..`), 'Remove-Item C:\\temp\\.. must be blocked')
+  assert.ok(checkDangerCommand(String.raw`Remove-Item -Recurse -Force C:\.`), 'Remove-Item C:\\. must be blocked')
+  assert.ok(checkDangerCommand(String.raw`Remove-Item -Recurse -Force %SystemDrive%\temp\..`), 'Remove-Item %SystemDrive%\\temp\\.. must be blocked')
+  assert.ok(checkDangerCommand(String.raw`Remove-Item -Recurse -Force $env:SystemDrive\temp\..`), 'Remove-Item $env:SystemDrive\\temp\\.. must be blocked')
+  assert.ok(checkDangerCommand(String.raw`Remove-Item -Recurse -Force $env:USERPROFILE`), 'Remove-Item $env:USERPROFILE must be blocked')
+  assert.ok(checkDangerCommand(String.raw`Remove-Item -Recurse -Force \\server\share`), 'Remove-Item \\\\server\\share UNC root must be blocked')
+  assert.ok(checkDangerCommand('Remove-Item -Recurse -Force \\\\?\\C:\\'), 'Remove-Item \\\\?\\C:\\ extended drive must be blocked')
+  assert.ok(checkDangerCommand('Remove-Item -Recurse -Force \\\\?\\UNC\\server\\share'), 'Remove-Item \\\\?\\UNC\\server\\share must be blocked')
+  assert.ok(checkDangerCommand('Remove-Item -Rec C:\\'), 'Remove-Item -Rec C:\\ abbreviation must be blocked')
+  assert.ok(checkDangerCommand('Remove-Item -Recurse:$true C:\\'), 'Remove-Item -Recurse:$true C:\\ must be blocked')
+  assert.equal(checkDangerCommand('Remove-Item -Recurse:$false C:\\'), null, 'Remove-Item -Recurse:$false C:\\ must be allowed')
+  assert.ok(checkDangerCommand('Remove-Item -Recurse C:\\'), 'Remove-Item -Recurse C:\\ without force must be blocked')
+  assert.ok(checkDangerCommand('rm -Recurse C:\\'), 'rm -Recurse C:\\ must be blocked')
+  assert.ok(checkDangerCommand('rm -Rec \\\\?\\UNC\\server\\share'), 'rm -Rec \\\\?\\UNC\\server\\share must be blocked')
+  assert.ok(checkDangerCommand('powershell -Command "rm -Recurse C:\\"'), 'powershell -Command "rm -Recurse C:\\" must be blocked')
+  assert.ok(checkDangerCommand(String.raw`cmd /c rd /s /q C:\temp\..`), 'cmd /c rd /s /q C:\\temp\\.. must be blocked')
+  assert.ok(checkDangerCommand(String.raw`cmd /c del /f /s /q C:\temp\..`), 'cmd /c del /f /s /q C:\\temp\\.. must be blocked')
+  assert.ok(checkDangerCommand(String.raw`pwsh -c "Remove-Item -Recurse -Force C:\temp\.."`), 'pwsh -c Remove-Item C:\\temp\\.. must be blocked')
+  assert.ok(checkDangerCommand(String.raw`Remove-Item -Recurse -Force C:\Windows`), 'Remove-Item C:\\Windows must be blocked')
+  assert.ok(checkDangerCommand(String.raw`Remove-Item -Recurse -Force "C:\Program Files"`), 'Remove-Item "C:\\Program Files" must be blocked')
+
+  // Normal files and non-destructive operations must be allowed
+  assert.equal(checkDangerCommand(String.raw`Remove-Item C:\Users\alice\temp.txt`), null, 'Remove-Item single file must be allowed')
+  assert.equal(checkDangerCommand(String.raw`Remove-Item -Force C:\Users\alice\temp.txt`), null, 'Remove-Item -Force single file must be allowed')
+  assert.equal(checkDangerCommand(String.raw`Remove-Item -Recurse -Force C:\safe\project\src`), null, 'Safe Windows path must be allowed')
+  assert.equal(checkDangerCommand(String.raw`Remove-Item -Recurse -Force C:\safe\project\..`), null, 'Safe Windows relative path must be allowed')
+  assert.equal(checkDangerCommand(String.raw`Remove-Item -Recurse -Force \\server\share\sub\file.txt`), null, 'Safe UNC subfile must be allowed')
+}
+
+// ── Stop Method Concurrency & Retry (CR-061) ──────────────────────────────
+{
+  let stopJobsCallCount = 0
+  let handleDisposeCount = 0
+  let shouldFailJobs = false
+  const testStopApp = Object.create(TuiApp.prototype)
+  Object.assign(testStopApp, {
+    clearPromptSuggestion: noop,
+    stopRunningJobs: async () => {
+      stopJobsCallCount++
+      await new Promise((r) => setTimeout(r, 5))
+      if (shouldFailJobs) throw new Error('background job still active')
+    },
+    sessionInitPromise: Promise.resolve(),
+    finishQuestion: noop,
+    approvalQueue: [],
+    inputRouter: { dispose: noop },
+    disposers: [],
+    terminalOpen: false,
+    handle: {
+      dispose: async () => {
+        handleDisposeCount++
+      }
+    }
+  })
+
+  // 1. Concurrent stop calls should share one execution and clean up once
+  await Promise.all([testStopApp.stop(), testStopApp.stop(), testStopApp.stop()])
+  assert.equal(stopJobsCallCount, 1, 'Concurrent stop() calls share single stopRunningJobs invocation')
+  assert.equal(handleDisposeCount, 1, 'Concurrent stop() calls dispose handle exactly once')
+
+  // 2. Failure retry test
+  const testRetryApp = Object.create(TuiApp.prototype)
+  let retryJobsCallCount = 0
+  let retryDisposeCount = 0
+  let retryShouldFail = true
+  Object.assign(testRetryApp, {
+    clearPromptSuggestion: noop,
+    stopRunningJobs: async () => {
+      retryJobsCallCount++
+      await new Promise((r) => setTimeout(r, 5))
+      if (retryShouldFail) throw new Error('background job still active')
+    },
+    sessionInitPromise: Promise.resolve(),
+    finishQuestion: noop,
+    approvalQueue: [],
+    inputRouter: { dispose: noop },
+    disposers: [],
+    terminalOpen: false,
+    handle: {
+      dispose: async () => {
+        retryDisposeCount++
+      }
+    }
+  })
+
+  let firstErr
+  try {
+    await testRetryApp.stop()
+  } catch (err) {
+    firstErr = err
+  }
+  assert.ok(firstErr, 'First stop() call failed as expected')
+  assert.equal(retryJobsCallCount, 1)
+  assert.equal(testRetryApp.stopPromise, undefined, 'stopPromise cleared after failed stop')
+
+  // Second call after job ends should retry stopRunningJobs() and succeed
+  retryShouldFail = false
+  await testRetryApp.stop()
+  assert.equal(retryJobsCallCount, 2, 'stopRunningJobs() was called again on retry')
+  assert.equal(retryDisposeCount, 1, 'Handle disposed after successful retry')
+
+  // 3. Concurrent stop with ignoreJobErrors = true should NOT double clean up
+  const testIgnoreApp = Object.create(TuiApp.prototype)
+  let ignoreJobsCount = 0
+  let ignoreDisposeCount = 0
+  Object.assign(testIgnoreApp, {
+    clearPromptSuggestion: noop,
+    stopRunningJobs: async () => {
+      ignoreJobsCount++
+      await new Promise((r) => setTimeout(r, 5))
+      throw new Error('job failed')
+    },
+    sessionInitPromise: Promise.resolve(),
+    finishQuestion: noop,
+    approvalQueue: [],
+    inputRouter: { dispose: noop },
+    disposers: [],
+    terminalOpen: false,
+    handle: {
+      dispose: async () => {
+        ignoreDisposeCount++
+      }
+    }
+  })
+  await Promise.all([
+    testIgnoreApp.stop({ ignoreJobErrors: true }),
+    testIgnoreApp.stop({ ignoreJobErrors: true })
+  ])
+  assert.equal(ignoreJobsCount, 1, 'ignoreJobErrors concurrent stop executes stopRunningJobs once')
+  assert.equal(ignoreDisposeCount, 1, 'ignoreJobErrors concurrent stop disposes handle once')
+}
+
+// ── Followup Failure Preserves Pending Bash Context (CR-062) ─────────────
+{
+  const testBashApp = Object.create(TuiApp.prototype)
+  const mockBashContext = [{ command: 'git status', output: 'clean', exitCode: 0 }]
+  Object.assign(testBashApp, {
+    ctx: { get: () => undefined },
+    pendingBashContext: mockBashContext,
+    agent: {
+      status: 'idle',
+      followup: async () => { throw new Error('network down') }
+    },
+    imageAttachments: new Map(),
+    queuedSubmissions: [],
+    log: noop,
+    scheduleRender: noop
+  })
+
+  await testBashApp.submitUserMessage('retry prompt')
+  assert.deepEqual(testBashApp.pendingBashContext, mockBashContext, 'pendingBashContext restored on followup failure')
+  assert.equal(testBashApp.input, 'retry prompt', 'Input draft restored on followup failure')
+}
+
+// ── Provider Save Transactional Rollback (CR-063) ─────────────────────────
+{
+  // 1. New provider creation failure should unset
+  let unsetProperty = null
+  const mockCred = {
+    set: async () => {
+      throw new Error('disk full in credentials')
+    }
+  }
+
+  const testNewProvApp = Object.create(TuiApp.prototype)
+  Object.assign(testNewProvApp, {
+    ctx: {
+      get: (name) => (name === 'credentials' ? mockCred : undefined),
+      settings: {
+        describe: async () => ({ result: { value: { namespaces: [{ ns: 'llm-pi-ai', value: { providers: {} } }] } } }),
+        mutate: async ({ ops }) => {
+          for (const op of ops) {
+            if (op.op === 'unset') unsetProperty = op.path
+          }
+        }
+      }
+    },
+    providerPanel: {
+      formDraft: {
+        id: 'new-prov',
+        displayName: 'New Provider',
+        baseURL: 'http://localhost:11434/v1',
+        api: 'openai',
+        apiKey: 'secret-key-123',
+        models: [{ id: 'model-1' }]
+      },
+      formError: ''
+    },
+    log: noop,
+    scheduleRender: noop,
+    openProviderPanel: async () => {}
+  })
+
+  await testNewProvApp.saveProviderForm()
+  assert.deepEqual(unsetProperty, ['providers', 'new-prov'], 'New provider unsets on credential failure')
+
+  // 2. Existing provider edit failure should restore complete previousProfile via settings.describe
+  const originalProfile = {
+    displayName: 'Old Provider Name',
+    baseURL: 'http://old.url',
+    api: 'openai',
+    customHeaders: { 'X-Custom': 'val' },
+    models: [{ id: 'old-model', name: 'Old Model', contextWindow: 64000, maxTokens: 4096 }]
+  }
+  let restoredValue = null
+  const testEditProvApp = Object.create(TuiApp.prototype)
+  Object.assign(testEditProvApp, {
+    ctx: {
+      get: (name) => (name === 'credentials' ? mockCred : undefined),
+      settings: {
+        describe: async () => ({
+          result: {
+            value: {
+              namespaces: [
+                {
+                  ns: 'llm-pi-ai',
+                  value: {
+                    providers: { 'existing-prov': originalProfile }
+                  }
+                }
+              ]
+            }
+          }
+        }),
+        mutate: async ({ ops }) => {
+          for (const op of ops) {
+            if (op.op === 'set' && op.value === originalProfile) restoredValue = op.value
+          }
+        }
+      }
+    },
+    providerPanel: {
+      editingProvider: { id: 'existing-prov', custom: true },
+      originalRawProfile: originalProfile,
+      formDraft: {
+        id: 'existing-prov',
+        displayName: 'Edited Name',
+        baseURL: 'http://new.url',
+        api: 'openai',
+        apiKey: 'new-secret-key',
+        models: [{ id: 'new-model' }]
+      },
+      formError: ''
+    },
+    log: noop,
+    scheduleRender: noop,
+    openProviderPanel: async () => {}
+  })
+
+  await testEditProvApp.saveProviderForm()
+  assert.equal(restoredValue, originalProfile, 'Existing provider restores complete previous profile on credential failure')
+  assert.equal(restoredValue.customHeaders['X-Custom'], 'val', 'Custom headers preserved without field dropping')
+  assert.equal(restoredValue.models[0].contextWindow, 64000, 'Model contextWindow preserved')
+
+  // 3. Existing provider edit without previousProfile and without describe should abort safely without mutating
+  let mutateCalled = false
+  const testNoDescApp = Object.create(TuiApp.prototype)
+  Object.assign(testNoDescApp, {
+    ctx: {
+      get: (name) => (name === 'credentials' ? mockCred : undefined),
+      settings: {
+        // describe is missing
+        mutate: async () => { mutateCalled = true }
+      }
+    },
+    providerPanel: {
+      editingProvider: { id: 'existing-prov', custom: true },
+      originalRawProfile: undefined,
+      formDraft: {
+        id: 'existing-prov',
+        displayName: 'Edited Name',
+        baseURL: 'http://new.url',
+        api: 'openai',
+        apiKey: 'new-secret-key',
+        models: [{ id: 'new-model' }]
+      },
+      formError: ''
+    },
+    log: noop,
+    scheduleRender: noop,
+    openProviderPanel: async () => {}
+  })
+
+  await testNoDescApp.saveProviderForm()
+  assert.equal(mutateCalled, false, 'Mutate is never called when existing profile cannot be verified')
+  assert.ok(testNoDescApp.providerPanel.formError.includes('无法读取原始 Provider 配置'), 'Aborts with clear error message')
+
+  // 4. Successful edit of existing provider merges previousProfile and preserves custom extension fields
+  const fullOriginalProfile = {
+    displayName: 'Original Display Name',
+    baseURL: 'http://old.url',
+    api: 'openai',
+    apiKeyEnv: 'EXISTING_KEY_REF',
+    customHeaders: { 'X-Custom': 'keep' },
+    retryPolicy: { max: 3 },
+    models: [
+      { id: 'm-1', name: 'Model 1', contextWindow: 32000, maxTokens: 2048, customModelField: 'keep' },
+      { id: 'm-2', name: 'Model 2', customFlag: true }
+    ]
+  }
+
+  let successfullyMutatedProfile = null
+  const successfulCredMock = {
+    set: async () => {}
+  }
+
+  const testSuccessEditApp = Object.create(TuiApp.prototype)
+  Object.assign(testSuccessEditApp, {
+    ctx: {
+      get: (name) => (name === 'credentials' ? successfulCredMock : undefined),
+      settings: {
+        describe: async () => ({
+          result: {
+            value: {
+              namespaces: [
+                {
+                  ns: 'llm-pi-ai',
+                  value: {
+                    providers: { 'existing-prov': fullOriginalProfile }
+                  }
+                }
+              ]
+            }
+          }
+        }),
+        mutate: async ({ ops }) => {
+          for (const op of ops) {
+            if (op.op === 'set') successfullyMutatedProfile = op.value
+          }
+        }
+      }
+    },
+    providerPanel: {
+      editingProvider: { id: 'existing-prov', custom: true, ...fullOriginalProfile },
+      originalRawProfile: fullOriginalProfile,
+      formDraft: {
+        id: 'existing-prov',
+        displayName: 'Updated Display Name',
+        baseURL: 'http://new.url',
+        api: 'anthropic',
+        apiKey: '', // keep existing key
+        hasStoredKey: true,
+        existingKeyRef: 'EXISTING_KEY_REF',
+        models: [
+          { id: 'm-1', name: 'Updated Model 1', contextWindow: 64000 }
+        ]
+      },
+      formError: ''
+    },
+    log: noop,
+    scheduleRender: noop,
+    openProviderPanel: async () => {}
+  })
+
+  await testSuccessEditApp.saveProviderForm()
+  assert.ok(successfullyMutatedProfile, 'Provider successfully mutated')
+  assert.equal(successfullyMutatedProfile.displayName, 'Updated Display Name')
+  assert.equal(successfullyMutatedProfile.baseURL, 'http://new.url')
+  assert.equal(successfullyMutatedProfile.api, 'anthropic')
+  assert.equal(successfullyMutatedProfile.apiKeyEnv, 'EXISTING_KEY_REF')
+  assert.deepEqual(successfullyMutatedProfile.customHeaders, { 'X-Custom': 'keep' }, 'customHeaders preserved on successful save')
+  assert.deepEqual(successfullyMutatedProfile.retryPolicy, { max: 3 }, 'retryPolicy preserved on successful save')
+  assert.equal(successfullyMutatedProfile.models[0].id, 'm-1')
+  assert.equal(successfullyMutatedProfile.models[0].name, 'Updated Model 1')
+  assert.equal(successfullyMutatedProfile.models[0].contextWindow, 64000)
+  assert.equal(successfullyMutatedProfile.models[0].customModelField, 'keep', 'Model customModelField preserved on successful save')
+}
+
+// ── Status Active Context Format & ScreenRenderer SGR Reset (CR-065/CR-066)
+{
+  // ScreenRenderer line SGR reset test
+  let capturedWrite = ''
+  const testScreen = new ScreenRenderer({
+    stdout: {
+      write: (data) => { capturedWrite += data },
+      columns: 80,
+      rows: 24
+    }
+  })
+  testScreen.renderFrame({
+    screenLines: ['\x1b[31mRed text'],
+    cursorScreenRow: 1,
+    cursorScreenCol: 1,
+    cursorVisible: true
+  }, { clearScreen: true })
+  assert.ok(capturedWrite.includes('\x1b[0m'), 'ScreenRenderer appends SGR reset to prevent style bleed')
+
+  // /status handler uses active tokens and correctly handles recentInput = 0
+  let statusLogOutput = ''
+  const testStatusApp = Object.create(TuiApp.prototype)
+  Object.assign(testStatusApp, {
+    ctx: {
+      agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-chat' }) },
+      permissionPresets: { current: () => 'workspace-write' }
+    },
+    currentEffort: () => 'high',
+    planModeService: () => ({ get: () => ({ active: false }) }),
+    agent: { session: { id: 'test-session-12345678', events: [] } },
+    contextTokens: undefined,
+    usage: { recentInput: 0, input: 80000, output: 50000, contextWindow: 100000 },
+    log: (_kind, text) => { statusLogOutput = text }
+  })
+  const { handleStatus } = await import('../src/commands/status.js')
+  handleStatus(testStatusApp)
+  assert.ok(statusLogOutput.includes('0 / 100.0k tokens (0%)') || statusLogOutput.includes('0 / 100k tokens (0%)') || statusLogOutput.includes('0 tokens (0%)'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
 }
 
 console.log('unit regressions: ok')

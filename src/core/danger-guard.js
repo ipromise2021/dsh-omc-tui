@@ -356,6 +356,15 @@ export function tokenizeArgs(argString) {
  */
 export function unquoteToken(token) {
   try {
+    if (typeof token !== 'string') return ''
+    if (!token) return ''
+
+    // Fast path for Windows-style paths (e.g. C:\..., %SystemDrive%\..., $env:SystemDrive\..., \\server\share):
+    // In Windows shell paths, backslashes are path separators and must not be stripped as bash escapes.
+    if (/^["']?(?:[a-zA-Z]:|%[A-Za-z_]+%|\$env:[A-Za-z_]+|\\[\\?])/.test(token)) {
+      return token.replace(/^["']|["']$/g, '')
+    }
+
     let result = ''
     let inSingle = false
     let inDouble = false
@@ -806,32 +815,129 @@ function checkFindCommand(cmdName, args, rawCmd, rules, depth = 0) {
   return null
 }
 
+export function normalizeWindowsPath(rawPath) {
+  if (!rawPath) return ''
+  let p = String(rawPath).trim().replace(/^["']|["']$/g, '')
+  if (!p) return ''
+
+  // 1. Strip Windows extended path prefixes:
+  // \\?\UNC\server\share -> //server/share
+  if (/^[\\/]{2}[?.][\\/]unc[\\/]*/i.test(p)) {
+    p = p.replace(/^[\\/]{2}[?.][\\/]unc[\\/]*/i, '//')
+  } else {
+    // \\?\C:\ -> C:\
+    p = p.replace(/^[\\/]{2}[?.][\\/]*/, '')
+  }
+
+  // 2. Expand standard Windows home & system environment variables
+  if (/^(?:%USERPROFILE%|\$env:USERPROFILE)/i.test(p)) {
+    p = p.replace(/^(?:%USERPROFILE%|\$env:USERPROFILE)[\\/]*/i, '~/')
+  } else if (/^(?:%SystemDrive%|\$env:SystemDrive)/i.test(p)) {
+    p = p.replace(/^(?:%SystemDrive%|\$env:SystemDrive)[\\/]*/i, 'C:/')
+  } else if (/^(?:%SystemRoot%|%WINDIR%|\$env:SystemRoot|\$env:windir)/i.test(p)) {
+    p = p.replace(/^(?:%SystemRoot%|%WINDIR%|\$env:SystemRoot|\$env:windir)[\\/]*/i, 'C:/Windows/')
+  }
+
+  // 3. Handle wildcard suffix
+  let wildcardSuffix = ''
+  if (/[\\/](?:\*|\.\*|\*\.\*)$/.test(p)) {
+    wildcardSuffix = '/*'
+    p = p.replace(/[\\/](?:\*|\.\*|\*\.\*)$/, '')
+  } else if (/^[a-zA-Z]:(?:\*|\.\*|\*\.\*)$/i.test(p)) {
+    wildcardSuffix = '/*'
+    p = p.slice(0, 2)
+  }
+
+  const unified = p.replace(/\\/g, '/')
+
+  // 4. Identify prefix: Drive (e.g. C:), UNC share (//server/share), or Home (~)
+  let drivePrefix = ''
+  let rest = unified
+
+  const uncMatch = unified.match(/^\/\/([^/]+)\/([^/]+)(?:\/|$)/)
+  const driveMatch = unified.match(/^([a-zA-Z]:|\/)/i)
+
+  if (uncMatch) {
+    drivePrefix = `//${uncMatch[1]}/${uncMatch[2]}`
+    rest = unified.slice(drivePrefix.length)
+  } else if (driveMatch) {
+    drivePrefix = driveMatch[1]
+    rest = unified.slice(drivePrefix.length)
+  } else if (unified.startsWith('~') || unified.startsWith('$HOME')) {
+    drivePrefix = '~'
+    rest = unified.slice(unified.startsWith('$HOME') ? 5 : 1)
+  }
+
+  const rawSegments = rest.split('/').filter((s) => s.length > 0)
+  const resolved = []
+  for (const seg of rawSegments) {
+    if (seg === '.') continue
+    if (seg === '..') {
+      if (resolved.length > 0) {
+        resolved.pop()
+      }
+    } else {
+      resolved.push(seg)
+    }
+  }
+
+  let normalized = drivePrefix
+    ? (resolved.length > 0
+        ? `${drivePrefix.replace(/\/+$/, '')}/${resolved.join('/')}`
+        : `${drivePrefix.replace(/\/+$/, '')}/`)
+    : resolved.join('/')
+
+  if (wildcardSuffix) {
+    normalized = normalized.endsWith('/') ? `${normalized}*` : `${normalized}/*`
+  }
+  return normalized
+}
+
 export function isWindowsRootOrSystemTarget(target) {
   if (!target) return false
   const t = String(target).trim().replace(/^["']|["']$/g, '')
   if (!t) return false
-  if (/^[a-zA-Z]:[\\/]*(?:\*|\.\*|\*\.\*)?$/i.test(t)) return true
-  if (/^(?:%SystemDrive%|%SystemRoot%|%WINDIR%|%USERPROFILE%|\$env:SystemDrive|\$env:SystemRoot|\$env:windir|\$env:USERPROFILE)(?:[\\/].*)?$/i.test(t)) return true
-  if (/^(?:~|~\/|~\\|\$HOME)(?:[\\/].*)?$/i.test(t)) return true
-  if (/^\/+(?:\*|\.\*|\*\.\*)?$/.test(t)) return true
+  const norm = normalizeWindowsPath(t)
+  if (/^[a-zA-Z]:[\/]*(?:\*)?$/i.test(norm)) return true
+  if (/^[\/]+(?:\*)?$/.test(norm)) return true
+  if (/^~[\/]*(?:\*)?$/.test(norm)) return true
+  if (/^\/\/[^/]+\/[^/]+[\/]*(?:\*)?$/.test(norm)) return true
+  if (/^[a-zA-Z]:\/(?:Windows|Windows\/System32|Users|Program Files|Program Files \(x86\))[\/]*(?:\*)?$/i.test(norm)) return true
   return false
 }
 
 function checkWindowsPowerShellCommand(cmdName, args, rawCmd) {
   const norm = cmdName.toLowerCase()
-  if (norm === 'remove-item' || norm === 'ri' || norm === 'del' || norm === 'erase' || norm === 'rd' || norm === 'rmdir') {
+  if (norm === 'remove-item' || norm === 'ri' || norm === 'rm' || norm === 'del' || norm === 'erase' || norm === 'rd' || norm === 'rmdir') {
     let hasRecurse = false
     let hasForce = false
     const targets = []
     for (const arg of args) {
-      const lower = arg.toLowerCase()
-      if (lower === '-recurse' || lower === '-r') hasRecurse = true
-      else if (lower === '-force' || lower === '-fo' || lower === '-f' || lower.startsWith('-confirm:$false')) hasForce = true
-      else if (!arg.startsWith('-')) targets.push(arg)
+      if (arg.startsWith('-')) {
+        const match = arg.slice(1).match(/^([^:]+)(?::(.*))?$/)
+        if (match) {
+          const name = match[1].toLowerCase()
+          const rawVal = match[2] !== undefined ? match[2].toLowerCase() : true
+          const boolVal = !(rawVal === '$false' || rawVal === 'false' || rawVal === '0')
+          if (name === 'r' || (name.length >= 2 && 'recurse'.startsWith(name))) {
+            hasRecurse = boolVal
+          } else if (name === 'f' || (name.length >= 2 && 'force'.startsWith(name))) {
+            hasForce = boolVal
+          } else if ('confirm'.startsWith(name) && !boolVal) {
+            hasForce = true
+          }
+        }
+      } else {
+        targets.push(arg)
+      }
     }
-    for (const target of targets) {
-      if (isWindowsRootOrSystemTarget(target) || isRootOrHomeTarget(target)) {
-        return { rule: 'PowerShell 递归强制删除根目录/系统驱动器', command: rawCmd }
+
+    const isDestructive = hasRecurse || norm === 'rd' || norm === 'rmdir'
+    if (isDestructive) {
+      for (const target of targets) {
+        if (isWindowsRootOrSystemTarget(target) || isRootOrHomeTarget(target)) {
+          return { rule: 'PowerShell 递归删除根目录/系统驱动器', command: rawCmd }
+        }
       }
     }
   }
@@ -864,8 +970,11 @@ function checkWindowsCmdCommand(cmdName, args, rawCmd) {
   }
 
   if (norm === 'del' || norm === 'erase') {
+    const hasS = args.some((a) => /^\/s$/i.test(a) || /^-s$/i.test(a))
+    const hasF = args.some((a) => /^\/f$/i.test(a) || /^-f$/i.test(a))
+    const hasQ = args.some((a) => /^\/q$/i.test(a) || /^-q$/i.test(a))
     const targets = args.filter((a) => !a.startsWith('/') && !a.startsWith('-'))
-    if (targets.some((t) => isWindowsRootOrSystemTarget(t) || isRootOrHomeTarget(t))) {
+    if ((hasS || hasF || hasQ) && targets.some((t) => isWindowsRootOrSystemTarget(t) || isRootOrHomeTarget(t))) {
       return { rule: 'CMD 批量强制删除系统根目录文件', command: rawCmd }
     }
   }
@@ -1126,7 +1235,7 @@ function evaluateSegment(segment, rules, depth = 0) {
  * @param {number} [depth=0]
  * @returns {{rule:string, command:string} | null}
  */
-export function checkDangerCommand(command, rules, depth = 0) {
+export function checkDangerCommand(command, rules = compileDangerRules(), depth = 0) {
   if (depth > MAX_RECURSION_DEPTH) {
     return { rule: '复合命令嵌套过深，已保守拦截', command: String(command ?? '').slice(0, 200) }
   }

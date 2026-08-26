@@ -32,6 +32,13 @@
 | CR-057 | P1 | resolved | 生命周期 | stop 未释放当前 Agent 与 session skill overrides |
 | CR-058 | P1 | resolved | 权限审批 | 输入框已有单字 `y` 会预先批准后续请求 |
 | CR-059 | P2 | resolved | 权限审批 | 已 abort 的排队审批仍显示为可操作卡片 |
+| CR-060 | P1 | resolved | Danger Guard | Windows 根目录路径点段归一化与守卫拦截 |
+| CR-061 | P1 | resolved | 生命周期 | 退出被任务阻止失败后允许重试清理 |
+| CR-062 | P2 | resolved | 消息提交 | followup 失败时保留并恢复 pendingBashContext |
+| CR-063 | P1 | resolved | Provider | 凭据与 Profile 事务写入、数据保真与编辑回滚 |
+| CR-064 | P2 | resolved | 模型面板 | 简单连续子串匹配与命中高亮 |
+| CR-065 | P2 | resolved | ScreenRenderer | 差分渲染行尾追加 SGR reset 防止颜色样式外溢 |
+| CR-066 | P2 | resolved | `/status` 命令 | 上下文统计与 statusline 对齐使用 activeTokens 避免误报超限 |
 
 ## 详细发现
 
@@ -631,3 +638,66 @@
 - **影响：** UI 会展示已经取消的陈旧审批并等待用户决策。
 - **建议：** 入队和 pump 时都检查 `request.signal?.aborted`，直接 resolve cancelled；settle 还应加一次性保护。
 - **关闭验证：** 在 `requestApproval` 入队与 `pumpApprovals` 出队时均检查 `request.signal?.aborted`，并在 `settle` 中增加一次性防抖保护；新增排队中 abort 与预先 abort 断言并通过。
+
+### CR-060：Windows 根目录路径点段归一化与守卫拦截
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:806-945`
+- **现象：** Windows 路径点段未归一化导致 `C:\temp\..`、`C:\.` 可绕过系统根目录检查；原规则未识别 `$env:USERPROFILE`、UNC share 根（`\\server\share`）、扩展盘符（`\\?\C:\`）与扩展 UNC 根（`\\?\UNC\server\share`）；同时 PowerShell 参数缩写（`-Rec`）、布尔传参（`-Recurse:$true`）与官方别名 `rm`（如 `rm -Recurse C:\`、`powershell -Command "rm -Recurse C:\"`）曾可绕过拦截。
+- **影响：** 存在利用用户主目录变量、UNC 共享根、扩展前缀或 PowerShell 语法特性与别名绕过根目录保护的风险。
+- **建议：** 规范化 Windows drive/UNC/扩展路径（处理 `\\?\UNC\` 与 `\\?\` 前缀，展开 `%USERPROFILE%` 为 `~`，归一化 UNC 共享根），解析 PowerShell 参数名缩写与布尔修饰，将 `rm` 纳入别名分支，并将针对根目录/系统目录的任何递归删除均视为危险。
+- **关闭验证：** 实现了扩展 UNC 恢复、参数解析器、`rm` 别名支持与直接/嵌套纯 Recurse 拦截；覆盖 `Remove-Item -Rec C:\`、`Remove-Item -Recurse:$true C:\`、`rm -Recurse C:\`、`powershell -Command "rm -Recurse C:\"`、`rm -Rec \\?\UNC\server\share` 等全量断言并通过。
+
+### CR-061：退出并发保护与任务失败后重试机制
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:776-790`
+- **现象：** 若 `stopRunningJobs()` 执行前未立即固化共享 `stopPromise`，并发调用的 `stop()` 会重复穿透导致资源重复释放；若在 `ignoreJobErrors: true` 时无条件清空 `stopPromise`，会导致不可逆清理阶段被并发重入。
+- **影响：** 并发退出引发资源竞态，导致 `handle.dispose()` 或任务停止多次执行。
+- **建议：** 在任何 `await` 之前立即同步创建并赋值 `this.stopPromise` 供并发调用共享；仅当 `!ignoreJobErrors` 且准备把错误重新抛出以终止清理时才清空 `this.stopPromise = undefined`。
+- **关闭验证：** 仅在 `!ignoreJobErrors` 发生可重试错误时重置 `stopPromise`；新增 `stop({ ignoreJobErrors: true })` 并发单次释放断言及退出重试断言，全部通过。
+
+### CR-062：followup 失败时保留并恢复 pendingBashContext
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/index.js:2580-2625`
+- **现象：** `pendingBashContext` 在调用 `followup()` 前被清空，但在遇到网络或 Provider 拒绝时只恢复了 prompt 和图片，导致上一条 `!` 执行的 bash 上下文丢失。
+- **影响：** 重试后上一条命令的执行输出不会再随消息发送给模型。
+- **建议：** 在 `submitUserMessage` 错误分支中恢复原 `pendingBashContext`。
+- **关闭验证：** 记录 `priorBashContext` 并在 catch 分支予以完整还原；新增异常恢复单元测试断言并通过。
+
+### CR-063：Provider 凭据与 Profile 事务写入与编辑回滚
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:3370-3580`
+- **现象：** 保存 Provider 时若凭据写入失败，原先统一执行 `unset` 会删除已有 Provider；构造新 profile 时若没有以 `previousProfile` 为基底合并，成功保存也会丢失 `customHeaders`、`retryPolicy` 等扩展属性以及模型对象中的扩展字段。
+- **影响：** 编辑已有 Provider 会破坏既有配置或静默丢弃自定义扩展字段。
+- **建议：** 打开面板时持久化保存完整的 `rawProfile`，写入前优先通过 `settings.describe({})` 获取完整 profile；以 `previousProfile` 为基础合并表单修改并对 models 按 id 深度合并未知字段；在缺少完整旧 profile 时无条件中止两阶段写入，凭据失败时执行完整 `set` 回滚。
+- **关闭验证：** 实现了基于 `previousProfile` 的深度合并、完整 `rawProfile` 追踪与无损保存/回滚闭环；新增成功保存保留扩展字段、模型参数与回滚的单元测试并通过。
+
+### CR-064：模型面板简单连续子串搜索与高亮
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/panels/model-picker.js:4-35`
+- **现象：** 多词分词与复杂区间合并增加了认知与交互复杂度，且与简明过滤规范不一致。
+- **影响：** 过滤行为与预期不符。
+- **建议：** 收敛为标准的连续子串包含匹配（`combined.includes(q)`）与单匹配高亮。
+- **关闭验证：** 简化 `filterModelEntries` 与 `formatModelLabel` 为清晰的连续子串匹配与高亮；测试用例同步更新并通过。
+
+### CR-065：差分渲染行尾追加 SGR reset 防止颜色样式外溢
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/renderer/screen.js:145-160`
+- **现象：** 终端行末未包含 `\x1b[0m` 重置码时，SGR 样式（如加粗、背景色、文字颜色）可能会在差分重绘行切换或移动光标时外溢到下一行或光标所在位置。
+- **影响：** 终端在某些特殊背景色或高亮行重绘时出现局部残色或光标颜色污染。
+- **建议：** 在 `renderFrame()` 的每行输出末尾统一追加 `\x1b[0m`。
+- **关闭验证：** 在 `renderFrame()` 的重绘行末统一追加 `\x1b[0m`；新增 SGR reset 捕获断言并通过。
+
+### CR-066：`/status` 命令上下文统计与 statusline 对齐使用 activeTokens
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/commands/status.js:18-38`
+- **现象：** `/status` 诊断命令原先使用 `usage.recentInput || inp`，当 `recentInput === 0` 时会错误回退至累计输入 `inp`（如 80k）；且将多轮累计作为当前占用导致百分比误报超限。
+- **影响：** 用户在首轮或已清空会话中查看 `/status` 时误判上下文占用。
+- **建议：** 使用 `Number.isFinite(usage.recentInput)` 精确处理 0 值，并与 statusline 一致优先展示当前轮次有效上下文。
+- **关闭验证：** 修正了判断逻辑并在 `usage.recentInput === 0` 时正确输出 0% 占用；单元测试断言验证通过。

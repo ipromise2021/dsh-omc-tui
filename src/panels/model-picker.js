@@ -4,34 +4,31 @@ import { ANSI as defaultAnsi } from '../renderer/themes.js'
 export function filterModelEntries(allEntries = [], query = '') {
   const q = (query || '').trim().toLowerCase()
   if (!q) return allEntries
-  const terms = q.split(/\s+/).filter(Boolean)
   return allEntries.filter((entry) => {
     const provider = String(entry.provider ?? '').toLowerCase()
     const model = String(entry.model ?? '').toLowerCase()
     const name = String(entry.name ?? '').toLowerCase()
     const desc = String(entry.description ?? '').toLowerCase()
     const combined = `${provider}/${model} ${name} ${desc}`
-    return terms.every((term) => combined.includes(term))
+    return combined.includes(q)
   })
 }
 
 function formatModelLabel(label, query, isSelected, budget, ANSI) {
   const safeLabel = truncateWidth(safe(label), budget)
   const q = (query || '').trim().toLowerCase()
+  const baseCol = isSelected ? (ANSI.ink ?? ANSI.bold) : ANSI.blueSoft
   if (!q) {
-    const col = isSelected ? (ANSI.ink ?? ANSI.bold) : ANSI.blueSoft
-    return `${col}${safeLabel}${ANSI.reset}`
+    return `${baseCol}${safeLabel}${ANSI.reset}`
   }
   const lower = safeLabel.toLowerCase()
   const idx = lower.indexOf(q)
   if (idx < 0) {
-    const col = isSelected ? (ANSI.ink ?? ANSI.bold) : ANSI.blueSoft
-    return `${col}${safeLabel}${ANSI.reset}`
+    return `${baseCol}${safeLabel}${ANSI.reset}`
   }
   const before = safeLabel.slice(0, idx)
   const match = safeLabel.slice(idx, idx + q.length)
   const after = safeLabel.slice(idx + q.length)
-  const baseCol = isSelected ? (ANSI.ink ?? ANSI.bold) : ANSI.blueSoft
   const matchCol = `${ANSI.bold}${ANSI.amber ?? ANSI.coral ?? ANSI.blue}`
   return `${baseCol}${before}${ANSI.reset}${matchCol}${match}${ANSI.reset}${baseCol}${after}${ANSI.reset}`
 }

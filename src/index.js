@@ -780,7 +780,10 @@ export class TuiApp {
       try {
         await this.stopRunningJobs()
       } catch (error) {
-        if (!ignoreJobErrors) throw error
+        if (!ignoreJobErrors) {
+          this.stopPromise = undefined
+          throw error
+        }
       }
       try {
         await this.sessionInitPromise
@@ -2579,6 +2582,7 @@ export class TuiApp {
     }
 
     let fullText = text
+    const priorBashContext = this.pendingBashContext
     // Inject any pending bash context (command + output) from prior ! executions
     if (this.pendingBashContext?.length) {
       const ctxBlock = this.pendingBashContext.map(({ command, output, exitCode }) => [
@@ -2614,6 +2618,7 @@ export class TuiApp {
     } catch (error) {
       this.queuedSubmissions = (this.queuedSubmissions ?? []).filter((submission) => submission !== queuedSubmission)
       this.pendingImages = [...images, ...(this.pendingImages ?? [])]
+      this.pendingBashContext = priorBashContext
       if (prompt) {
         this.input = this.input ? `${prompt}\n${this.input}` : prompt
       }
@@ -3373,6 +3378,7 @@ export class TuiApp {
           apiKeyEnv: customEntry?.apiKeyEnv,
           api: p.api || customEntry?.api || (p.id.includes('deepseek') ? 'deepseek' : 'openai'),
           baseURL: p.baseURL || customEntry?.baseURL || '',
+          rawProfile: customEntry ? JSON.parse(JSON.stringify(customEntry)) : undefined,
           modelsCount: models.length || (customEntry?.models?.length ?? 0),
           models: models.map((m) => ({ id: m.id || m.name, name: m.name, contextWindow: m.contextWindow, maxTokens: m.maxTokens }))
         })
@@ -3390,6 +3396,7 @@ export class TuiApp {
             apiKeyEnv: prof.apiKeyEnv,
             api: prof.api || 'openai',
             baseURL: prof.baseURL || '',
+            rawProfile: JSON.parse(JSON.stringify(prof)),
             modelsCount: mList.length,
             models: mList
           })
@@ -3418,6 +3425,7 @@ export class TuiApp {
         selected: 0,
         presetCandidates,
         editingProvider: undefined,
+        originalRawProfile: undefined,
         formDraft: { id: '', displayName: '', baseURL: '', api: 'openai', apiKey: '', models: [] },
         formField: 0,
         formError: '',
@@ -3439,6 +3447,7 @@ export class TuiApp {
     if (!this.providerPanel) return
     this.providerPanel.view = 'form'
     this.providerPanel.editingProvider = undefined
+    this.providerPanel.originalRawProfile = undefined
     this.providerPanel.formDraft = {
       id: '',
       displayName: '',
@@ -3457,6 +3466,7 @@ export class TuiApp {
     if (!this.providerPanel) return
     this.providerPanel.view = 'form'
     this.providerPanel.editingProvider = target
+    this.providerPanel.originalRawProfile = target.rawProfile ? JSON.parse(JSON.stringify(target.rawProfile)) : undefined
     this.providerPanel.formDraft = {
       id: target.id,
       displayName: target.name || target.id,
@@ -3513,7 +3523,7 @@ export class TuiApp {
       const existingKeyRef = draft.existingKeyRef || (draft.hasStoredKey ? defaultKeyRef : undefined)
       const finalKeyRef = isNewKey ? defaultKeyRef : existingKeyRef
 
-      // CR-055: If user enters a new API key, credentials capability is required
+      // Validate credentials service capability if a new key is provided
       if (isNewKey) {
         const credService = this.ctx.get('credentials')
         if (!credService?.set) {
@@ -3522,21 +3532,64 @@ export class TuiApp {
           this.scheduleRender()
           return
         }
-        await credService.set({ ref: finalKeyRef, value: newKeyVal })
-        process.env[finalKeyRef] = newKeyVal
       }
 
+      let previousProfile = undefined
+      if (this.ctx.settings?.describe) {
+        try {
+          const desc = await this.ctx.settings.describe({})
+          const piAiNs = desc?.result?.value?.namespaces?.find((n) => n.ns === 'llm-pi-ai')
+          if (piAiNs?.value?.providers?.[id]) {
+            previousProfile = piAiNs.value.providers[id]
+          }
+        } catch {}
+      }
+      if (!previousProfile && this.providerPanel?.originalRawProfile && this.providerPanel?.editingProvider?.id === id) {
+        previousProfile = this.providerPanel.originalRawProfile
+      }
+
+      const isEditingExisting = Boolean(
+        this.providerPanel?.editingProvider?.id === id &&
+        (this.providerPanel?.editingProvider?.custom || this.providerPanel?.originalRawProfile)
+      )
+      if (isEditingExisting && !previousProfile) {
+        this.providerPanel.formError = '无法读取原始 Provider 配置，已中止保存以防止丢失配置'
+        this.scheduleRender()
+        return
+      }
+
+      const baseProfile = previousProfile ? JSON.parse(JSON.stringify(previousProfile)) : {}
+      const existingModelsMap = new Map((baseProfile.models || []).map((m) => [m.id, m]))
+
+      const mergedModels = models.map((m) => {
+        const existingModel = existingModelsMap.get(m.id) || {}
+        const merged = { ...existingModel, id: m.id }
+        if (m.name) merged.name = m.name
+        else delete merged.name
+        if (m.contextWindow) merged.contextWindow = m.contextWindow
+        else delete merged.contextWindow
+        if (m.maxTokens) merged.maxTokens = m.maxTokens
+        else delete merged.maxTokens
+        return merged
+      })
+
       const profile = {
-        ...(draft.displayName?.trim() ? { displayName: draft.displayName.trim() } : {}),
+        ...baseProfile,
         baseURL,
-        api: draft.api || 'openai',
-        ...(finalKeyRef ? { apiKeyEnv: finalKeyRef } : {}),
-        models: models.map((m) => ({
-          id: m.id,
-          ...(m.name ? { name: m.name } : {}),
-          ...(m.contextWindow ? { contextWindow: m.contextWindow } : {}),
-          ...(m.maxTokens ? { maxTokens: m.maxTokens } : {})
-        }))
+        api: draft.api || baseProfile.api || 'openai',
+        models: mergedModels
+      }
+
+      if (draft.displayName?.trim()) {
+        profile.displayName = draft.displayName.trim()
+      } else {
+        delete profile.displayName
+      }
+
+      if (finalKeyRef) {
+        profile.apiKeyEnv = finalKeyRef
+      } else {
+        delete profile.apiKeyEnv
       }
 
       if (this.ctx.settings?.mutate) {
@@ -3544,6 +3597,25 @@ export class TuiApp {
           ns: 'llm-pi-ai',
           ops: [{ op: 'set', path: ['providers', id], value: profile }]
         })
+      }
+
+      if (isNewKey) {
+        const credService = this.ctx.get('credentials')
+        try {
+          await credService.set({ ref: finalKeyRef, value: newKeyVal })
+          process.env[finalKeyRef] = newKeyVal
+        } catch (credErr) {
+          if (this.ctx.settings?.mutate) {
+            const rollbackOp = previousProfile
+              ? { op: 'set', path: ['providers', id], value: previousProfile }
+              : { op: 'unset', path: ['providers', id] }
+            await this.ctx.settings.mutate({
+              ns: 'llm-pi-ai',
+              ops: [rollbackOp]
+            }).catch(() => {})
+          }
+          throw credErr
+        }
       }
 
       this.log('ok', `provider "${id}" saved (${models.length} models) · ready in /model`, '/provider')
