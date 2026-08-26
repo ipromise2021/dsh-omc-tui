@@ -6606,18 +6606,25 @@ export class TuiApp {
       const speedStr = speed > 0 ? ` · ${speed >= 10 ? speed.toFixed(1) : speed.toFixed(2)} tok/s` : ''
 
       let phrase = 'Ideating'
+      let effortSuffix = ''
+      let icon = '✻'
       if (this.streaming?.tool) {
         const toolName = this.streaming.tool.name || 'tool'
         phrase = `Calling ${toolName}`
       } else if (this.streaming?.text) {
         phrase = 'Generating response'
       } else if (this.streaming?.reasoning) {
-        phrase = 'Thinking'
+        phrase = this.activityPhrase() || 'Ideating'
+        icon = '✦'
+        const effort = (this.reasoningEffort && this.reasoningEffort !== 'DEFAULT')
+          ? ` · thinking with ${this.reasoningEffort.toLowerCase()} effort`
+          : ' · thinking'
+        effortSuffix = effort
       } else {
         phrase = this.activityPhrase() || 'Ideating'
       }
 
-      lines.push(`  ${ANSI.peach}✻ ${phrase}${dots}${ANSI.reset} ${ANSI.dim}(${elapsedSec}s${tokStr}${speedStr})${ANSI.reset}`)
+      lines.push(`  ${ANSI.peach}${icon} ${phrase}${dots}${ANSI.reset} ${ANSI.dim}(${elapsedSec}s${effortSuffix}${tokStr}${speedStr})${ANSI.reset}`)
       lines.push('')
     }
 

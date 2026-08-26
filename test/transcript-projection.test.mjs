@@ -128,7 +128,35 @@ const collapsedStreamDoc = projectTranscript(singleToolEvents, 80, {
 })
 const collapsedText = collapsedStreamDoc.rows.join('\n')
 assert.ok(!collapsedText.includes('Thinking deeply about the universe'), 'Live reasoning should hide detail when collapsed')
-assert.ok(collapsedText.includes('Thinking (1 lines)'), 'Live reasoning should show summary when collapsed')
+assert.ok(collapsedText.includes('Thinking for '), 'Live reasoning should show summary when collapsed')
+
+// 8.1. Column width bounds: verify activeStream row widths <= columns for 30, 40, 80 columns
+for (const cols of [30, 40, 80]) {
+  const activeExpandedDoc = projectTranscript([], cols, {
+    activeStream: {
+      text: 'Live answer text streaming with wrapping',
+      reasoning: 'Long reasoning line that should wrap cleanly without overflowing narrow columns',
+      time: Date.now() - 3000
+    }
+  })
+  for (const row of activeExpandedDoc.rows) {
+    const w = widthOf(visibleOf(row))
+    assert.ok(w <= cols, `Active expanded stream row "${visibleOf(row)}" width (${w}) exceeds ${cols} columns`)
+  }
+
+  const activeCollapsedDoc = projectTranscript([], cols, {
+    activeStream: {
+      text: 'Live answer text streaming',
+      reasoning: 'Long reasoning line',
+      time: Date.now() - 3000
+    },
+    expandedKeys: new Set(['active-reasoning:collapsed'])
+  })
+  for (const row of activeCollapsedDoc.rows) {
+    const w = widthOf(visibleOf(row))
+    assert.ok(w <= cols, `Active collapsed stream row "${visibleOf(row)}" width (${w}) exceeds ${cols} columns`)
+  }
+}
 
 // 9. Block metadata realignment test: startRow and rowCount must strictly match cleanedRows indices
 for (const block of streamDoc.blocks) {

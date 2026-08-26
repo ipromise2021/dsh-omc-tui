@@ -545,27 +545,44 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
     }
 
     if (hasReason) {
-      const rawLines = activeStream.reasoning.split('\n').filter((l) => l.trim().length > 0)
-      const lines = rawLines.length
       const reasonRows = []
       const reasonLogical = []
+      const elapsedSec = activeStream.elapsedSec ?? Math.max(1, Math.floor((Date.now() - (activeStream.time || Date.now())) / 1000))
+      const timeStr = `${elapsedSec}s`
+      const summaryText = `Thinking for ${timeStr}...`
+
+      const fullHint = isReasonCollapsed ? '(ctrl+o to expand)' : '(ctrl+o to collapse)'
+      const shortHint = isReasonCollapsed ? '(^O expand)' : '(^O collapse)'
+      const minHint = '(^O)'
+
+      let headerText = `Thinking for ${timeStr}...`
+      let hintText = ''
+      if (widthOf(visibleOf(`  ${headerText} ${fullHint}`)) <= columns) {
+        hintText = ` ${ANSI.dim}${fullHint}${ANSI.reset}`
+      } else if (widthOf(visibleOf(`  ${headerText} ${shortHint}`)) <= columns) {
+        hintText = ` ${ANSI.dim}${shortHint}${ANSI.reset}`
+      } else if (widthOf(visibleOf(`  ${headerText} ${minHint}`)) <= columns) {
+        hintText = ` ${ANSI.dim}${minHint}${ANSI.reset}`
+      } else {
+        const avail = Math.max(4, columns - 2)
+        if (widthOf(headerText) > avail) {
+          headerText = truncateWidth(headerText, avail)
+        }
+      }
+
+      const reasonHeader = `  ${ANSI.detail}${headerText}${ANSI.reset}${hintText}`
+      reasonRows.push(reasonHeader)
+      reasonLogical.push(summaryText)
 
       if (!isReasonCollapsed) {
-        // Visible by default during live streaming!
-        const reasonHeader = `  ${ANSI.detail}⚛ Thinking (${lines} lines) ${ANSI.dim}(ctrl+o to collapse)${ANSI.reset}`
-        reasonRows.push(reasonHeader)
-        reasonLogical.push(`Thinking (${lines} lines)`)
-        const wrapped = wrap(activeStream.reasoning, contentWidth - 4)
+        const wrapWidth = Math.max(4, columns - 6)
+        const wrapped = wrap(activeStream.reasoning, wrapWidth)
         for (let i = 0; i < wrapped.length; i++) {
           const isLast = i === wrapped.length - 1
           const cursor = (isLast && !activeStream.text) ? `${ANSI.blue}▋${ANSI.reset}` : ''
           reasonRows.push(`    ${ANSI.detail}${wrapped[i]}${cursor}${ANSI.reset}`)
           reasonLogical.push(wrapped[i])
         }
-      } else {
-        const reasonHeader = `  ${ANSI.detail}⚛ Thinking (${lines} lines) ${ANSI.dim}(ctrl+o to expand)${ANSI.reset}`
-        reasonRows.push(reasonHeader)
-        reasonLogical.push(`Thinking (${lines} lines)`)
       }
       reasonRows.push('')
 
@@ -575,7 +592,7 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
         startSeq: 999999,
         endSeq: 999999,
         collapsed: isReasonCollapsed,
-        summary: `Thinking (${lines} lines)`,
+        summary: summaryText,
         rows: reasonRows,
         logicalLines: reasonLogical
       })
