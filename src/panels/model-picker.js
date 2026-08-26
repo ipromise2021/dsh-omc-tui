@@ -1,17 +1,82 @@
 import { safe, truncateWidth, widthOf } from '../renderer/ansi.js'
 import { ANSI as defaultAnsi } from '../renderer/themes.js'
 
+export function filterModelEntries(allEntries = [], query = '') {
+  const q = (query || '').trim().toLowerCase()
+  if (!q) return allEntries
+  const terms = q.split(/\s+/).filter(Boolean)
+  return allEntries.filter((entry) => {
+    const provider = String(entry.provider ?? '').toLowerCase()
+    const model = String(entry.model ?? '').toLowerCase()
+    const name = String(entry.name ?? '').toLowerCase()
+    const desc = String(entry.description ?? '').toLowerCase()
+    const combined = `${provider}/${model} ${name} ${desc}`
+    return terms.every((term) => combined.includes(term))
+  })
+}
+
+function formatModelLabel(label, query, isSelected, budget, ANSI) {
+  const safeLabel = truncateWidth(safe(label), budget)
+  const q = (query || '').trim().toLowerCase()
+  if (!q) {
+    const col = isSelected ? (ANSI.ink ?? ANSI.bold) : ANSI.blueSoft
+    return `${col}${safeLabel}${ANSI.reset}`
+  }
+  const lower = safeLabel.toLowerCase()
+  const idx = lower.indexOf(q)
+  if (idx < 0) {
+    const col = isSelected ? (ANSI.ink ?? ANSI.bold) : ANSI.blueSoft
+    return `${col}${safeLabel}${ANSI.reset}`
+  }
+  const before = safeLabel.slice(0, idx)
+  const match = safeLabel.slice(idx, idx + q.length)
+  const after = safeLabel.slice(idx + q.length)
+  const baseCol = isSelected ? (ANSI.ink ?? ANSI.bold) : ANSI.blueSoft
+  const matchCol = `${ANSI.bold}${ANSI.amber ?? ANSI.coral ?? ANSI.blue}`
+  return `${baseCol}${before}${ANSI.reset}${matchCol}${match}${ANSI.reset}${baseCol}${after}${ANSI.reset}`
+}
+
 export function renderModelPicker(modelPicker, currentSelection, capacity, columns, ANSI = defaultAnsi) {
-  const entries = modelPicker.entries
+  const allEntries = modelPicker.allEntries || modelPicker.entries || []
+  const entries = modelPicker.entries || []
+  const query = modelPicker.query ?? ''
   const current = currentSelection ?? {}
-  const slots = Math.max(1, capacity - 2)
-  const start = Math.min(Math.max(0, modelPicker.selected - slots + 1), Math.max(0, entries.length - slots))
+  const slots = Math.max(2, capacity - 3)
+  const selected = modelPicker.selected ?? 0
+  const start = Math.min(Math.max(0, selected - slots + 1), Math.max(0, entries.length - slots))
   const shown = entries.slice(start, start + slots)
+
+  const searchPrompt = query
+    ? `  ${ANSI.blue}>${ANSI.reset} ${ANSI.dim}Search:${ANSI.reset} ${ANSI.bold}${ANSI.ink ?? ANSI.blueSoft}${truncateWidth(safe(query), Math.max(8, columns - 14))}${ANSI.blue}█${ANSI.reset}`
+    : `  ${ANSI.blue}>${ANSI.reset} ${ANSI.dim}Search:${ANSI.reset} ${ANSI.dim}${truncateWidth('type to filter provider or model...', Math.max(8, columns - 14))}${ANSI.reset}`
+
+  const hintText = columns >= 68
+    ? '↑↓ navigate  ·  Enter select  ·  Esc close  ·  type to search'
+    : '↑↓ navigate  ·  Enter select  ·  Esc close'
+  const footerHint = `  ${ANSI.muted}${truncateWidth(safe(hintText), Math.max(8, columns - 4))}${ANSI.reset}`
+
+  if (entries.length === 0) {
+    return [
+      `  ${ANSI.muted}MODELS${ANSI.reset}  ${ANSI.dim}· 0 / ${allEntries.length} models${ANSI.reset}`,
+      searchPrompt,
+      '',
+      `  ${ANSI.dim}No models matching "${query}"${ANSI.reset}`,
+      '',
+      `  ${ANSI.muted}${truncateWidth(safe('Esc close  ·  Backspace edit search'), Math.max(8, columns - 4))}${ANSI.reset}`
+    ]
+  }
+
+  const countBadge = query
+    ? `${entries.length} / ${allEntries.length} matches`
+    : `${entries.length} available`
+
   return [
-    `  ${ANSI.muted}MODELS${ANSI.reset}  ${ANSI.dim}· ${entries.length} available${ANSI.reset}`,
+    `  ${ANSI.muted}MODELS${ANSI.reset}  ${ANSI.dim}· ${countBadge}${ANSI.reset}`,
+    searchPrompt,
     '',
     ...shown.map((entry, index) => {
-      const marker = index + start === modelPicker.selected ? `${ANSI.blue}>${ANSI.reset}` : ' '
+      const isSelected = index + start === selected
+      const marker = isSelected ? `${ANSI.blue}>${ANSI.reset}` : ' '
       const isCurrent = entry.provider === current.provider && entry.model === current.model
       const label = `${entry.provider}/${entry.model}`
       const hasVision = Array.isArray(entry.inputModalities) && entry.inputModalities.includes('image')
@@ -22,10 +87,11 @@ export function renderModelPicker(modelPicker, currentSelection, capacity, colum
       const detail = truncateWidth(safe(detailText), Math.max(1, detailBudget - widthOf(badgeText)))
       const detailColor = isCurrent ? ANSI.bash : ANSI.dim
       const vision = hasVision ? `${ANSI.cyan ?? ANSI.teal ?? ANSI.blue}${badgeText}${ANSI.reset}` : ''
-      return `${marker}  ${ANSI.blueSoft}${truncateWidth(safe(label), labelBudget)}${ANSI.reset}  ${detailColor}${detail}${ANSI.reset}${vision}`
+      const formattedLabel = formatModelLabel(label, query, isSelected, labelBudget, ANSI)
+      return `${marker}  ${formattedLabel}  ${detailColor}${detail}${ANSI.reset}${vision}`
     }),
     '',
-    `  ${ANSI.muted}↑↓ navigate  ·  Enter select  ·  Esc close${ANSI.reset}`
+    footerHint
   ]
 }
 

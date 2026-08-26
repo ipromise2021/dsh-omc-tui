@@ -72,7 +72,9 @@ export function renderStatusRows(options) {
     return { rows: statusRowsCache.rows, cache: statusRowsCache }
   }
 
-  const sessionContextTokens = Number.isFinite(contextTokens) ? Math.max(0, contextTokens) : usage.input + usage.output
+  const sessionContextTokens = Number.isFinite(contextTokens)
+    ? Math.max(0, contextTokens)
+    : (Number.isFinite(usage.recentInput) ? Math.max(0, usage.recentInput) : (usage.input + usage.output))
   const contextText = usage.contextWindow
     ? `${formatTokens(sessionContextTokens)} / ${formatTokens(usage.contextWindow)}`
     : 'awaiting first response'

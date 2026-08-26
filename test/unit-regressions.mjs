@@ -11,13 +11,14 @@ import { renderMarkdownRows } from '../src/renderer/markdown.js'
 import { renderStatusRows } from '../src/renderer/statusline.js'
 import { renderJobPanel } from '../src/panels/jobs-panel.js'
 import { renderExitConfirm } from '../src/panels/exit-confirm.js'
-import { renderModelPicker } from '../src/panels/model-picker.js'
+import { renderModelPicker, filterModelEntries } from '../src/panels/model-picker.js'
 import { renderQuestionPanel } from '../src/panels/question-panel.js'
 import { renderSkillsPanel } from '../src/panels/skills-panel.js'
 import { formatEvents } from '../src/renderer/transcript.js'
 import { BrowserLease, chromeApprovalReason, chromeConnectionApprovalReason, chromeLaunchArgs, chromeToolRisk, isChromeTool, registerBrowserLease } from '../src/browser-lease.js'
 import { ANSI, applyTheme } from '../src/renderer/themes.js'
 import { safe, visibleOf, widthOf } from '../src/renderer/ansi.js'
+import { ScreenRenderer } from '../src/renderer/screen.js'
 import { loadShellHistoryFile, loadSystemShellHistory } from '../src/input/history.js'
 import { listDir } from '../src/input/autocomplete.js'
 import { createDangerGuard, checkDangerCommand, compileDangerRules, DEFAULT_DANGER_RULES } from '../src/core/danger-guard.js'
@@ -1562,7 +1563,7 @@ const hudText = visibleOf(hudStatus.rows.join('\n'))
 assert.match(hudText, /git:\(main\* ↑1\)/)
 assert.match(hudText, /48\.5 tok\/s/)
 assert.match(hudText, /⏱️ 2s/)
-assert.match(hudText, /Context.*15k \/ 100k · 14% \| session in 12k · out 2\.5k/)
+assert.match(hudText, /Context.*85k \/ 100k · 85% ⚠️ \| session in 12k · out 2\.5k/)
 assert.match(hudText, /Read: index\.js/)
 assert.match(hudText, /Edit: statusline\.js/)
 
@@ -1605,15 +1606,15 @@ const percentContext = renderStatusRows({
   contextMode: 'percent',
   usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, recentInput: 85000, contextWindow: 100000 }
 })
-assert.match(visibleOf(percentContext.rows.join('\n')), /Context.*14%/)
-assert.equal(visibleOf(percentContext.rows.join('\n')).includes('85k \/ 100k'), false)
+assert.match(visibleOf(percentContext.rows.join('\n')), /Context.*85%/)
+assert.equal(visibleOf(percentContext.rows.join('\n')).includes('85k / 100k'), false)
 
 const remainingContext = renderStatusRows({
   columns: 120,
   contextMode: 'remaining',
   usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, recentInput: 85000, contextWindow: 100000 }
 })
-assert.match(visibleOf(remainingContext.rows.join('\n')), /86k left/)
+assert.match(visibleOf(remainingContext.rows.join('\n')), /15k left/)
 
 const customContextThreshold = renderStatusRows({
   columns: 120,
@@ -1621,7 +1622,7 @@ const customContextThreshold = renderStatusRows({
   contextCriticalAt: 90,
   usage: { input: 12000, output: 2500, cacheRead: 8000, cacheWrite: 0, recentInput: 85000, contextWindow: 100000 }
 })
-assert.equal(visibleOf(customContextThreshold.rows.join('\n')).includes('14% ⚠️'), false)
+assert.ok(visibleOf(customContextThreshold.rows.join('\n')).includes('85%'))
 
 const toolAggregationApp = {
   active: false,
@@ -2594,6 +2595,328 @@ assert.equal(fallbackInvocations, 1, 'Fallback disposer registered')
 const inertDispose = await createDangerGuard({ ctx: {} }, { rules: defaultRules })
 assert.equal(typeof inertDispose, 'function', 'Degraded guard still returns a disposer')
 inertDispose()
+
+// ── CR-049: ScreenRenderer invalidate clears differential cache ──────────
+{
+  let written = ''
+  const fakeStdout = {
+    columns: 80,
+    rows: 24,
+    write(buf) { written += buf }
+  }
+  const sr = new ScreenRenderer({ stdout: fakeStdout, columns: 80, rows: 24 })
+  const frame1 = { screenLines: ['line 1', 'line 2'], cursorScreenRow: 1, cursorScreenCol: 1, cursorVisible: false }
+  sr.renderFrame(frame1)
+  assert.ok(written.includes('line 1'), 'First frame draws line 1')
+
+  written = ''
+  sr.renderFrame(frame1)
+  assert.equal(written.includes('line 1'), false, 'Identical frame produces no line redraws')
+
+  sr.invalidate()
+  assert.equal(sr.prevScreenLines, null, 'invalidate resets prevScreenLines')
+  written = ''
+  sr.renderFrame(frame1)
+  assert.ok(written.includes('line 1'), 'Render after invalidate forces full frame repaint')
+}
+
+// ── CR-050: followup rejection is caught and state restored ───────────────
+{
+  const mockApp = {
+    agent: {
+      status: 'idle',
+      followup() {
+        return Promise.reject(new Error('followup network failed'))
+      }
+    },
+    queuedSubmissions: [],
+    pendingImages: [],
+    input: '',
+    cursor: 0,
+    message: '',
+    logEntries: [],
+    log(lvl, msg) { this.logEntries.push({ lvl, msg }) },
+    scheduleRender() {},
+    expandFileReferences: async (p) => ({ text: p, missing: [] }),
+    streamBuffer: '',
+    streamHeaderCommitted: false,
+    turnHeaderCommitted: false,
+    imageAttachments: new Map(),
+    persistImageDrafts: async (imgs) => imgs.map((img) => ({ ref: img })),
+    ctx: {}
+  }
+  await TuiApp.prototype.submitUserMessage.call(mockApp, 'test prompt', [], [{ name: 'img.png' }])
+  assert.equal(mockApp.input, 'test prompt', 'Prompt draft restored after followup rejection')
+  assert.equal(mockApp.pendingImages.length, 1, 'Images restored after followup rejection')
+  assert.ok(mockApp.logEntries.some((e) => e.msg === 'followup network failed'), 'Error logged')
+}
+
+// ── CR-051: Windows PowerShell & CMD dangerous command interception ───────
+{
+  const winDangerCommands = [
+    'Remove-Item -Recurse -Force C:\\',
+    'Remove-Item -r -fo C:/',
+    'Remove-Item -Force -Recurse C:',
+    'Remove-Item -Recurse -Force ~\\',
+    'Clear-Disk -Number 0 -RemoveData -Confirm:$false',
+    'Format-Volume -DriveLetter C -Confirm:$false',
+    'cmd /c rd /s /q C:\\',
+    'cmd.exe /c del /f /s /q C:\\*',
+    'rd /s /q C:\\',
+    'del /f /s /q C:\\*',
+    'format C: /fs:NTFS /q /y',
+    'powershell -Command "Remove-Item -Recurse -Force C:\\"',
+    'pwsh -c "Clear-Disk -Number 0 -RemoveData"',
+    'powershell -EncodedCommand ' + Buffer.from('Remove-Item -Recurse -Force C:\\', 'utf16le').toString('base64')
+  ]
+  for (const cmd of winDangerCommands) {
+    const hit = checkDangerCommand(cmd, defaultRules)
+    assert.ok(hit, `Windows danger command must be blocked: ${cmd}`)
+  }
+
+  const winSafeCommands = [
+    'Get-ChildItem C:\\',
+    'dir C:\\',
+    'Remove-Item .\\temp.txt',
+    'del .\\temp.txt',
+    'powershell -Command "Get-Process"',
+    'cmd /c echo hello'
+  ]
+  for (const cmd of winSafeCommands) {
+    assert.equal(checkDangerCommand(cmd, defaultRules), null, `Safe Windows command must pass: ${cmd}`)
+  }
+}
+
+// ── CR-053 & CR-055: Provider Key retention and credentials capability check ─
+{
+  let savedProfile = null
+  const mockProviderApp = {
+    providerPanel: {
+      formDraft: {
+        id: 'ollama-custom',
+        displayName: 'Ollama Custom',
+        baseURL: 'http://localhost:11434/v1',
+        api: 'openai',
+        apiKey: '',
+        hasStoredKey: true,
+        existingKeyRef: 'OLLAMA_CUSTOM_API_KEY',
+        models: [{ id: 'llama3' }]
+      }
+    },
+    ctx: {
+      settings: {
+        mutate: async (payload) => {
+          savedProfile = payload.ops[0].value
+        }
+      },
+      get: (name) => (name === 'credentials' ? { set: async () => {} } : undefined)
+    },
+    log() {},
+    openProviderPanel: async () => {},
+    scheduleRender() {}
+  }
+  await TuiApp.prototype.saveProviderForm.call(mockProviderApp)
+  assert.equal(savedProfile?.apiKeyEnv, 'OLLAMA_CUSTOM_API_KEY', 'Existing apiKeyEnv retained when editing provider with empty key')
+
+  const mockMissingCredsApp = {
+    providerPanel: {
+      formDraft: {
+        id: 'new-provider',
+        baseURL: 'http://example.com/v1',
+        api: 'openai',
+        apiKey: 'secret_key_123',
+        hasStoredKey: false,
+        models: [{ id: 'm1' }]
+      },
+      formError: ''
+    },
+    ctx: {
+      settings: { mutate: async () => {} },
+      get: () => undefined
+    },
+    scheduleRender() {}
+  }
+  await TuiApp.prototype.saveProviderForm.call(mockMissingCredsApp)
+  assert.match(mockMissingCredsApp.providerPanel.formError, /credentials.*不可用/, 'Error reported when credentials service missing')
+}
+
+// ── CR-054: loadSystemEnv shell rc strictly requires export ───────────────
+{
+  const tempDir = await mkdtemp(join(tmpdir(), 'dsh-env-test-'))
+  const fakeHome = tempDir
+  const oldHome = process.env.HOME
+  process.env.HOME = fakeHome
+  try {
+    await writeFile(join(fakeHome, '.zshrc'), 'LOCAL_SECRET=do_not_leak\nexport EXPORTED_SECRET=safe_export\n')
+    const envApp = { ctx: {} }
+    await TuiApp.prototype.loadSystemEnv.call(envApp)
+    assert.equal(process.env.LOCAL_SECRET, undefined, 'Unexported shell rc variable MUST NOT be loaded')
+    assert.equal(process.env.EXPORTED_SECRET, 'safe_export', 'Exported shell rc variable is loaded')
+  } finally {
+    process.env.HOME = oldHome
+    delete process.env.EXPORTED_SECRET
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
+
+// ── CR-057: stop is idempotent and disposes current handle & skill overrides ─
+{
+  let handleDisposed = false
+  let skillOverrideDisposed = false
+  const stopApp = {
+    clearPromptSuggestion() {},
+    stopRunningJobs: async () => {},
+    approvalQueue: [],
+    disposers: [],
+    handle: {
+      dispose: async () => { handleDisposed = true }
+    },
+    skillOverrideDisposers: new Map([['override1', () => { skillOverrideDisposed = true }]]),
+    renderTimer: undefined,
+    scheduleRender() {},
+    clearFooter() {},
+    screenRenderer: { restoreTerminal() {} }
+  }
+  await TuiApp.prototype.stop.call(stopApp)
+  assert.equal(handleDisposed, true, 'Current handle disposed on stop')
+  assert.equal(skillOverrideDisposed, true, 'Current skill override disposed on stop')
+  assert.equal(stopApp.handle, undefined, 'Handle cleared')
+
+  await TuiApp.prototype.stop.call(stopApp)
+}
+
+// ── CR-058 & CR-059: Approval queue abort signal & composer pre-consumption ─
+{
+  const mockApp = Object.create(TuiApp.prototype)
+  Object.assign(mockApp, {
+    approvalQueue: [],
+    pendingApproval: undefined,
+    input: 'y',
+    cursor: 1,
+    message: '',
+    scheduleRender() {},
+    render() {},
+    agent: { session: { events: [] } }
+  })
+
+  const preAbortedCtrl = new AbortController()
+  preAbortedCtrl.abort()
+  const outcome1 = await mockApp.requestApproval({
+    toolName: 'bash',
+    signal: preAbortedCtrl.signal
+  })
+  assert.equal(outcome1, 'cancelled', 'Pre-aborted approval request immediately resolves cancelled')
+  assert.equal(mockApp.approvalQueue.length, 0, 'Pre-aborted request not queued')
+
+  const normalCtrl = new AbortController()
+  let resolvedOutcome = null
+  const promise2 = mockApp.requestApproval({
+    toolName: 'bash',
+    signal: normalCtrl.signal
+  }).then((res) => { resolvedOutcome = res })
+
+  assert.equal(mockApp.input, 'y', 'Composer draft "y" must NOT be auto-consumed as approval')
+  assert.ok(mockApp.pendingApproval, 'Approval is waiting for user interaction')
+
+  normalCtrl.abort()
+  await promise2
+  assert.equal(resolvedOutcome, 'cancelled', 'Aborting signal resolves pending approval as cancelled')
+}
+
+// ── Model Picker: Interactive Search & Filtering ─────────────────────────
+{
+  const mockModels = [
+    { provider: 'deepseek-official', model: 'deepseek-chat', name: 'DeepSeek Chat' },
+    { provider: 'deepseek-official', model: 'deepseek-reasoner', name: 'DeepSeek Reasoner' },
+    { provider: 'openai-custom', model: 'gpt-4o', name: 'GPT-4o', inputModalities: ['image'] },
+    { provider: 'openai-custom', model: 'gpt-4o-mini', name: 'GPT-4o Mini' },
+    { provider: 'ollama-local', model: 'qwen2.5-coder:32b', name: 'Qwen 2.5 Coder 32B' }
+  ]
+
+  // filterModelEntries filtering
+  assert.equal(filterModelEntries(mockModels, '').length, 5, 'Empty search returns all models')
+  assert.equal(filterModelEntries(mockModels, 'deepseek').length, 2, 'Search by provider name')
+  assert.equal(filterModelEntries(mockModels, 'gpt').length, 2, 'Search by model name prefix')
+  assert.equal(filterModelEntries(mockModels, 'reasoner').length, 1, 'Search by specific model term')
+  assert.equal(filterModelEntries(mockModels, 'qwen coder').length, 1, 'Multi-term search')
+  assert.equal(filterModelEntries(mockModels, 'non-existent-xyz').length, 0, 'No match returns empty array')
+
+  // renderModelPicker rendering with search bar and matches
+  const pickerWithQuery = {
+    allEntries: mockModels,
+    entries: filterModelEntries(mockModels, 'deepseek'),
+    query: 'deepseek',
+    selected: 0
+  }
+  const renderedLines = renderModelPicker(pickerWithQuery, { provider: 'deepseek-official', model: 'deepseek-chat' }, 8, 80, ANSI)
+  const renderedText = renderedLines.join('\n')
+  assert.ok(renderedText.includes('Search:'), 'Search bar is rendered in model picker')
+  assert.ok(renderedText.includes('deepseek'), 'Query text is visible in search bar')
+  assert.ok(renderedText.includes('2 / 5 matches'), 'Match count badge is displayed')
+  assert.ok(renderedText.includes('deepseek-chat'), 'Matching entry is shown')
+
+  // Empty match rendering
+  const emptyPicker = {
+    allEntries: mockModels,
+    entries: [],
+    query: 'unknown-query',
+    selected: 0
+  }
+  const emptyLines = renderModelPicker(emptyPicker, {}, 8, 80, ANSI)
+  const emptyText = emptyLines.join('\n')
+  assert.ok(emptyText.includes('No models matching "unknown-query"'), 'Friendly empty state message displayed')
+
+  // Interactive search updates in TuiApp
+  const testApp = Object.create(TuiApp.prototype)
+  Object.assign(testApp, {
+    modelPicker: {
+      allEntries: mockModels,
+      entries: mockModels,
+      selected: 3,
+      query: ''
+    }
+  })
+  testApp.updateModelPickerSearch('qwen')
+  assert.equal(testApp.modelPicker.query, 'qwen')
+  assert.equal(testApp.modelPicker.entries.length, 1)
+  assert.equal(testApp.modelPicker.entries[0].model, 'qwen2.5-coder:32b')
+  assert.equal(testApp.modelPicker.selected, 0, 'Selected index clamped to filtered bounds')
+}
+
+// ── Context Tokens & Statusline Auto-Compact ──────────────────────────────
+{
+  const usageCumulative = {
+    input: 80000,
+    output: 50000,
+    cacheRead: 0,
+    cacheWrite: 0,
+    contextWindow: 100000,
+    recentInput: 15000
+  }
+
+  // Statusline should use recentInput when contextTokens is absent, avoiding 130% false alarm
+  const statusRes = renderStatusRows({
+    columns: 100,
+    usage: usageCumulative,
+    contextTokens: undefined,
+    contextMode: 'tokens',
+    contextWarnAt: 75,
+    contextCriticalAt: 90
+  })
+  const renderedText = statusRes.rows.join('\n')
+  assert.ok(renderedText.includes('15k / 100k') || renderedText.includes('15.0k / 100.0k') || renderedText.includes('15.0k'), 'Uses recentInput (15k) rather than cumulative 130k')
+  assert.ok(!renderedText.includes('130k'), 'Does not use cumulative 130k sum for active context')
+
+  // refreshContextTokens fallback
+  const mockApp = Object.create(TuiApp.prototype)
+  Object.assign(mockApp, {
+    ctx: { get: () => undefined },
+    agent: { session: { events: [] } },
+    usage: usageCumulative
+  })
+  mockApp.refreshContextTokens()
+  assert.equal(mockApp.contextTokens, 15000, 'refreshContextTokens falls back to recentInput')
+}
 
 console.log('unit regressions: ok')
 process.exit(0)

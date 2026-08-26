@@ -117,6 +117,13 @@ export class ScreenRenderer {
   }
 
   /**
+   * Invalidate differential cache to force a full repaint on next frame
+   */
+  invalidate() {
+    this.prevScreenLines = null
+  }
+
+  /**
    * Render frame to stdout with differential ANSI updates
    */
   renderFrame(frame, options = {}) {

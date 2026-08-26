@@ -30,8 +30,18 @@ export async function handleBtw(app, line) {
   try {
     const { agent: tempAgent, dispose } = await app.ctx.agents.create({
       sessionId: tempSessionId,
-      meta: { cwd: process.cwd(), ephemeral: true },
-      agentOptions: { provider: selection.provider, model: selection.model }
+      meta: {
+        cwd: process.cwd(),
+        ephemeral: true,
+        parentSession: app.agent?.session?.header?.id,
+        origin: 'subagent',
+        delegationDepth: (app.agent?.session?.header?.delegationDepth ?? 0) + 1
+      },
+      agentOptions: { provider: selection.provider, model: selection.model },
+      setup(agentCtx) {
+        agentCtx.tools?.restrict?.({ allow: [] })
+        agentCtx.tools?.guard?.(() => 'side query ephemeral agent cannot call tools')
+      }
     })
 
     let fullResponse = ''

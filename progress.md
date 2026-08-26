@@ -134,3 +134,33 @@
 - 新发现 CR-020（P1）：`/resume` 没有清理 `localLog`、折叠状态、图片草稿和流式/排队状态，目标会话会混入旧会话本地投影。
 - 新发现 CR-021（P2）：技能列表读取失败时直接丢弃 override disposer Map，导致已注册 override 无法正常解除。
 - 本阶段只完成审查与记录，未修改产品代码。
+
+### 阶段 14：v0.2.2 发布后全项目代码审查
+- **状态：** complete
+- 审查基线：`40a1c22`，`main`、`origin/main` 与标签 `v0.2.2` 完全对齐；开始审查时工作区干净。
+- 范围：发布元数据与包内容、Harness 核心契约和资源生命周期、TUI 投影/输入、危险命令守卫、测试与平台边界。
+- 本阶段只审查，不修改产品实现；规划与发现同步记录在现有审查文档中。
+- 发布基线初查：`package.json` 为 `0.2.2`、Node `>=20`，README npm 安装指令和 CHANGELOG v0.2.2 描述一致；包文件白名单覆盖运行时 `src`、Cordis patch、文档与许可证。
+- 记录错误：首次更新阶段 14 时 patch 上下文格式错误；改用标准多文件 patch 后成功，不涉及产品代码。
+- 已阅读 Browser lease、历史/MRU、autocomplete 边界、Git 状态缓存、vision sidecar、命令注册、ScreenRenderer、ViewportState 与 InputRouter；暂未确认新的外部资源泄漏。
+- 待验证风险：alternate screen 下 `/clear` 直接写物理清屏序列，但没有让 ScreenRenderer 的 `prevScreenLines` 缓存失效，可能造成差分帧漏绘。
+- 已确认 CR-049（P1）：最小 ScreenRenderer 复现证明物理清屏后差分缓存未失效，后续相同帧不会重画内容。
+- 已确认 CR-050（P1）：`agent.followup()` rejected Promise 会触发 `unhandledRejection`，普通消息提交失败也不会恢复草稿。
+- TUI 投影复核：durable base transcript 已缓存，流式阶段只重投影 live tail；viewport 的语义锚点、滚轮隔离、选择映射和差分 screen 主链未发现新的确定性问题。
+- 输入 Unicode 复核：InputRouter 会分发 UTF-16 surrogate halves，但 TuiApp 连续插入后可重组原始 emoji；当前未形成可复现丢字，因此不记录问题。
+- 已确认 CR-051（P1）：Windows `pwsh/powershell/cmd` 已列入守卫作用域，但 PowerShell/CMD 的递归删除、清盘和格式化命令全部实测放行。
+- 文档初查：Danger Guard 的配置文件、禁用开关和威胁模型只出现在源码/CHANGELOG，README 尚未提供用户配置与平台边界说明；最终文档结论待综合测试后给出。
+- 已确认 CR-052（P2）：README 缺少 Danger Guard 配置、作用范围和安全边界说明。
+- 验证：`npm test`、`npm run verify`、`git diff --check`、npm pack dry-run 均通过；v0.2.2 包含 60 个文件，约 335 KB，所有条目 mode 均为 0644。
+- PTY：当前环境未设置 `DSH_HOME`/`DSH_TEST_FIXTURE_HOME`，`~/.dsh` 也不存在可复制的 `profiles/tui` fixture；为避免污染真实用户会话未强行运行，保持环境阻塞记录。
+- 记录错误：第三次多文件 patch hunk 格式错误；后续固定使用单文件独立 patch，不涉及产品代码。
+- 已确认 CR-053（P1）：编辑已有 Provider 留空密钥会从新 profile 中移除原 `apiKeyEnv`，与 UI 的“留空保持/替换”语义冲突。
+- 已确认 CR-054（P1）：启动读取 shell rc 时会把未 export 的赋值提升进 `process.env`，随后被 Agent/本地 shell 子进程继承。
+- 已确认 CR-055（P2）：credentials 服务缺失时仍报告 Provider 保存成功，但密钥只存在当前进程，重启即失效。
+- 已确认 CR-056（P1）：`/btw` 临时 Agent 没有像 vision/prompt suggestion sidecar 一样 restrict/guard 工具，可能在所谓隔离问答中产生副作用。
+- 已确认 CR-057（P1）：插件 stop 不释放当前 Agent handle 和 session skill overrides，也不与初始化竞态协调。
+- 完整模块导入验证：递归导入 `src` 下 51 个 JavaScript 模块，零失败；关键大文件 `node --check` 通过。
+- 已确认 CR-058（P1）：审批弹出前 composer 中已有的单独 `y` 会直接触发 allowed-once。
+- 已确认 CR-059（P2）：排队期间已 abort 的审批因未预检 `signal.aborted`，轮到时会成为陈旧可操作卡片。
+- 记录错误：第二次同步阶段 14 时多文件 patch hunk 格式错误；改为两个独立 patch 后成功，不涉及产品代码。
+- 最终结论：新增 8 个 P1 与 3 个 P2。`npm test`、`npm run verify`、完整模块导入、语法检查、diff 检查和 npm pack dry-run 均通过；PTY 仍因安全 fixture 缺失未运行。P1 关闭前不建议继续发布。

@@ -271,6 +271,7 @@ import {
   renderEffortPicker,
   renderHistorySearch,
   renderModelPicker,
+  filterModelEntries,
   renderVariantPicker,
   renderSessionPicker,
   renderFilePicker,
@@ -493,15 +494,21 @@ export class TuiApp {
       join(home, '.dsh', '.env'),
       join(home, '.dsh', 'profiles', 'tui', '.env'),
       join(home, '.zprofile'),
-      join(home, '.zshrc')
+      join(home, '.zshrc'),
+      join(home, '.bash_profile'),
+      join(home, '.bashrc')
     ]
     for (const file of files) {
       try {
         if (!existsSync(file)) continue
+        const isEnvFile = file.endsWith('.env')
         const content = readFileSync(file, 'utf8')
         const lines = content.split('\n')
         for (const line of lines) {
-          const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(?:'([^']*)'|"([^"]*)"|([^\s#]+))/)
+          const pattern = isEnvFile
+            ? /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(?:'([^']*)'|"([^"]*)"|([^\s#]+))/
+            : /^\s*export\s+([A-Za-z_][A-Za-z0-9_]*)=(?:'([^']*)'|"([^"]*)"|([^\s#]+))/
+          const match = line.match(pattern)
           if (match) {
             const key = match[1]
             const val = match[2] ?? match[3] ?? match[4] ?? ''
@@ -767,55 +774,77 @@ export class TuiApp {
   }
 
   async stop({ ignoreJobErrors = false } = {}) {
-    this.clearPromptSuggestion()
-    try {
-      await this.stopRunningJobs()
-    } catch (error) {
-      if (!ignoreJobErrors) throw error
-    }
-    if (this.questionPanel) this.finishQuestion(new Error('user cancelled the question'))
-    const queuedApprovals = this.approvalQueue.splice(0)
-    for (const item of queuedApprovals) item.resolve('cancelled')
-    this.pendingApproval?.settle?.('cancelled')
-    this.inputRouter?.dispose?.()
-    try { this.requestOverrideDispose?.() } catch {}
-    this.requestOverrideDispose = undefined
-    try { this.dangerGuardDispose?.() } catch {}
-    this.dangerGuardDispose = undefined
-    for (const dispose of this.disposers.splice(0).reverse()) {
+    if (this.stopPromise) return this.stopPromise
+    this.stopPromise = (async () => {
+      this.clearPromptSuggestion()
       try {
-        dispose?.()
-      } catch {}
-    }
-    clearInterval(this.statuslineJobTimer)
-    this.statuslineJobTimer = undefined
-    if (!this.terminalOpen) return
-    this.terminalOpen = false
-    clearTimeout(this.renderTimer)
-    clearTimeout(this.backgroundInitTimer)
-    this.backgroundInitTimer = undefined
-    clearTimeout(this.autoCompactTimer)
-    this.autoCompactTimer = undefined
-    clearTimeout(this.imageFlushTimer)
-    clearInterval(this.animationTimer)
-    this.animationTimer = undefined
-    this.needsLiveProjection = false
-    this.stopEdgeAutoScroll()
-    process.stdin.off('data', this.onData)
-    process.stdout.off('resize', this.onResize)
-    if (process.stdin.isTTY) process.stdin.setRawMode(false)
-    this.clearFooter()
-    process.stdin.pause()
-    this.screenRenderer.restoreTerminal(this.viewport?.allRows ?? [])
-    if (this.agent?.session) {
-      try {
-        await withTimeout(this.sessionsService?.flush?.(this.agent.session), 500)
-      } catch {}
-      const sessionId = this.agent.session.header?.id
-      if (sessionId) {
-        process.stdout.write(`Resume this session with:\n  dsh --resume ${sessionId}\n\n`)
+        await this.stopRunningJobs()
+      } catch (error) {
+        if (!ignoreJobErrors) throw error
       }
-    }
+      try {
+        await this.sessionInitPromise
+      } catch {}
+
+      if (this.questionPanel) this.finishQuestion(new Error('user cancelled the question'))
+      const queuedApprovals = this.approvalQueue.splice(0)
+      for (const item of queuedApprovals) item.resolve('cancelled')
+      this.pendingApproval?.settle?.('cancelled')
+      this.inputRouter?.dispose?.()
+      try { this.requestOverrideDispose?.() } catch {}
+      this.requestOverrideDispose = undefined
+      try { this.dangerGuardDispose?.() } catch {}
+      this.dangerGuardDispose = undefined
+
+      for (const disposeOverride of this.skillOverrideDisposers?.values?.() ?? []) {
+        try { disposeOverride?.() } catch {}
+      }
+      this.skillOverrideDisposers?.clear?.()
+
+      for (const dispose of this.disposers.splice(0).reverse()) {
+        try {
+          dispose?.()
+        } catch {}
+      }
+      clearInterval(this.statuslineJobTimer)
+      this.statuslineJobTimer = undefined
+      if (this.terminalOpen) {
+        this.terminalOpen = false
+        clearTimeout(this.renderTimer)
+        clearTimeout(this.backgroundInitTimer)
+        this.backgroundInitTimer = undefined
+        clearTimeout(this.autoCompactTimer)
+        this.autoCompactTimer = undefined
+        clearTimeout(this.imageFlushTimer)
+        clearInterval(this.animationTimer)
+        this.animationTimer = undefined
+        this.needsLiveProjection = false
+        this.stopEdgeAutoScroll()
+        process.stdin.off('data', this.onData)
+        process.stdout.off('resize', this.onResize)
+        if (process.stdin.isTTY) process.stdin.setRawMode(false)
+        this.clearFooter()
+        process.stdin.pause()
+        this.screenRenderer.restoreTerminal(this.viewport?.allRows ?? [])
+      }
+
+      if (this.agent?.session) {
+        try {
+          await withTimeout(this.sessionsService?.flush?.(this.agent.session), 500)
+        } catch {}
+        const sessionId = this.agent.session.header?.id
+        if (sessionId) {
+          process.stdout.write(`Resume this session with:\n  dsh --resume ${sessionId}\n\n`)
+        }
+      }
+
+      try {
+        await this.handle?.dispose?.()
+      } catch {}
+      this.handle = undefined
+      this.agent = undefined
+    })()
+    return this.stopPromise
   }
 
   async quit(code = 0) {
@@ -893,9 +922,15 @@ export class TuiApp {
     if (!this.agent?.session) return
     try {
       const total = this.ctx.get('tokenMeter')?.measure?.(this.agent.session)?.totalTokens
-      this.contextTokens = Number.isFinite(total) ? Math.max(0, total) : undefined
+      if (Number.isFinite(total)) {
+        this.contextTokens = Math.max(0, total)
+      } else if (Number.isFinite(this.usage?.recentInput)) {
+        this.contextTokens = Math.max(0, this.usage.recentInput)
+      } else {
+        this.contextTokens = undefined
+      }
     } catch {
-      this.contextTokens = undefined
+      this.contextTokens = Number.isFinite(this.usage?.recentInput) ? Math.max(0, this.usage.recentInput) : undefined
     }
   }
 
@@ -1589,6 +1624,9 @@ export class TuiApp {
   }
 
   requestApproval(request) {
+    if (request.signal?.aborted) {
+      return Promise.resolve('cancelled')
+    }
     return new Promise((resolve) => {
       this.approvalQueue.push({ request, resolve })
       this.pumpApprovals()
@@ -1632,29 +1670,32 @@ export class TuiApp {
   }
 
   pumpApprovals() {
-    if (this.pendingApproval || this.approvalQueue.length === 0) return
-    const item = this.approvalQueue.shift()
-    this.pendingApproval = item
-    this.approvalChoice = 'allow'
-    const settle = (outcome) => {
-      item.request.signal?.removeEventListener('abort', onAbort)
-      if (this.pendingApproval === item) this.pendingApproval = undefined
-      item.resolve(outcome)
-      this.render()
-      this.pumpApprovals()
-    }
-    const onAbort = () => settle('cancelled')
-    item.request.signal?.addEventListener('abort', onAbort, { once: true })
-    item.settle = settle
-    this.message = `approval needed · ${item.request.toolName}`
-    const pending = this.input.trim().toLowerCase()
-    if (pending === 'y' || pending === 'n') {
-      this.input = ''
-      this.cursor = 0
-      settle(pending === 'y' ? 'allowed-once' : 'rejected')
+    if (this.pendingApproval) return
+    while (this.approvalQueue.length > 0) {
+      const item = this.approvalQueue.shift()
+      if (item.request.signal?.aborted) {
+        item.resolve('cancelled')
+        continue
+      }
+      this.pendingApproval = item
+      this.approvalChoice = 'allow'
+      let settled = false
+      const settle = (outcome) => {
+        if (settled) return
+        settled = true
+        item.request.signal?.removeEventListener('abort', onAbort)
+        if (this.pendingApproval === item) this.pendingApproval = undefined
+        item.resolve(outcome)
+        this.render()
+        this.pumpApprovals()
+      }
+      const onAbort = () => settle('cancelled')
+      item.request.signal?.addEventListener('abort', onAbort, { once: true })
+      item.settle = settle
+      this.message = `approval needed · ${item.request.toolName}`
+      this.scheduleRender()
       return
     }
-    this.scheduleRender()
   }
 
   // ── actions ────────────────────────────────────────────────────────────
@@ -2496,7 +2537,7 @@ export class TuiApp {
     // Check if current LLM model adapter supports native vision content blocks.
     // DSH rc.1 exposes this through inputModalities; keep the model-name
     // fallback for adapters that do not return exact metadata.
-    const selection = this.activeModel ?? this.ctx.agentDefaultModel?.currentSelection?.()
+    const selection = this.activeModel ?? this.ctx?.agentDefaultModel?.currentSelection?.()
     const isDeepSeek = /deepseek/i.test(selection?.provider ?? '') || /deepseek/i.test(selection?.model ?? '')
     let supportsNativeVision = !isDeepSeek || /vision/i.test(selection?.model ?? '')
     if (this.llmService?.resolveModelInfo) {
@@ -2566,8 +2607,23 @@ export class TuiApp {
     this.streamBuffer = ''
     this.streamHeaderCommitted = false
     this.turnHeaderCommitted = false
-    this.agent.followup(message)
-    this.scheduleRender()
+    try {
+      if (this.agent?.followup) {
+        await this.agent.followup(message)
+      }
+    } catch (error) {
+      this.queuedSubmissions = (this.queuedSubmissions ?? []).filter((submission) => submission !== queuedSubmission)
+      this.pendingImages = [...images, ...(this.pendingImages ?? [])]
+      if (prompt) {
+        this.input = this.input ? `${prompt}\n${this.input}` : prompt
+      }
+      this.cursor = this.input.length
+      this.message = ''
+      this.lastQueuedText = undefined
+      this.log('error', error instanceof Error ? error.message : String(error), 'followup')
+    } finally {
+      this.scheduleRender()
+    }
   }
 
   commandImages(images = []) {
@@ -3155,14 +3211,28 @@ export class TuiApp {
         this.scheduleRender()
         return
       }
-      const current = this.ctx.agentDefaultModel.currentSelection()
-      let selected = entries.findIndex((entry) => entry.provider === current.provider && entry.model === current.model)
+      const allEntries = entries
+      const current = this.ctx.agentDefaultModel?.currentSelection?.() ?? {}
+      let selected = allEntries.findIndex((entry) => entry.provider === current.provider && entry.model === current.model)
       if (selected === -1) selected = 0
-      this.modelPicker = { entries, selected }
+      this.modelPicker = { allEntries, entries: allEntries, selected, query: '' }
       this.scheduleRender()
     } catch (error) {
       this.log('error', error instanceof Error ? error.message : String(error), '/model')
       this.scheduleRender()
+    }
+  }
+
+  updateModelPickerSearch(newQuery) {
+    if (!this.modelPicker) return
+    this.modelPicker.query = newQuery
+    const filtered = filterModelEntries(this.modelPicker.allEntries, newQuery)
+    this.modelPicker.entries = filtered
+    if (this.modelPicker.selected >= filtered.length) {
+      this.modelPicker.selected = Math.max(0, filtered.length - 1)
+    }
+    if (filtered.length > 0 && this.modelPicker.selected < 0) {
+      this.modelPicker.selected = 0
     }
   }
 
@@ -3289,12 +3359,18 @@ export class TuiApp {
           models = []
         }
         const customEntry = customProvidersMap[p.id]
+        const hasKey = Boolean(
+          customEntry?.apiKeyEnv
+            ? (process.env[customEntry.apiKeyEnv] !== undefined || true)
+            : (p.configured !== false && (p.id.includes('deepseek') || !!p.hasKey))
+        )
         resultProviders.push({
           id: p.id,
           name: p.name || customEntry?.displayName || p.id,
           custom: !!p.custom || !!p.declared || !!customEntry,
           configured: p.configured !== false,
-          hasKey: true,
+          hasKey,
+          apiKeyEnv: customEntry?.apiKeyEnv,
           api: p.api || customEntry?.api || (p.id.includes('deepseek') ? 'deepseek' : 'openai'),
           baseURL: p.baseURL || customEntry?.baseURL || '',
           modelsCount: models.length || (customEntry?.models?.length ?? 0),
@@ -3310,7 +3386,8 @@ export class TuiApp {
             name: prof.displayName || routeId,
             custom: true,
             configured: true,
-            hasKey: true,
+            hasKey: Boolean(prof.apiKeyEnv),
+            apiKeyEnv: prof.apiKeyEnv,
             api: prof.api || 'openai',
             baseURL: prof.baseURL || '',
             modelsCount: mList.length,
@@ -3386,7 +3463,8 @@ export class TuiApp {
       baseURL: target.baseURL || '',
       api: target.api || 'openai',
       apiKey: '',
-      hasStoredKey: target.hasKey,
+      hasStoredKey: Boolean(target.hasKey || target.apiKeyEnv),
+      existingKeyRef: target.apiKeyEnv,
       models: Array.isArray(target.models) && target.models.length > 0 ? [...target.models] : [{ id: `${target.id}-default` }]
     }
     this.providerPanel.formField = 0
@@ -3429,13 +3507,30 @@ export class TuiApp {
     this.scheduleRender()
 
     try {
-      const keyRef = `${id.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`
-      const hasKey = !!draft.apiKey?.trim()
+      const defaultKeyRef = `${id.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`
+      const newKeyVal = draft.apiKey?.trim()
+      const isNewKey = Boolean(newKeyVal)
+      const existingKeyRef = draft.existingKeyRef || (draft.hasStoredKey ? defaultKeyRef : undefined)
+      const finalKeyRef = isNewKey ? defaultKeyRef : existingKeyRef
+
+      // CR-055: If user enters a new API key, credentials capability is required
+      if (isNewKey) {
+        const credService = this.ctx.get('credentials')
+        if (!credService?.set) {
+          this.providerPanel.formError = '凭据服务 (credentials) 不可用，无法持久保存 API Key'
+          this.message = ''
+          this.scheduleRender()
+          return
+        }
+        await credService.set({ ref: finalKeyRef, value: newKeyVal })
+        process.env[finalKeyRef] = newKeyVal
+      }
+
       const profile = {
         ...(draft.displayName?.trim() ? { displayName: draft.displayName.trim() } : {}),
         baseURL,
         api: draft.api || 'openai',
-        ...(hasKey ? { apiKeyEnv: keyRef } : {}),
+        ...(finalKeyRef ? { apiKeyEnv: finalKeyRef } : {}),
         models: models.map((m) => ({
           id: m.id,
           ...(m.name ? { name: m.name } : {}),
@@ -3449,14 +3544,6 @@ export class TuiApp {
           ns: 'llm-pi-ai',
           ops: [{ op: 'set', path: ['providers', id], value: profile }]
         })
-      }
-
-      if (hasKey) {
-        const val = draft.apiKey.trim()
-        if (this.ctx.get('credentials')?.set) {
-          await this.ctx.get('credentials').set({ ref: keyRef, value: val })
-        }
-        process.env[keyRef] = val
       }
 
       this.log('ok', `provider "${id}" saved (${models.length} models) · ready in /model`, '/provider')
@@ -5661,11 +5748,30 @@ export class TuiApp {
     }
 
     if (this.modelPicker) {
-      if (value === '\r' || value === '\t') void this.chooseModel()
-      else if (value === '\x1b' || value === '\x03') {
+      if (value === '\r' || value === '\t') {
+        void this.chooseModel()
+      } else if (value === '\x1b' || value === '\x03') {
         this.modelPicker = undefined
         this.scheduleRender()
-      } else if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) this.onEscapeSequence(value)
+      } else if (value === '\x7f' || value === '\x08') {
+        if ((this.modelPicker.query ?? '').length > 0) {
+          this.updateModelPickerSearch(this.modelPicker.query.slice(0, -1))
+          this.scheduleRender()
+        }
+      } else if (value === '\x15') {
+        this.updateModelPickerSearch('')
+        this.scheduleRender()
+      } else if (value === '\x17') {
+        const words = (this.modelPicker.query ?? '').trimEnd().split(/\s+/)
+        words.pop()
+        this.updateModelPickerSearch(words.join(' '))
+        this.scheduleRender()
+      } else if (/^[\x20-\x7e\u00a0-\uffff]+$/u.test(value)) {
+        this.updateModelPickerSearch((this.modelPicker.query ?? '') + value)
+        this.scheduleRender()
+      } else if (value.startsWith('\x1b[') || value.startsWith('\x1bO')) {
+        this.onEscapeSequence(value)
+      }
       return
     }
 

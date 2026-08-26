@@ -515,7 +515,10 @@ const ENV_VALUE_OPTIONS = new Set([
 
 const EXEC_VALUE_OPTIONS = new Set(['-a'])
 const TIMEOUT_VALUE_OPTIONS = new Set(['-k', '--kill-after', '-s', '--signal'])
-const SHELL_INTERPRETERS = new Set(['sh', 'bash', 'dash', 'zsh', 'fish', 'ksh', 'csh', 'tcsh', 'su'])
+const SHELL_INTERPRETERS = new Set([
+  'sh', 'bash', 'dash', 'zsh', 'fish', 'ksh', 'csh', 'tcsh', 'su',
+  'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'
+])
 
 /**
  * Extract the executable command name and arguments from unquoted tokens,
@@ -803,8 +806,127 @@ function checkFindCommand(cmdName, args, rawCmd, rules, depth = 0) {
   return null
 }
 
+export function isWindowsRootOrSystemTarget(target) {
+  if (!target) return false
+  const t = String(target).trim().replace(/^["']|["']$/g, '')
+  if (!t) return false
+  if (/^[a-zA-Z]:[\\/]*(?:\*|\.\*|\*\.\*)?$/i.test(t)) return true
+  if (/^(?:%SystemDrive%|%SystemRoot%|%WINDIR%|%USERPROFILE%|\$env:SystemDrive|\$env:SystemRoot|\$env:windir|\$env:USERPROFILE)(?:[\\/].*)?$/i.test(t)) return true
+  if (/^(?:~|~\/|~\\|\$HOME)(?:[\\/].*)?$/i.test(t)) return true
+  if (/^\/+(?:\*|\.\*|\*\.\*)?$/.test(t)) return true
+  return false
+}
+
+function checkWindowsPowerShellCommand(cmdName, args, rawCmd) {
+  const norm = cmdName.toLowerCase()
+  if (norm === 'remove-item' || norm === 'ri' || norm === 'del' || norm === 'erase' || norm === 'rd' || norm === 'rmdir') {
+    let hasRecurse = false
+    let hasForce = false
+    const targets = []
+    for (const arg of args) {
+      const lower = arg.toLowerCase()
+      if (lower === '-recurse' || lower === '-r') hasRecurse = true
+      else if (lower === '-force' || lower === '-fo' || lower === '-f' || lower.startsWith('-confirm:$false')) hasForce = true
+      else if (!arg.startsWith('-')) targets.push(arg)
+    }
+    for (const target of targets) {
+      if (isWindowsRootOrSystemTarget(target) || isRootOrHomeTarget(target)) {
+        return { rule: 'PowerShell 递归强制删除根目录/系统驱动器', command: rawCmd }
+      }
+    }
+  }
+
+  if (norm === 'clear-disk' || norm === 'initialize-disk') {
+    return { rule: 'PowerShell 清除/初始化物理磁盘', command: rawCmd }
+  }
+
+  if (norm === 'format-volume') {
+    return { rule: 'PowerShell 格式化卷', command: rawCmd }
+  }
+
+  if (norm === 'stop-computer' || norm === 'restart-computer') {
+    if (args.some((a) => /^-force$/i.test(a))) {
+      return { rule: 'PowerShell 强制关机/重启', command: rawCmd }
+    }
+  }
+
+  return null
+}
+
+function checkWindowsCmdCommand(cmdName, args, rawCmd) {
+  const norm = cmdName.toLowerCase()
+  if (norm === 'rd' || norm === 'rmdir') {
+    const hasS = args.some((a) => /^\/s$/i.test(a) || /^-s$/i.test(a))
+    const targets = args.filter((a) => !a.startsWith('/') && !a.startsWith('-'))
+    if (hasS && targets.some((t) => isWindowsRootOrSystemTarget(t) || isRootOrHomeTarget(t))) {
+      return { rule: 'CMD 递归删除系统根目录', command: rawCmd }
+    }
+  }
+
+  if (norm === 'del' || norm === 'erase') {
+    const targets = args.filter((a) => !a.startsWith('/') && !a.startsWith('-'))
+    if (targets.some((t) => isWindowsRootOrSystemTarget(t) || isRootOrHomeTarget(t))) {
+      return { rule: 'CMD 批量强制删除系统根目录文件', command: rawCmd }
+    }
+  }
+
+  if (norm === 'format') {
+    if (args.some((a) => /^[a-zA-Z]:$/i.test(a))) {
+      return { rule: 'CMD 格式化磁盘驱动器', command: rawCmd }
+    }
+  }
+
+  return null
+}
+
 function checkShellExecCommand(cmdName, args, rawCmd, rules, depth = 0) {
-  if (!SHELL_INTERPRETERS.has(cmdName)) return null
+  const norm = cmdName.toLowerCase()
+  if (!SHELL_INTERPRETERS.has(norm)) return null
+
+  // Windows cmd /c
+  if (norm === 'cmd' || norm === 'cmd.exe') {
+    const cIdx = args.findIndex((a) => /^[/-][c|k]$/i.test(a))
+    if (cIdx >= 0) {
+      const payload = args.slice(cIdx + 1).join(' ')
+      if (payload) {
+        const hit = checkDangerCommand(payload, rules, depth + 1)
+        if (hit) return hit
+      }
+    }
+    return null
+  }
+
+  // Windows PowerShell / pwsh
+  if (norm === 'powershell' || norm === 'powershell.exe' || norm === 'pwsh' || norm === 'pwsh.exe') {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]
+      const lower = arg.toLowerCase()
+      if (lower === '-command' || lower === '-c') {
+        const payload = args.slice(i + 1).join(' ')
+        if (payload) {
+          const hit = checkDangerCommand(payload, rules, depth + 1)
+          if (hit) return hit
+        }
+        continue
+      }
+      if (lower === '-encodedcommand' || lower === '-e') {
+        const b64 = args[i + 1]
+        if (b64) {
+          try {
+            const decoded = Buffer.from(b64, 'base64').toString('utf16le')
+            if (decoded) {
+              const hit = checkDangerCommand(decoded, rules, depth + 1)
+              if (hit) return hit
+            }
+          } catch {}
+        }
+        continue
+      }
+    }
+    return null
+  }
+
+  // Unix shell interpreters
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (arg.startsWith('--command=')) {
@@ -960,6 +1082,12 @@ function evaluateSegment(segment, rules, depth = 0) {
 
   const findHit = checkFindCommand(cmdName, args, clean, rules, depth)
   if (findHit) return findHit
+
+  const psHit = checkWindowsPowerShellCommand(cmdName, args, clean)
+  if (psHit) return psHit
+
+  const cmdHit = checkWindowsCmdCommand(cmdName, args, clean)
+  if (cmdHit) return cmdHit
 
   const shellExecHit = checkShellExecCommand(cmdName, args, clean, rules, depth)
   if (shellExecHit) return shellExecHit

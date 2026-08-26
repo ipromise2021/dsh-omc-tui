@@ -1,5 +1,6 @@
 import { safe, shorten, formatTokens } from '../renderer/ansi.js'
 import { ANSI } from '../renderer/themes.js'
+import { foldUsage } from '../core/events.js'
 
 const COMPACT_PHRASES = [
   'Distilling key context and decisions',
@@ -82,6 +83,10 @@ export async function handleCompact(app, line) {
 
     clearInterval(timer)
     const totalSec = ((Date.now() - startedAt) / 1000).toFixed(1)
+    if (app.agent?.session?.events) {
+      app.usage = foldUsage(app.agent.session.events)
+    }
+    app.statusRowsCache = null
     app.refreshContextTokens?.()
 
     if (result?.kind === 'success' || result?.text) {

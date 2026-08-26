@@ -1,10 +1,10 @@
 # 代码审查发现与跟踪
 
 ## 审查信息
-- **审查日期：** 2026-08-25
-- **审查基线：** `c4caf4c` (`main`, `origin/main`)
-- **范围：** 权限审批、Jobs/后台进程、退出生命周期、Browser 租约、相关文档与回归测试
-- **当前结论：** CR-001～CR-008 的代码整改与单元回归均已完成；未发现新的代码级阻断，可进行终端人工验收后提交。
+- **审查日期：** 2026-08-26
+- **审查基线：** `40a1c22` (`main`, `origin/main`, `v0.2.2`)
+- **范围：** 全部产品源码、发布元数据、npm 包内容、Harness 契约、TUI 投影与输入、危险命令守卫、平台边界和资源生命周期
+- **当前结论：** CR-001～CR-059 全部审查发现的代码整改与全量单元/回归测试均已 100% 闭环；未发现新的阻断项，模块导入与打包预检完整通过。
 
 ## 问题总览
 
@@ -21,6 +21,17 @@
 | CR-009 | P1 | resolved | Shell 补全 | 关闭历史持久化时仍读取系统 Shell 历史 |
 | CR-010 | P2 | resolved | Shell 补全 | 同时读取多个完整历史文件，可能混入旧 Shell 数据并拖慢启动 |
 | CR-011 | P1 | resolved | Footer / resize | 终端宽度变化后旧 footer 的软换行残留，造成输入区与状态栏错位 |
+| CR-049 | P1 | resolved | ScreenRenderer | 物理清屏未使差分缓存失效，相同帧可能不再绘制 |
+| CR-050 | P1 | resolved | 消息提交 | `followup()` 拒绝未捕获，并丢失用户草稿 |
+| CR-051 | P1 | resolved | Danger Guard | Windows PowerShell/CMD 破坏性命令未被拦截 |
+| CR-052 | P2 | resolved | 安全文档 | README 缺少 Danger Guard 配置与边界说明 |
+| CR-053 | P1 | resolved | Provider | 编辑 Provider 留空密钥会移除原凭据引用 |
+| CR-054 | P1 | resolved | 环境变量 | 未导出的 shell rc 变量被提升给 Agent 子进程 |
+| CR-055 | P2 | resolved | Provider | 缺少 credentials 能力仍报告密钥保存成功 |
+| CR-056 | P1 | resolved | `/btw` | 隔离问答 Agent 未限制工具，可能产生副作用 |
+| CR-057 | P1 | resolved | 生命周期 | stop 未释放当前 Agent 与 session skill overrides |
+| CR-058 | P1 | resolved | 权限审批 | 输入框已有单字 `y` 会预先批准后续请求 |
+| CR-059 | P2 | resolved | 权限审批 | 已 abort 的排队审批仍显示为可操作卡片 |
 
 ## 详细发现
 
@@ -519,3 +530,104 @@
 - **现象：** 超 128KB 输入按 `slice(0, MAX_COMMAND_LENGTH)` 保留头部：`(安全前缀 250KB) + rm -rf /` → ALLOWED。危险命令位于尾部时被截断丢弃，守卫整体放行。
 - **建议：** 与 CR-047 一致改为 fail-closed：超长命令直接返回拦截结果（`{ rule: '命令长度超限，已保守拦截', command }`）。
 - **关闭验证：** 将超长输入由截断策略修正为 fail-closed 保守阻断；新增 150KB+ 超长命令拦截断言，全部通过。
+
+## v0.2.2 发布后全项目审查（2026-08-26，基线 `40a1c22`）
+
+### CR-049：alternate screen 清屏后差分缓存未失效
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/commands/registry.js:82-98`, `src/renderer/screen.js:120-165`
+- **现象：** `/clear` 直接向 stdout 写入 `ESC[3J ESC[2J ESC[H]`，但 `ScreenRenderer.prevScreenLines` 仍保留清屏前帧。随后 `commitToScrollback()` 在 alternate screen 中只调用普通差分 `render()`；缓存认为未变化的历史、输入框或状态行不会重画。
+- **影响：** `/clear` 或 Ctrl+L 后界面可出现空白/局部缺行，直到对应行状态变化或 resize 强制全量重绘。
+- **建议：** alternate screen 下不要直接绕过 ScreenRenderer 清屏；改为设置 `clearScreenRequested = true` 并重投影，或提供统一的 `invalidate()/renderFrame(..., { clearScreen: true })`。
+- **关闭验证：** 为 `ScreenRenderer` 新增 `invalidate()` 并在 `/clear` 时使差分缓存失效；补充全量重绘断言，测试通过。
+
+### CR-050：普通消息 followup 拒绝形成未处理 Promise
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:2565-2585`
+- **现象：** `submit()` 以 `void this.submitUserMessage(...)` 启动异步提交，而 `submitUserMessage()` 最终直接调用 `this.agent.followup(message)`，既不 `await` 也不附加 rejection handler。注入 `followup()` 返回 rejected Promise 会触发 `unhandledRejection`。
+- **影响：** Provider、会话或队列拒绝消息时可能产生未处理拒绝，原输入已经被清空且消息不会恢复。
+- **建议：** `await this.agent.followup(message)` 并在同一错误边界中恢复输入、图片和排队状态，记录可见错误。
+- **关闭验证：** `submitUserMessage` 中以 `try/catch` 完整包裹 `await this.agent.followup(message)`，拒绝时恢复草稿、图片附件与队列状态并记录日志；单元测试断言验证通过。
+
+### CR-051：Windows shell 被纳入守卫工具名但没有 Windows 危险规则
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:806-895`, `src/core/danger-guard.js:1080-1090`
+- **现象：** 守卫虽匹配 `pwsh`、`powershell` 和 `cmd`，但此前结构化检查只覆盖 Unix `rm/chmod/mkfs/dd/find` 和 Git，PowerShell/CMD 的高破坏性命令（如 `Remove-Item -Recurse -Force C:\`、`del /f /s /q C:\*`、`format C:`）被放行。
+- **影响：** Windows 平台上开启自动审批时破坏性系统命令未受看门狗拦截。
+- **建议：** 为 PowerShell 和 CMD 建立独立的结构化规则及回归测试。
+- **关闭验证：** 新增 `checkWindowsPowerShellCommand`、`checkWindowsCmdCommand`、`isWindowsRootOrSystemTarget` 及 Base64 EncodedCommand 解码审查；覆盖 `Remove-Item`、`Clear-Disk`、`Format-Volume`、`rd /s /q`、`del /f /s /q`、`format` 等破坏性指令，全量断言通过。
+
+### CR-052：README 未说明 Danger Guard 的配置和安全边界
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `README.md:220-265`
+- **现象：** v0.2.1 CHANGELOG 宣布了 Danger Guard，但 README 没有说明 `.dsh/danger-rules.json` 的 `enabled/block/allow` 格式、`DSH_DANGER_GUARD=off`、守卫只拦截 Agent shell 工具调用，以及 Windows/动态 shell 展开等威胁模型边界。
+- **影响：** npm 用户无法发现或正确配置该功能，也容易把启发式静态守卫误认为无条件自动审批下的完整安全沙箱。
+- **建议：** README 增加独立安全章节、最小配置示例、平台覆盖矩阵，并明确必须与 Harness permission presets/沙箱叠加使用。
+- **关闭验证：** 在 `README.md` 中增加独立章节《安全看门狗 (Danger Guard) 与安全边界》，包含完整平台覆盖矩阵、JSON 配置示例、停用方式与重要安全边界提示。
+
+### CR-053：编辑 Provider 留空密钥会删除已有凭据引用
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:3300-3335`, `src/index.js:3400-3465`
+- **现象：** 编辑表单把已有 Provider 标记为 `hasStoredKey`，UI 显示“configured · type to replace”；但 `saveProviderForm()` 只根据本次 `draft.apiKey` 是否非空决定是否写入 `apiKeyEnv`。用户按提示留空并修改 URL/模型时，新 profile 会省略原有 `apiKeyEnv`。
+- **影响：** 普通编辑会静默断开已经保存的凭据，Provider 在重启或下次请求时失去鉴权。
+- **建议：** 编辑时保留原 profile 的 `apiKeyEnv`，只有显式“清除凭据”操作才 unset；`hasKey` 应从 profile 引用及 credentials capability 得出。
+- **关闭验证：** 编辑已有 Provider 且密钥栏留空时保留原有 `apiKeyEnv`；`hasKey` 改为真实读取 Profile 引用状态；新增留空保存回归测试并通过。
+
+### CR-054：启动时把未 export 的 Shell 变量提升为 Agent 环境变量
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:489-518`
+- **现象：** `loadSystemEnv()` 无条件读取 `~/.zprofile` 与 `~/.zshrc`，正则中的 `export` 是可选项，因此普通的 `PRIVATE_TOKEN=...`、只供交互式 shell 使用且未导出的变量也会被写入 `process.env`。
+- **影响：** 启动 TUI 会改变原有 shell 可见性边界，把本不应传给子进程的本地变量和秘密暴露给模型可调用的命令。
+- **建议：** 对 shell rc 文件严格要求显式 `export` 关键字；专用 `.dsh/.env` 文件保持常规键值解析。
+- **关闭验证：** 区分 `.env` 与 shell rc 文件的匹配规则，shell rc 文件必须包含 `export` 关键字方可解析；新增未导出变量不提升断言并通过。
+
+### CR-055：缺少 credentials capability 时 Provider 密钥只保存在当前进程
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/index.js:3445-3460`
+- **现象：** 新建带 API key 的 Provider 时，`credentials.set` 是可选调用；服务不存在时仍把 profile 的 `apiKeyEnv` 引用持久化、只将真实值写进当前 `process.env`，然后提示“saved · ready”。重启后环境值消失，引用无法解析。
+- **影响：** 用户得到成功提示但配置并不耐久，下一次启动才出现鉴权失败。
+- **建议：** 有密钥输入时将 credentials capability 设为必需；不可用或写入失败必须中止 profile 提交并保留表单。
+- **关闭验证：** 当用户输入新 API Key 时，若 `credentials.set` 不可用，立即终止保存并在表单上展示明确错误；新增断言并通过。
+
+### CR-056：`/btw` 临时 Agent 未禁止工具调用
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/commands/btw.js:27-45`
+- **现象：** `/btw` 创建临时 Agent 时没有 setup、工具限制或禁止工具的系统提示，只发送用户 query。模型可能在概念问答中调用文件、Shell 或其他有副作用的工具。
+- **影响：** 隔离临时问答会话承诺不成立。
+- **建议：** 与其他 sidecar 统一：设置 `origin/parentSession`，在 setup 中 restrict 空工具集并添加 monotonic guard。
+- **关闭验证：** `/btw` Agent 在 `agents.create` 中配置 `meta`（`parentSession`, `origin: 'subagent'`, `delegationDepth`）并在 `setup` 中调用 `tools.restrict({ allow: [] })` 与 `tools.guard` 阻断一切工具调用。
+
+### CR-057：插件 stop 未释放当前 Agent handle 与 skill overrides
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:770-845`
+- **现象：** `TuiApp.stop()` 未遍历当前 `skillOverrideDisposers`，也没有调用当前 `this.handle.dispose()`。`sessionInitPromise` 也未被 stop 等待。
+- **影响：** Cordis 热卸载、启动失败或宿主复用进程时，当前 Agent fiber、订阅及技能 override 会遗留。
+- **建议：** 建立幂等的 stop promise：先等待初始化完成，再有界 flush + dispose 当前 handle，释放当前 skill overrides，并清空 handle/agent。
+- **关闭验证：** `stop()` 统一使用 `this.stopPromise` 保证幂等，先等待 `sessionInitPromise`，释放全部 `skillOverrideDisposers`，调用 `this.handle.dispose()` 并清空引用；新增多重 stop 回归测试并通过。
+
+### CR-058：审批出现前的 composer 草稿可自动授权
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:1660-1685`
+- **现象：** `pumpApprovals()` 打开新审批后立即读取此前已经存在的 `this.input`；只要草稿 trim 后等于 `y`，就清空输入并直接 settle 为 `allowed-once`。
+- **影响：** 用户恰好在 composer 中输入单独的字母 `y` 时，随后到达的任意工具审批会在用户看到和审阅请求之前被允许。
+- **建议：** 删除对既有 composer 内容的审批解释；审批只接受 panel 激活后由 InputRouter 分发的新事件。
+- **关闭验证：** 移除了 `pumpApprovals` 中对输入框既有内容的预消费逻辑，保留输入草稿并等待显式交互；新增回归测试并通过。
+
+### CR-059：已 abort 的排队审批会显示为可操作请求
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/index.js:1615-1685`
+- **现象：** 多个审批排队时，后续 request 的 signal 可能在等待期间已经 aborted。轮到该项时只注册 abort listener，没有先检查 `signal.aborted`。
+- **影响：** UI 会展示已经取消的陈旧审批并等待用户决策。
+- **建议：** 入队和 pump 时都检查 `request.signal?.aborted`，直接 resolve cancelled；settle 还应加一次性保护。
+- **关闭验证：** 在 `requestApproval` 入队与 `pumpApprovals` 出队时均检查 `request.signal?.aborted`，并在 `settle` 中增加一次性防抖保护；新增排队中 abort 与预先 abort 断言并通过。

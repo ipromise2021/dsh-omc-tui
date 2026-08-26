@@ -217,6 +217,48 @@ npm run verify
 DSH_TEST_FIXTURE_HOME=/path/to/dsh-home npm run test:pty
 ```
 
+## 安全看门狗 (Danger Guard) 与安全边界
+
+`dsh-omc-tui` 内置了原生安全看门狗（Dangerous-Command Watchdog），在 Harness 的 `tools/pre-execute` 执行前切入点进行结构化语法审查与单调阻断（Deny-or-Abstain），防止模型或子代理意外执行高破坏性命令。
+
+### 1. 内置防护覆盖矩阵
+
+| 平台 / 工具 | 结构化拦截的危险操作模式 |
+| :--- | :--- |
+| **Unix / Linux / macOS** (`bash`, `sh`, `zsh` 等) | `rm -rf /`、`rm -rf ~`（含多层相对路径越界 `a/../../b`、通配符与变量展开）<br>`chmod -R 777 /`、`find / -delete`、`find / -exec rm ...`<br>`mkfs.*`、`fdisk`、`dd of=/dev/sd*` 直写磁盘设备<br>`git push --force`（保护 remote 分支，安全选项 `--force-with-lease` 正常放行）<br>`:(){ :|:& };:` 等 Fork 炸弹 |
+| **Windows** (`pwsh`, `powershell`, `cmd`) | `Remove-Item -Recurse -Force C:\`、`del /f /s /q C:\*`、`rd /s /q C:\`<br>`Clear-Disk`、`Initialize-Disk`、`Format-Volume`<br>`format C:` 磁盘格式化驱动器<br>`powershell -EncodedCommand` 混淆载荷还原审查 |
+| **Shell 封装与深层混淆** | `sudo`、`env`、`exec`、`timeout`、`sh -c`、`bash -lc`、`cmd /c` 组合解构<br>ANSI-C `$'\x72\x6d'` / `$'\u0072\u006d'` / `$'\162\155'` 转义还原<br>深层嵌套子 Shell（`depth > 32`）与超长输入（`> 128KB`）采用 Fail-Closed 默认阻断 |
+
+### 2. 自定义规则配置 (`.dsh/danger-rules.json`)
+
+可在当前项目根目录或配置路径放置 `.dsh/danger-rules.json` 扩展自定义规则：
+
+```json
+{
+  "enabled": true,
+  "block": [
+    "DROP\\s+DATABASE",
+    "kubectl\\s+delete\\s+namespace"
+  ],
+  "allow": [
+    "^git status$",
+    "^npm test$"
+  ]
+}
+```
+
+- `block`：扩展自定义高危正则表达式（命中即拦截）。
+- `allow`：强制基于全段锚定（`^(?:pattern)$`）放行安全白名单，杜绝子串或子 Shell 注入逃逸。
+- 完全停用：设置环境变量 `DSH_DANGER_GUARD=off` 即可停用看门狗。
+
+### 3. 威胁模型与安全边界说明
+
+> [!IMPORTANT]
+> **安全边界提示**：
+> 1. Danger Guard 定位于 Agent 工具执行前的**启发式防误操作防线**，专注于拦截模型误触发的破坏性指令；
+> 2. 静态分析无法穷尽所有动态构造（如运行时管道下载脚本 `curl | sh`、图灵完备混淆）；
+> 3. **必须叠加使用 Harness 权限预设（Permission Presets）、沙箱隔离（Docker / Container / MicroVM）与生产凭据管控**，切勿将纯静态守卫视为唯一的安全沙箱。
+
 ## 当前限制
 
 - 项目仍处于 pre-release 阶段，Harness 上游接口变化后可能需要同步适配。
