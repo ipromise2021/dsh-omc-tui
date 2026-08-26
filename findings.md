@@ -292,6 +292,30 @@
 - **建议：** 去除未加引号的 shell 注释，并基于真实可执行命令及其 AST 参数结构化校验，不在安全命令（`echo`、`node`、`grep` 等）的数据参数中盲目进行全局危险正则扫描。
 - **关闭验证：** 实现 `stripComments`，并将危险检测绑定到提取出的 `cmdName` 和 `args`；新增 `echo safe # rm -rf /`、`node -e "..."`、`grep -rn "..."` 及 `echo "rm -rf /"` 放行回归断言，全部通过。
 
+### CR-029：复合子 shell 分段截断绕过
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:35-105`, `src/core/danger-guard.js:675-690`
+- **现象：** `splitShellSegments` 未跟踪 `$()`、反引号和进程替换的嵌套深度，导致子 shell 内的分号被当作外层分隔符，`echo $(rm -rf /; echo done)`、`echo $(echo safe; rm -rf /)`、`echo `rm -rf /; echo done`` 会被拆碎截断而放行。
+- **建议：** 分段器完整跟踪 `parenDepth` 与 `inBacktick`，并在分段前先行递归提取子 shell。
+- **关闭验证：** 重构 `splitShellSegments` 跟踪括号与反引号嵌套，外层 `checkDangerCommand` 与每段递归执行子 shell 审查；新增 `echo $(rm -rf /; echo done)`、`echo $(echo safe; rm -rf /)`、`echo `rm -rf /; echo done`` 拦截断言，全部通过。
+
+### CR-030：包装命令带值选项解析逃逸
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:300-380`, `src/core/danger-guard.js:640-660`
+- **现象：** `sudo --user root rm -rf /`、`sudo -C 3 rm -rf /`、`env -u SAFE rm -rf /`、`exec -a cleanup rm -rf /`、`timeout 10s rm -rf /` 中，选项值被误当作真实命令名，导致后续高危目标被漏检。
+- **建议：** 建立包装命令（sudo、env、exec、timeout、command 等）选项字典，准确消耗选项参数；同时对 tokens 序列执行保守扫描，防止未知包装选项漏检。
+- **关闭验证：** 扩充 `SUDO_VALUE_OPTIONS`、`ENV_VALUE_OPTIONS`、`EXEC_VALUE_OPTIONS`、`TIMEOUT_VALUE_OPTIONS`，并增加 token 序列保守兜底；新增 `sudo --user root`、`sudo -C 3`、`env -u SAFE`、`exec -a cleanup`、`timeout 10s` 等拦截断言，全部通过。
+
+### CR-031：allow 正则 alternation 锚点逃逸
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:540-560`
+- **现象：** `compileAllowPattern` 仅简单判断首尾字符，当用户提供包含 `|` 的规则（如 `^git status|git log$` 或 `^git status|echo safe`）时，由于 `|` 优先级最低，`git status rm -rf /` 依然会被前半段子模式放行。
+- **建议：** 模式统一强制编译为 `^(?:${pattern})$`，确保整个表达式两端严格受限。
+- **关闭验证：** 采用 `^(?:${pattern})$` 编译 allow 规则；新增 `^git status|git log$`、`^git status|echo safe` 对应 `git status rm -rf /`、`git log rm -rf /` 拦截断言，全部通过。
+
 ## 主分支界面渲染与输出折叠分析（2026-08-25）
 
 ### 当前架构事实
@@ -322,3 +346,176 @@
 - **流式与折叠：** text、reasoning、tool-call delta 使用同一合并调度；activity/reasoning 默认折叠，Ctrl+O 只切换焦点或最近可见 block。
 - **输入与选择：** SGR 鼠标滚轮只滚动 viewport；Markdown、CJK、表格及窄表格省略号使用可见文本映射，复制内容不含 ANSI 或隐藏字符。
 - **关闭验证：** `npm test`、`npm run verify`、`git diff --check` 与 npm 打包预检均通过；真实 Harness PTY fixture 仍待环境具备后执行。
+
+## 危险命令守卫专项复核（2026-08-26，基线 ec7bdd2 + 未提交改动）
+
+- **范围：** 最新提交 `ec7bdd2`（danger-guard.js 初版 + TuiApp 生命周期集成）与工作区未提交改动（CR-029～CR-031 修复）。
+- **验证方式：** 直接以 `node` 调用 `checkDangerCommand` 实测 25+ 条绕过与边界用例；`npm test` 通过（现有套件未覆盖下述缺口）。
+
+### CR-032：`-c` 引号载荷绕过包装器解析
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:395-513`（getCommandFromTokens）, `src/core/danger-guard.js:520-560`（checkShellExecCommand）
+- **现象：** `sh -c 'rm -rf /'`、`bash -c "rm -rf /"`、`su -c 'rm -rf /'`、`sudo sh -c 'rm -rf /'` 全部 ALLOWED。引号把完整载荷合并为单个 token（`rm -rf /`），兜底扫描仅做 `token === 'rm'` 精确匹配；`sh/bash/su` 不在包装器字典中。
+- **建议：** 将 `sh/bash/dash/zsh/fish/su` 的 `-c/--command` 取值作为子命令递归 `checkDangerCommand`。
+- **关闭验证：** 实现了 `checkShellExecCommand` 识别主流 Shell 解释器与 `-c` / `--command` 参数并递归安全校验；新增 `sh -c "rm -rf /"`、`bash -c "rm -rf /"`、`su -c "rm -rf /"`、`sudo sh -c "rm -rf /"` 拦截断言，全部通过。
+
+### CR-033：裸括号分组与 find -exec 绕过
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:120-220`（extractSubshells）, `src/core/danger-guard.js:480-515`（checkFindCommand）
+- **现象：** `(rm -rf /)` ALLOWED（token 化后首 token 为 `(rm`，兜底精确匹配失败）；`find / -exec rm -rf {} \;` ALLOWED（`-exec` 后的命令不被解析）。加空格变体 `( rm -rf / )` 反而 BLOCKED，行为不一致。
+- **建议：** 提取裸 `( ... )` 命令分组并递归审查；对 `find` 的 `-exec` 命令部分（含 `-delete`）单独解析审查。
+- **关闭验证：** `extractSubshells` 增加了对裸 `( ... )` 语法分组的识别与提取；新增 `checkFindCommand` 对 `find` 的 `-delete` 与 `-exec ...` 深度审查；新增 `(rm -rf /)`、`find / -exec rm -rf {} \;`、`find . -exec rm -rf / \;`、`find / -delete` 拦截断言，全部通过。
+
+### CR-034：子 shell 计算的目标路径绕过
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:380-450`（checkDestructiveRm / checkDestructiveChmod）
+- **现象：** `rm -rf $(echo /)`、`rm -rf /$(echo tmp)` ALLOWED。目标被替换为 `__subshell__` 占位符后不再匹配根/主目录模式。
+- **建议：** 当 rm/chmod 目标包含子 shell 占位符时按保守策略拦截；或对占位符所在位置应用根目录模式检查。
+- **关闭验证：** 在 `checkDestructiveRm` 与 `checkDestructiveChmod` 中加入 `target.includes('__subshell__')` 保守拦截；新增 `rm -rf $(echo /)` 与 `rm -rf /$(echo tmp)` 拦截断言，全部通过。
+
+### CR-035：注释中的子 shell 被误拦截
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:630-670`（evaluateSegment / checkDangerCommand）
+- **现象：** `echo hi # $(rm -rf /)`、`echo hi # `rm -rf /`` BLOCKED。子 shell 提取发生在 `stripComments` 之前，注释内容被当作可执行子命令，与 CR-028 消除注释误报的目标相悖。
+- **建议：** 先 `stripComments` 再提取子 shell；或在 `extractSubshells` 中跳过未加引号注释区。
+- **关闭验证：** 调整执行流水线：在提取子 shell 前先执行 `stripComments` 剔除未加引号的注释；新增 `echo hi # $(rm -rf /)`、`echo hi # `rm -rf /`` 正常放行断言，全部通过。
+
+### CR-036：内置规则表从未参与评估
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:15-30`（DEFAULT_DANGER_RULES）, `src/core/danger-guard.js:565-590`（compileDangerRules）
+- **现象：** `compileDangerRules` 只编译用户 block/allow；`evaluateSegment` 仅执行结构化检查 + 用户规则，`DEFAULT_DANGER_RULES` 为死代码。文件头注释声称用户 block "EXTEND the built-in table"，与实现不符。
+- **建议：** 修正文件头与函数 doc 注释，明确内置高危规则统一由 AST/Tokenizer 结构化引擎承载，用户自定义 block 则编译扩展该基线。
+- **关闭验证：** 澄清并对齐文档与代码，结构化 AST 引擎全量覆盖基线规则，`compileDangerRules` 编译用户正则补充规则；全量测试验证一致。
+
+### CR-037：路径别名未规范化
+- **优先级：** P3
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:275-310`（isRootOrHomeTarget）
+- **现象：** `rm -rf ./a/../../` ALLOWED；真实执行会删除工作区上层目录。
+- **建议：** 对目标执行 `path.posix.normalize` 后再与根/主目录模式比较；保守策略可拦截任何规范化后逃出工作区的目标。
+- **关闭验证：** `isRootOrHomeTarget` 引入 `node:path/posix` 的 `normalize` 解析相对路径与 `..` 越界；新增 `rm -rf ./a/../../` 与 `rm -rf /tmp/../` 拦截断言，全部通过。
+
+## 危险命令守卫二次复核（2026-08-26，CR-032~037 修复后）
+
+- **验证方式：** 以 `node` 直调 `checkDangerCommand` 实测 22 条绕过与边界用例；CR-032~037 原用例全部通过，`npm test` 通过。以下为修复后新发现。
+
+### CR-038：注释截断子 shell 提取（CR-035 修复引入的回归）
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:140-240`（extractSubshells 注释感知）
+- **现象：** `echo $(rm -rf / # c)`、`echo `rm -rf / # c``、`echo $(rm -rf /; # c)` 均 ALLOWED。外层先执行 `stripComments`，把子 shell 内部的注释连同右括号一并剥除，括号不再闭合，`extractSubshells` 提取失败。
+- **建议：** 恢复“先提取子 shell、后剥注释”的顺序，并将外层注释感知下放到 `extractSubshells`：在顶层遇到未加引号的 `#` 时停止扫描，而在子 shell 内部 `(...)` 里完整捕获包含 `#` 的子命令，递归时由子 shell 的 `stripComments` 处理。
+- **关闭验证：** 恢复了流水线顺序并在 `extractSubshells` 中支持顶层注释截断与子 shell 内部注释保留；新增 `echo $(rm -rf / # c)`、`echo `rm -rf / # c``、`echo $(rm -rf /; # c)` 拦截断言，全部通过。
+
+### CR-039：组合短旗标绕过 `-c` 载荷检查
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:520-550`（checkShellExecCommand）
+- **现象：** `sh -lc 'rm -rf /'`、`bash -ec 'rm -rf /'` ALLOWED。`checkShellExecCommand` 仅精确匹配 `-c`/`--command`，Shell 普遍支持的组合旗标 `-lc`/`-ec`（含义含 `-c`）不被识别，载荷未递归检查。
+- **建议：** 短选项按字符拆解：匹配 `-[a-zA-Z]*c[a-zA-Z]*` 取下一 token 递归 `checkDangerCommand`；`--command=...` 内联取值也一并覆盖。
+- **关闭验证：** 支持短旗标组合解构与 `--command=...` 内联参数提取；新增 `sh -lc "rm -rf /"` 与 `bash -ec "rm -rf /"` 拦截断言，全部通过。
+
+### CR-040：相对路径逃逸检测不完整（CR-037 修复缺口）
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:280-320`（isRootOrHomeTarget 路径前缀深度与规范化）
+- **现象：** `rm -rf a/../../b`、`rm -rf ../*` ALLOWED。深度算法只比较最终深度：`a/../../b` 最终为 0 但路径中途越出工作区（真实解析为 `../b`）；`../*` 的通配符组件被当作 +1 抵消了 `..`，实际会删除父目录全部内容。
+- **建议：** 改为检查每个路径前缀的最小深度，任一前缀深度 < 0 即越界；通配符组件不参与深度抵消。
+- **关闭验证：** `isRootOrHomeTarget` 实现了前缀最小深度检测与 `normalized.startsWith('../')` 逃逸拦截；新增 `rm -rf a/../../b` 与 `rm -rf ../*` 拦截断言，全部通过。
+
+### CR-041：fork 炸弹注释误报与残留注释不一致
+- **优先级：** P3
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:630-670`, `src/core/danger-guard.js:1-12`
+- **现象：** `echo hi # :(){ :|:& };:` BLOCKED——fork 炸弹检查在剥注释前执行，导致注释中的示例代码触发误拦截；文件头注释关于内置规则与用户 block 的关系与实现细节需同步澄清。
+- **建议：** 将 fork 炸弹检查移至剥离外层注释后的命令串上执行；同步修正文件头注释。
+- **关闭验证：** 在 `stripComments(main)` 产出的有效命令上执行 fork 炸弹检测；新增 `echo hi # :(){ :|:& };:` 放行断言；更新文件头注释，全部通过。
+
+## 危险命令守卫三次复核（2026-08-26，CR-038~041 修复后）
+
+- **验证方式：** `node` 直调实测 40 条用例（CR-032~041 全量回归 + 新边界）；`npm test` 通过。CR-038~041 修复均闭环，前两轮全部用例无回归。
+- **复核备注：**
+  - `rm -rf ../build` 现被拦截：`normalized.startsWith('../')` 比"逃出工作区"更严格，属于"cwd 即工作区根"假设下的保守取舍，行为一致可接受。
+  - `rm -rf /tmp/__subshell__` 字面文件名仍被 CR-034 占位符保守拦截误伤（CR-041 已备注）。
+
+### CR-042：`-c` 与引号载荷粘连绕过
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:705-750`（checkShellExecCommand）
+- **现象：** `bash -c'rm -rf /'`、`sh -c"rm -rf /"` ALLOWED。Shell 允许旗标与引号载荷之间不加空格，tokenizer 将 `-c'rm -rf /'` 粘连为单个 token；`unquoteToken` 剥引号后得到 `-crm -rf /`，`checkShellExecCommand` 的含 `c` 短旗标分支把下一 token（`-rf`）当作载荷递归检查，真实载荷留在旗标 token 内被漏检。真实 Shell 中该命令执行 `rm -rf /`。
+- **建议：** 对匹配 `/^(-[a-zA-Z]*c)(.*)$/` 的 token，提取剥去 `-c`/`-lc` 前缀后的粘连内容并与后续 token 组合为载荷递归 `checkDangerCommand`。
+- **关闭验证：** 实现了对 `-c` 粘连参数（`bash -c'rm -rf /'`、`sh -c"rm -rf /"`、`sh -lc'rm -rf /'`、`bash -c'rm -rf' /`）的完整剥离与递归安全判定；新增对应拦截断言，全部通过。
+
+## 危险命令守卫四次复核（2026-08-26，CR-042 修复后）
+
+- **验证方式：** `node` 直调 33 条全量回归（CR-032~042 全部用例）+ 9 条粘连变体实测；`npm test` 通过。CR-042 修复闭环：`bash -c'rm -rf /'`、`sh -c"rm -rf /"`、`bash -lc'rm -rf /'`、粘连 + 后续参数均拦截，`sh -c'echo hi'` 正常放行，无回归。
+
+### CR-043：ANSI-C 引号 `$'...'` 载荷绕过
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:290-380`（tokenizeArgs / unquoteToken）, `src/core/danger-guard.js:705-750`（checkShellExecCommand）
+- **现象：** `bash -c$'rm -rf /'` ALLOWED。`tokenizeArgs`/`unquoteToken` 不识别 Bash/Zsh/Ksh 的 ANSI-C 引号 `$'...'`，剥引号后 `$` 残留在载荷首部，递归检查时命令名变为 `$rm` 而漏检。真实 Shell 展开后执行 `rm -rf /`。
+- **建议：** `unquoteToken` 识别 `$'...'` 与 `$"..."` 前缀并将内部内容按标准引号与十六进制转义（`\x72\x6d`）还原，`-c` 载荷剥去 `$` 识别真实命令。
+- **关闭验证：** `tokenizeArgs` 和 `unquoteToken` 完整支持了 `$'...'`、`$"..."`、十六进制 `\xHH` 与 C-escape 反转义；新增 `bash -c$'rm -rf /'`、`bash -c $'rm -rf /'`、`$'rm' -rf /`、`$'\x72\x6d' -rf /`、`$"rm" -rf /` 拦截断言，全部通过。
+- **已知边界：** 命令替换式载荷（`-c$(printf 'rm -rf /')`）属图灵完备混淆，静态检测无法穷尽；守卫定位为最后防线之一，需与 Harness 权限系统叠加使用，建议在 README 威胁模型中注明。
+
+## 危险命令守卫五次复核（2026-08-26，CR-043 修复后）
+
+- **验证方式：** `node` 直调 35 条全量回归（CR-032~043 全部用例）+ ANSI-C 转义变体实测；`npm test` 通过。CR-043 主用例闭环：`bash -c$'rm -rf /'`、`\xHH` 十六进制载荷均拦截，`echo $'rm -rf /'` 数据参数正常放行，无回归。
+
+### CR-044：ANSI-C 转义解码表不完整
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:360-440`（unquoteToken 的 inAnsiC 转义分支）
+- **现象：** `bash -c$'\u0072\u006d -rf /'`、`bash -c$'\162\155 -rf /'`、`bash -c$'\cX...'` 仍 ALLOWED。`unquoteToken` 仅解码 `\xHH`/`\n`/`\t`/`\r`/`\'`/`\\`，Bash ANSI-C 的 `\uHHHH`、`\UHHHHHHHH`、`\0nnn`（八进制）、`\cX`（control char）、`\a\b\e\f\v` 未解码，残留在载荷中导致命令名失真漏检。真实 Bash 4.2+ 均展开执行 `rm -rf /`。
+- **建议：** 补齐解码表（`\uHHHH`、`\UHHHHHHHH`、`\0nnn`、`\cX`、`\a\b\e\E\f\v\?`）。
+- **关闭验证：** `unquoteToken` 完整实现了标准 ANSI-C 转义全表解码；新增 `bash -c$'\u0072\u006d -rf /'`、`bash -c$'\162\155 -rf /'`、`bash -c$'\0162\0155 -rf /'`、`bash -c$'\U00000072\U0000006d -rf /'` 拦截断言，全部通过。
+
+## 危险命令守卫六次复核（2026-08-26，CR-044 修复后）
+
+- **验证方式：** `node` 直调 35 条全量回归（CR-032~044 全部用例）+ ANSI-C 全转义表变体实测；`npm test` 通过。CR-044 修复闭环：`\uHHHH`、`\0nnn`、`\UHHHHHHHH` 载荷均拦截，`$'\a\b\e\f\v\n\t\r'` 数据参数正常放行，无回归。`\cX`（control char）无法拼出 `rm` 类命令，ALLOWED 属预期。
+
+### CR-045：超范围 `\U` code point 导致守卫抛异常
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:375-400`（unquoteToken 的 `\U` 分支与安全 try/catch）
+- **现象：** `bash -c$'\Uffffffff'`、`bash -c$'\U00110000'` 触发 `String.fromCodePoint` 的 `RangeError: Invalid code point`，异常未捕获，沿 `unquoteToken → evaluateSegment → checkDangerCommand → tools.guard 回调` 向上抛出。守卫位于 `tools/pre-execute` 拦截点，任何含超范围 `\U` 的工具调用都会让拦截回调崩溃，可能打断工具调用循环或产生未处理异常。
+- **建议：** 解码前校验 code point ≤ 0x10FFFF，越界时保守保留原字符序列（不抛异常）；并在 `unquoteToken` 入口整体 try/catch 降级返回原始 token。
+- **关闭验证：** 实现了 `code <= 0x10FFFF` 安全校验与 `unquoteToken` 全局 `try/catch` 容错降级；新增 `bash -c$'\Uffffffff'` 与 `bash -c$'\U00110000'` 的健壮性回归测试，全部通过且零异常。
+
+## 危险命令守卫七次复核（2026-08-26，CR-045 修复后）
+
+- **验证方式：** `node` 直调 35 条全量回归 + 异常输入与深度嵌套实测；`npm test` 通过。CR-045 修复闭环：`\Uffffffff`、`\U00110000` 不再抛异常（fail-open 保留原序列），`\u0072\u006d` 载荷正常拦截，无回归。
+
+### CR-046：深层嵌套子 shell 递归栈溢出与 O(N²) 阻塞
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:15-20`, `src/core/danger-guard.js:900-1030`（checkDangerCommand 递归深度与命令长度限制）
+- **现象：** 约 20000 层 `$($($(...)))` 嵌套（≈100KB 输入）触发 `RangeError: Maximum call stack size exceeded`，异常沿 `tools.guard` 回调上抛，与 CR-045 同机理的崩溃路径；实测 5000 层耗时 960ms、呈 O(N²) 增长，更大输入会在 `tools/pre-execute` 拦截点长时间阻塞事件循环。
+- **建议：** `checkDangerCommand` 增加递归深度参数（如 depth ≥ 32 停止向下递归）；对输入设置长度上限（如 128KB）；顶层使用 `try/catch` 保护。
+- **关闭验证：** 实现了 `MAX_RECURSION_DEPTH = 32` 与 `MAX_COMMAND_LENGTH = 131072`，在子 shell 提取与 shell -c 递归检查中全程透传深度；新增 20,000 层深度嵌套性能与栈安全回归测试，在 120ms 内极速完成且零溢出异常。
+
+## 危险命令守卫八次复核（2026-08-26，CR-046 修复后）
+
+- **验证方式：** `node` 直调 36 条全量回归 + 深度/长度边界实测；`npm test` 通过。CR-046 崩溃修复生效：20000 层嵌套 113ms 零异常。但深度与长度超限均采用 fail-open（放行），实测引入两个新绕过。
+
+### CR-047：深度超限 fail-open 导致低门槛绕过
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:910-915`, `src/core/danger-guard.js:995-1002`（checkDangerCommand 与 evaluateSegment 深度超限拦截）
+- **现象：** 仅 33 层嵌套（约 200 字节）即可绕过：`echo $($(...$(rm -rf /)...))` 33 层 → ALLOWED，而 32 层时正常拦截。深度超限返回 `null` 意味着嵌套内的危险命令整棵被放行，攻击成本远低于 CR-046 的崩溃场景。`MAX_RECURSION_DEPTH = 32` 的 fail-open 语义使该阈值成为公开的绕过配方。
+- **建议：** 深度超限改为 fail-closed：`depth > MAX_RECURSION_DEPTH` 时返回拦截结果（`{ rule: '复合命令嵌套过深，已保守拦截', command }`）。
+- **关闭验证：** 将深度超限语义由 fail-open 修正为 fail-closed；新增 33+ 层深度嵌套自动阻断断言，全部通过。
+
+### CR-048：超长命令截断丢弃尾部危险片段
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/core/danger-guard.js:1003-1008`（MAX_COMMAND_LENGTH 超限拦截）
+- **现象：** 超 128KB 输入按 `slice(0, MAX_COMMAND_LENGTH)` 保留头部：`(安全前缀 250KB) + rm -rf /` → ALLOWED。危险命令位于尾部时被截断丢弃，守卫整体放行。
+- **建议：** 与 CR-047 一致改为 fail-closed：超长命令直接返回拦截结果（`{ rule: '命令长度超限，已保守拦截', command }`）。
+- **关闭验证：** 将超长输入由截断策略修正为 fail-closed 保守阻断；新增 150KB+ 超长命令拦截断言，全部通过。

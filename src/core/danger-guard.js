@@ -1,19 +1,22 @@
 // ── dangerous-command watchdog ──────────────────────────────────────────────
 // Native cordis guard on the harness `tools/pre-execute` interception point:
 // denies destructive shell commands (rm -rf /, fork bomb, disk writes,
-// git push -f / --force, chmod -R 777 /, ...) before the tool body runs.
+// git push -f / --force, chmod -R 777 /, find -delete, shell -c ...) before the tool body runs.
 //
-// Customization: `.dsh/danger-rules.json` in the launch cwd may override
-//   { "enabled": false, "block": ["regex"...], "allow": ["regex"...] }
-// `block` patterns EXTEND the built-in table; `allow` patterns (anchored per segment)
-// exempt matching segments. Set DSH_DANGER_GUARD=off to disable the watchdog entirely.
+// Built-in dangerous commands are inspected via structured AST and tokenizer;
+// custom `block` rules in `.dsh/danger-rules.json` extend the guard with additional regexes;
+// custom `allow` rules (anchored per segment) exempt matching segments.
+// Set DSH_DANGER_GUARD=off to disable the watchdog entirely.
 
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { normalize } from 'node:path/posix'
 
 export const DANGER_TOOL_NAMES = /^(?:bash|shell|pwsh|powershell|cmd|terminal|exec|run_command)$/i
+export const MAX_RECURSION_DEPTH = 32
+export const MAX_COMMAND_LENGTH = 131072 // 128 KB
 
-/** Built-in dangerous-command definitions. `label` is surfaced as the denial reason. */
+/** Built-in dangerous-command definitions for reference and introspection. */
 export const DEFAULT_DANGER_RULES = [
   { label: 'rm -rf 根目录', re: /\brm\b.*(?:\s+\/|\s+\/\*|\s+\/\.|\s+--\s+\/|\s+--\s+\/\*|\s+--\s+\/\.)(?=$|\s)/ },
   { label: 'rm -rf 用户主目录', re: /\brm\b.*(?:\s+~|\s+~\/|\s+~\/\*|\s+\$HOME|\s+\$\{HOME\})(?=$|\s|\/)/ },
@@ -26,7 +29,7 @@ export const DEFAULT_DANGER_RULES = [
 
 /**
  * Split a compound command line into individual pipeline/command segments,
- * respecting single and double quotes.
+ * respecting single quotes, double quotes, subshells `$(...)`, and backticks.
  * Delimiters: `;`, `&&`, `||`, `|`, `&`, `\n`.
  * @param {string} commandLine
  * @returns {string[]}
@@ -37,6 +40,8 @@ export function splitShellSegments(commandLine) {
   let inSingleQuote = false
   let inDoubleQuote = false
   let escaped = false
+  let parenDepth = 0
+  let inBacktick = false
 
   for (let i = 0; i < commandLine.length; i++) {
     const char = commandLine[i]
@@ -60,25 +65,44 @@ export function splitShellSegments(commandLine) {
       current += char
       continue
     }
-    if (!inSingleQuote && !inDoubleQuote) {
-      if (char === '\n' || char === ';') {
-        if (current.trim()) segments.push(current.trim())
-        current = ''
+    if (char === '`' && !inSingleQuote) {
+      inBacktick = !inBacktick
+      current += char
+      continue
+    }
+
+    if (!inSingleQuote && !inDoubleQuote && !inBacktick) {
+      if (char === '(') {
+        parenDepth++
+        current += char
         continue
       }
-      if (char === '&' || char === '|') {
-        const next = commandLine[i + 1]
-        if (next === char) {
-          // && or ||
-          if (current.trim()) segments.push(current.trim())
-          current = ''
-          i++
-          continue
-        } else if (char === '|' || char === '&') {
-          // pipe | or background &
+      if (char === ')') {
+        if (parenDepth > 0) parenDepth--
+        current += char
+        continue
+      }
+
+      if (parenDepth === 0) {
+        if (char === '\n' || char === ';') {
           if (current.trim()) segments.push(current.trim())
           current = ''
           continue
+        }
+        if (char === '&' || char === '|') {
+          const next = commandLine[i + 1]
+          if (next === char) {
+            // && or ||
+            if (current.trim()) segments.push(current.trim())
+            current = ''
+            i++
+            continue
+          } else if (char === '|' || char === '&') {
+            // pipe | or background &
+            if (current.trim()) segments.push(current.trim())
+            current = ''
+            continue
+          }
         }
       }
     }
@@ -89,8 +113,8 @@ export function splitShellSegments(commandLine) {
 }
 
 /**
- * Extract embedded subshells (`$(cmd)`, `` `cmd` ``, `<(cmd)`, `>(cmd)`)
- * from a command string so they can be analyzed as first-class child commands.
+ * Extract embedded subshells (`$(cmd)`, `` `cmd` ``, `<(cmd)`, `>(cmd)`, bare `(cmd)`)
+ * from a command string with outer comment awareness.
  * @param {string} commandLine
  * @returns {{main: string, subshells: string[]}}
  */
@@ -124,10 +148,21 @@ export function extractSubshells(commandLine) {
       continue
     }
 
-    // Process substitution or subshell: $(...) or <(...) or >(...)
-    if (!inSingle && (ch === '$' || ch === '<' || ch === '>') && commandLine[i + 1] === '(') {
+    // Outer comment check: unquoted # preceded by whitespace or at line start
+    if (!inSingle && !inDouble && ch === '#') {
+      if (i === 0 || /\s/.test(commandLine[i - 1])) {
+        // Outer comment starts here, ignore remainder of this commandLine
+        break
+      }
+    }
+
+    // Process substitution or subshell: $(...) or <(...) or >(...) or bare (...)
+    const isPrefixed = (ch === '$' || ch === '<' || ch === '>') && commandLine[i + 1] === '('
+    const isBareParen = ch === '(' && (i === 0 || /\s|[;&|]/.test(commandLine[i - 1]))
+
+    if (!inSingle && (isPrefixed || isBareParen)) {
       let parenCount = 1
-      let j = i + 2
+      let j = isPrefixed ? i + 2 : i + 1
       let subSingle = false
       let subDouble = false
       let subEscaped = false
@@ -252,7 +287,7 @@ export function stripComments(str) {
 }
 
 /**
- * Tokenize a shell argument string respecting quotes and whitespace.
+ * Tokenize a shell argument string respecting quotes, ANSI-C quotes ($'...'), and whitespace.
  * @param {string} argString
  * @returns {string[]}
  */
@@ -261,6 +296,7 @@ export function tokenizeArgs(argString) {
   let current = ''
   let inSingle = false
   let inDouble = false
+  let inAnsiC = false
   let escaped = false
 
   for (let i = 0; i < argString.length; i++) {
@@ -275,17 +311,30 @@ export function tokenizeArgs(argString) {
       current += ch
       continue
     }
+    if (ch === '$' && argString[i + 1] === "'" && !inSingle && !inDouble && !inAnsiC) {
+      inAnsiC = true
+      current += "$'"
+      i++
+      continue
+    }
+    if (ch === '$' && argString[i + 1] === '"' && !inSingle && !inDouble && !inAnsiC) {
+      inDouble = true
+      current += '$"'
+      i++
+      continue
+    }
     if (ch === "'" && !inDouble) {
-      inSingle = !inSingle
+      if (inAnsiC) inAnsiC = false
+      else inSingle = !inSingle
       current += ch
       continue
     }
-    if (ch === '"' && !inSingle) {
+    if (ch === '"' && !inSingle && !inAnsiC) {
       inDouble = !inDouble
       current += ch
       continue
     }
-    if (!inSingle && !inDouble && /\s/.test(ch)) {
+    if (!inSingle && !inDouble && !inAnsiC && /\s/.test(ch)) {
       if (current.length > 0) {
         tokens.push(current)
         current = ''
@@ -299,63 +348,179 @@ export function tokenizeArgs(argString) {
 }
 
 /**
- * Unquote a shell token to resolve escapes and quotes:
- * e.g. `r\m` -> `rm`, `r''m` -> `rm`, `"r"m` -> `rm`, `'rm'` -> `rm`.
+ * Unquote a shell token to resolve escapes, quotes, and ANSI-C ($'...') escapes:
+ * e.g. `r\m` -> `rm`, `r''m` -> `rm`, `"r"m` -> `rm`, `'rm'` -> `rm`,
+ * `$'rm'` -> `rm`, `$'\x72\x6d'` -> `rm`, `$"rm"` -> `rm`.
  * @param {string} token
  * @returns {string}
  */
 export function unquoteToken(token) {
-  let result = ''
-  let inSingle = false
-  let inDouble = false
-  let escaped = false
+  try {
+    let result = ''
+    let inSingle = false
+    let inDouble = false
+    let inAnsiC = false
+    let escaped = false
 
-  for (let i = 0; i < token.length; i++) {
-    const ch = token[i]
-    if (escaped) {
-      result += ch
-      escaped = false
-      continue
-    }
-    if (ch === '\\' && !inSingle) {
-      if (inDouble) {
-        const next = token[i + 1]
-        if (next === '$' || next === '`' || next === '"' || next === '\\' || next === '\n') {
+    for (let i = 0; i < token.length; i++) {
+      const ch = token[i]
+      if (escaped) {
+        result += ch
+        escaped = false
+        continue
+      }
+      if (ch === '\\' && !inSingle) {
+        if (inAnsiC) {
+          const next = token[i + 1]
+          if (next === 'u') {
+            const hex = token.slice(i + 2, i + 6)
+            if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+              const code = parseInt(hex, 16)
+              if (code <= 0x10FFFF) {
+                result += String.fromCharCode(code)
+                i += 5
+                continue
+              }
+            }
+          }
+          if (next === 'U') {
+            const hex = token.slice(i + 2, i + 10)
+            if (/^[0-9a-fA-F]{8}$/.test(hex)) {
+              const code = parseInt(hex, 16)
+              if (code <= 0x10FFFF) {
+                try {
+                  result += String.fromCodePoint(code)
+                  i += 9
+                  continue
+                } catch { /* ignore and preserve */ }
+              }
+            }
+          }
+          if (next === 'x' || next === 'X') {
+            const hex = token.slice(i + 2, i + 4)
+            if (/^[0-9a-fA-F]{1,2}$/.test(hex)) {
+              result += String.fromCharCode(parseInt(hex, 16))
+              i += 1 + hex.length
+              continue
+            }
+          }
+          if (next === 'c' || next === 'C') {
+            const ctrl = token[i + 2]
+            if (ctrl) {
+              result += String.fromCharCode(ctrl.toUpperCase().charCodeAt(0) ^ 64)
+              i += 2
+              continue
+            }
+          }
+          const octMatch = token.slice(i + 1).match(/^(?:0[0-7]{1,3}|[0-7]{1,3})/)
+          if (octMatch) {
+            result += String.fromCharCode(parseInt(octMatch[0], 8))
+            i += octMatch[0].length
+            continue
+          }
+          if (next === 'a') { result += '\x07'; i++; continue }
+          if (next === 'b') { result += '\b'; i++; continue }
+          if (next === 'e' || next === 'E') { result += '\x1b'; i++; continue }
+          if (next === 'f') { result += '\f'; i++; continue }
+          if (next === 'v') { result += '\v'; i++; continue }
+          if (next === 'n') { result += '\n'; i++; continue }
+          if (next === 't') { result += '\t'; i++; continue }
+          if (next === 'r') { result += '\r'; i++; continue }
+          if (next === "'") { result += "'"; i++; continue }
+          if (next === '"') { result += '"'; i++; continue }
+          if (next === '\\') { result += '\\'; i++; continue }
+          if (next === '?') { result += '?'; i++; continue }
+        }
+        if (inDouble) {
+          const next = token[i + 1]
+          if (next === '$' || next === '`' || next === '"' || next === '\\' || next === '\n') {
+            escaped = true
+            continue
+          }
+          result += ch
+          continue
+        } else {
           escaped = true
           continue
         }
-        result += ch
-        continue
-      } else {
-        escaped = true
+      }
+
+      if (ch === '$' && (token[i + 1] === "'" || token[i + 1] === '"') && !inSingle && !inDouble && !inAnsiC) {
+        if (token[i + 1] === "'") inAnsiC = true
+        else inDouble = true
+        i++
         continue
       }
+
+      if (ch === "'" && !inDouble) {
+        if (inAnsiC) inAnsiC = false
+        else inSingle = !inSingle
+        continue
+      }
+      if (ch === '"' && !inSingle && !inAnsiC) {
+        inDouble = !inDouble
+        continue
+      }
+      result += ch
     }
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle
-      continue
-    }
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble
-      continue
-    }
-    result += ch
+    return result
+  } catch {
+    return String(token ?? '')
   }
-  return result
 }
 
 function isRootOrHomeTarget(target) {
-  const t = String(target ?? '').trim().replace(/^["']|["']$/g, '')
-  // Root patterns: /, /*, /., /.., /./, /./*, //, ///
-  if (/^\/+(?:\*|\.\*?|\.\.|\.\/|\.\/\*)?$/.test(t)) return true
+  if (!target) return false
+  const t = String(target).trim().replace(/^["']|["']$/g, '')
+  if (!t) return false
+
   // Home patterns: ~, ~/, ~/*, $HOME, $HOME/, $HOME/*, ${HOME}, ${HOME}/*
   if (/^(?:~|\$\{?HOME\}?)(?:\/|\/\*|\/\.\*?)?$/.test(t)) return true
+
+  // Direct root patterns: /, /*, /., /.., /./, /./*, //, ///
+  if (/^\/+(?:\*|\.\*?|\.\.|\.\/|\.\/\*)?$/.test(t)) return true
+
+  // Path normalization and minimum prefix depth check to catch relative escapes e.g. ./a/../../, a/../../b, /tmp/../, ../*
+  try {
+    const normalized = normalize(t.replace(/\\/g, '/'))
+    if (normalized === '/' || normalized === '/.' || normalized === '/..') return true
+    if (t.startsWith('/') && (normalized === '/' || normalized === '')) return true
+    if (normalized === '..' || normalized.startsWith('../')) return true
+
+    const parts = t.split(/[/\\]+/).filter(Boolean)
+    let depth = 0
+    for (const part of parts) {
+      if (part === '..') {
+        depth--
+        if (depth < 0) return true
+      } else if (part !== '.' && part !== '*' && part !== '.*') {
+        depth++
+      }
+    }
+    if (depth < 0) return true
+  } catch {}
+
   return false
 }
 
+const SUDO_VALUE_OPTIONS = new Set([
+  '-u', '-g', '-p', '-C', '-r', '-t', '-T', '-h', '-a', '-c', '-D', '-R', '-U',
+  '--user', '--group', '--prompt', '--close-from', '--role', '--type',
+  '--host', '--auth-check', '--chdir', '--chroot', '--other-user'
+])
+
+const ENV_VALUE_OPTIONS = new Set([
+  '-u', '--unset', '-C', '--chdir', '-S', '--split-string'
+])
+
+const EXEC_VALUE_OPTIONS = new Set(['-a'])
+const TIMEOUT_VALUE_OPTIONS = new Set(['-k', '--kill-after', '-s', '--signal'])
+const SHELL_INTERPRETERS = new Set(['sh', 'bash', 'dash', 'zsh', 'fish', 'ksh', 'csh', 'tcsh', 'su'])
+
 /**
  * Extract the executable command name and arguments from unquoted tokens,
- * stripping environment assignments (FOO=1) and wrapper commands (sudo, env, command, etc.).
+ * stripping environment assignments (FOO=1) and wrapper commands (sudo, env, command, etc.)
+ * with comprehensive flag/value option handling.
  * @param {string[]} tokens
  * @returns {{cmdName: string, args: string[]}}
  */
@@ -368,35 +533,107 @@ export function getCommandFromTokens(tokens) {
     idx++
   }
 
-  // Skip wrapper commands: sudo, env, command, builtin, exec, nohup, timeout
   while (idx < tokens.length) {
     const raw = tokens[idx]
     const base = raw.replace(/^.*[/\\]/, '')
+
     if (base === 'sudo' || base === 'doas') {
       idx++
-      while (idx < tokens.length && tokens[idx].startsWith('-')) {
-        if (tokens[idx] === '-u' || tokens[idx] === '-g' || tokens[idx] === '-p') idx += 2
-        else idx++
+      while (idx < tokens.length) {
+        const tok = tokens[idx]
+        if (tok === '--') { idx++; break }
+        if (tok.startsWith('--')) {
+          const eqIdx = tok.indexOf('=')
+          const optName = eqIdx >= 0 ? tok.slice(0, eqIdx) : tok
+          if (SUDO_VALUE_OPTIONS.has(optName)) {
+            if (eqIdx < 0) idx += 2
+            else idx += 1
+            continue
+          }
+          idx++
+          continue
+        }
+        if (tok.startsWith('-') && tok !== '-') {
+          const optName = tok.slice(0, 2)
+          if (SUDO_VALUE_OPTIONS.has(optName)) {
+            if (tok.length === 2) idx += 2
+            else idx += 1
+            continue
+          }
+          idx++
+          continue
+        }
+        break
       }
       continue
     }
+
     if (base === 'env') {
       idx++
-      while (idx < tokens.length && (tokens[idx].startsWith('-') || /^[a-zA-Z_][a-zA-Z0-9_]*=/.test(tokens[idx]))) {
+      while (idx < tokens.length) {
+        const tok = tokens[idx]
+        if (tok === '--') { idx++; break }
+        if (/^[a-zA-Z_][a-zA-Z0-9_]*=/.test(tok)) { idx++; continue }
+        if (tok.startsWith('--')) {
+          const eqIdx = tok.indexOf('=')
+          const optName = eqIdx >= 0 ? tok.slice(0, eqIdx) : tok
+          if (ENV_VALUE_OPTIONS.has(optName)) {
+            if (eqIdx < 0) idx += 2
+            else idx += 1
+            continue
+          }
+          idx++
+          continue
+        }
+        if (tok.startsWith('-') && tok !== '-') {
+          const optName = tok.slice(0, 2)
+          if (ENV_VALUE_OPTIONS.has(optName)) {
+            if (tok.length === 2) idx += 2
+            else idx += 1
+            continue
+          }
+          idx++
+          continue
+        }
+        break
+      }
+      continue
+    }
+
+    if (base === 'exec') {
+      idx++
+      while (idx < tokens.length) {
+        const tok = tokens[idx]
+        if (tok === '--') { idx++; break }
+        if (EXEC_VALUE_OPTIONS.has(tok)) { idx += 2; continue }
+        if (tok.startsWith('-') && tok !== '-') { idx++; continue }
+        break
+      }
+      continue
+    }
+
+    if (base === 'timeout') {
+      idx++
+      while (idx < tokens.length) {
+        const tok = tokens[idx]
+        if (tok === '--') { idx++; break }
+        if (TIMEOUT_VALUE_OPTIONS.has(tok)) { idx += 2; continue }
+        if (tok.startsWith('-') && tok !== '-') { idx++; continue }
+        if (/^\d+[smhd]?$/i.test(tok)) { idx++; continue }
+        break
+      }
+      continue
+    }
+
+    if (base === 'command' || base === 'builtin' || base === 'nohup') {
+      idx++
+      while (idx < tokens.length && tokens[idx].startsWith('-')) {
+        if (tokens[idx] === '--') { idx++; break }
         idx++
       }
       continue
     }
-    if (base === 'command' || base === 'builtin' || base === 'exec' || base === 'nohup') {
-      idx++
-      while (idx < tokens.length && tokens[idx].startsWith('-')) idx++
-      continue
-    }
-    if (base === 'timeout') {
-      idx++
-      while (idx < tokens.length && (tokens[idx].startsWith('-') || /^\d+[smhd]?$/.test(tokens[idx]))) idx++
-      continue
-    }
+
     break
   }
 
@@ -441,7 +678,7 @@ function checkDestructiveRm(cmdName, args, rawCmd) {
 
   if (isRecursive && isForce) {
     for (const target of targets) {
-      if (isRootOrHomeTarget(target)) {
+      if (isRootOrHomeTarget(target) || target.includes('__subshell__')) {
         return {
           rule: /~|\$\{?HOME\}?/.test(target) ? 'rm -rf 用户主目录' : 'rm -rf 根目录',
           command: rawCmd
@@ -480,7 +717,7 @@ function checkDestructiveChmod(cmdName, args, rawCmd) {
 
   if (isRecursive && (mode === '777' || mode === 'a+rwx' || mode === '0777' || mode === 'ugo+rwx')) {
     for (const target of targets) {
-      if (isRootOrHomeTarget(target)) {
+      if (isRootOrHomeTarget(target) || target.includes('__subshell__')) {
         return {
           rule: 'chmod -R 777 根目录',
           command: rawCmd
@@ -540,6 +777,72 @@ function checkDiskFormatOrDirectWrite(cmdName, args, rawCmd) {
   return null
 }
 
+function checkFindCommand(cmdName, args, rawCmd, rules, depth = 0) {
+  if (cmdName !== 'find') return null
+  const hasRootOrHomeTarget = args.some((arg) => isRootOrHomeTarget(arg))
+
+  // 1. find / -delete
+  if (hasRootOrHomeTarget && args.includes('-delete')) {
+    return { rule: 'rm -rf 根目录', command: rawCmd }
+  }
+
+  // 2. find / -exec rm -rf {} \;
+  const execIdx = args.findIndex((a) => a === '-exec' || a === '-execdir' || a === '-ok' || a === '-okdir')
+  if (execIdx >= 0) {
+    const execArgs = args.slice(execIdx + 1)
+    const endIdx = execArgs.findIndex((a) => a === ';' || a === '+' || a === '\\;')
+    const subCmdArgs = endIdx >= 0 ? execArgs.slice(0, endIdx) : execArgs
+    if (subCmdArgs.length > 0) {
+      const subCmd = subCmdArgs.join(' ')
+      const effectiveCmd = hasRootOrHomeTarget ? subCmd.replace(/\{\}/g, '/') : subCmd
+      const hit = checkDangerCommand(effectiveCmd, rules, depth + 1)
+      if (hit) return hit
+    }
+  }
+
+  return null
+}
+
+function checkShellExecCommand(cmdName, args, rawCmd, rules, depth = 0) {
+  if (!SHELL_INTERPRETERS.has(cmdName)) return null
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg.startsWith('--command=')) {
+      const payload = arg.slice('--command='.length)
+      if (payload) {
+        const hit = checkDangerCommand(payload, rules, depth + 1)
+        if (hit) return hit
+      }
+      continue
+    }
+    if (arg === '-c' || arg === '--command') {
+      const payload = args[i + 1]
+      if (payload) {
+        const hit = checkDangerCommand(payload, rules, depth + 1)
+        if (hit) return hit
+      }
+      continue
+    }
+    // Check attached -c payload e.g. -c'rm -rf /' (unquoted to -crm -rf /) or -lc'rm -rf /'
+    const attachedMatch = arg.match(/^(-[a-zA-Z]*c)(.*)$/)
+    if (attachedMatch) {
+      const attachedContent = attachedMatch[2]
+      if (attachedContent) {
+        const hit = checkDangerCommand(attachedContent, rules, depth + 1)
+        if (hit) return hit
+        const fullAttached = [attachedContent, ...args.slice(i + 1)].join(' ')
+        const fullHit = checkDangerCommand(fullAttached, rules, depth + 1)
+        if (fullHit) return fullHit
+      } else if (args[i + 1]) {
+        const hit = checkDangerCommand(args[i + 1], rules, depth + 1)
+        if (hit) return hit
+      }
+      continue
+    }
+  }
+  return null
+}
+
 function checkForkBomb(segment) {
   if (/(?::\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;?\s*:|fork\s*\(\s*\)\s*\{\s*fork\s*\|\s*fork\s*&\s*\}\s*;?\s*fork)/.test(segment)) {
     return { rule: 'fork 炸弹', command: segment }
@@ -549,7 +852,8 @@ function checkForkBomb(segment) {
 
 /**
  * Compile a single allow pattern enforcing full-segment anchor matching
- * so `allow: ["git status"]` cannot match `git status rm -rf /` or `git status $(rm -rf /)`.
+ * via `^(?:pattern)$` so `allow: ["^git status|git log$"]` or `allow: ["git status"]`
+ * cannot match `git status rm -rf /` or `git status $(rm -rf /)`.
  * @param {string} pattern
  * @returns {RegExp | null}
  */
@@ -558,9 +862,6 @@ export function compileAllowPattern(pattern) {
   const trimmed = pattern.trim()
   if (!trimmed) return null
   try {
-    if (trimmed.startsWith('^') && trimmed.endsWith('$')) return new RegExp(trimmed)
-    if (trimmed.startsWith('^')) return new RegExp(`${trimmed}$`)
-    if (trimmed.endsWith('$')) return new RegExp(`^${trimmed}`)
     return new RegExp(`^(?:${trimmed})$`)
   } catch {
     return null
@@ -568,7 +869,7 @@ export function compileAllowPattern(pattern) {
 }
 
 /**
- * Compile a rules object from user config (optional overlay on built-ins).
+ * Compile a rules object from user config (user rules extend built-in AST checks).
  * @param {{enabled?: boolean, block?: string[], allow?: string[]}} [config]
  * @returns {{enabled: boolean, block: {label:string, re:RegExp}[], allow: RegExp[]}}
  */
@@ -608,27 +909,30 @@ export async function loadDangerRules(rulesPathOrCwd = process.cwd()) {
  * Evaluate a single command segment against all safety rules.
  * @param {string} segment
  * @param {object} rules
+ * @param {number} [depth=0]
  * @returns {{rule: string, command: string} | null}
  */
-function evaluateSegment(segment, rules) {
+function evaluateSegment(segment, rules, depth = 0) {
+  if (depth > MAX_RECURSION_DEPTH) {
+    return { rule: '复合命令嵌套过深，已保守拦截', command: String(segment ?? '').slice(0, 200) }
+  }
   const raw = String(segment ?? '').trim()
   if (!raw) return null
 
-  // 1. Fork bomb check on raw segment
-  const forkHit = checkForkBomb(raw)
-  if (forkHit) return forkHit
-
-  // 2. Extract embedded subshells (e.g. $(rm -rf /) or `r\m -rf /`)
-  // and recursively check each subshell
+  // 1. Extract embedded subshells with comment awareness
   const { main, subshells } = extractSubshells(raw)
   for (const sub of subshells) {
-    const subHit = checkDangerCommand(sub, rules)
+    const subHit = checkDangerCommand(sub, rules, depth + 1)
     if (subHit) return subHit
   }
 
-  // 3. Strip comments from main command
+  // 2. Strip comments from main
   const clean = stripComments(main)
   if (!clean) return null
+
+  // 3. Fork bomb check on the uncommented segment
+  const forkHit = checkForkBomb(clean)
+  if (forkHit) return forkHit
 
   // 4. Check if the entire clean segment matches any allow rule
   const isAllowed = rules.allow.some((allow) => allow.test(clean))
@@ -654,7 +958,30 @@ function evaluateSegment(segment, rules) {
   const diskHit = checkDiskFormatOrDirectWrite(cmdName, args, clean)
   if (diskHit) return diskHit
 
-  // 7. Custom user-defined block patterns
+  const findHit = checkFindCommand(cmdName, args, clean, rules, depth)
+  if (findHit) return findHit
+
+  const shellExecHit = checkShellExecCommand(cmdName, args, clean, rules, depth)
+  if (shellExecHit) return shellExecHit
+
+  // 7. Conservative fallback: scan tokens for embedded destructive commands even if wrapper is unknown
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i].toLowerCase()
+    if (t === 'rm') {
+      const hit = checkDestructiveRm('rm', tokens.slice(i + 1), clean)
+      if (hit) return hit
+    }
+    if (t === 'chmod') {
+      const hit = checkDestructiveChmod('chmod', tokens.slice(i + 1), clean)
+      if (hit) return hit
+    }
+    if (t === 'git' && tokens[i + 1] === 'push') {
+      const hit = checkDangerousGitPush('git', tokens.slice(i + 1), clean)
+      if (hit) return hit
+    }
+  }
+
+  // 8. Custom user-defined block patterns
   for (const customRule of rules.block) {
     if (customRule.re.test(clean)) {
       return { rule: customRule.label, command: clean }
@@ -666,25 +993,49 @@ function evaluateSegment(segment, rules) {
 
 /**
  * Pure rule check against a raw command line (supports compound commands & subshell recursion).
+ * @param {string} command
+ * @param {object} rules
+ * @param {number} [depth=0]
  * @returns {{rule:string, command:string} | null}
  */
-export function checkDangerCommand(command, rules) {
-  const cmd = String(command ?? '')
-  const plain = cmd.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim()
-  if (!plain || !rules || rules.enabled === false) return null
-
-  // 1. Check if the entire raw command line is a fork bomb
-  const forkHit = checkForkBomb(plain)
-  if (forkHit) return forkHit
-
-  // 2. Check segment-by-segment
-  const segments = splitShellSegments(plain)
-  for (const segment of segments) {
-    const hit = evaluateSegment(segment, rules)
-    if (hit) return hit
+export function checkDangerCommand(command, rules, depth = 0) {
+  if (depth > MAX_RECURSION_DEPTH) {
+    return { rule: '复合命令嵌套过深，已保守拦截', command: String(command ?? '').slice(0, 200) }
   }
+  try {
+    const cmd = String(command ?? '')
+    if (cmd.length > MAX_COMMAND_LENGTH) {
+      return { rule: '命令长度超限，已保守拦截', command: cmd.slice(0, 200) }
+    }
+    const plain = cmd.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim()
+    if (!plain || !rules || rules.enabled === false) return null
 
-  return null
+    // 1. Extract subshells on the un-split command line with comment-awareness
+    const { main, subshells } = extractSubshells(plain)
+    for (const sub of subshells) {
+      const subHit = checkDangerCommand(sub, rules, depth + 1)
+      if (subHit) return subHit
+    }
+
+    // 2. Strip comments from main
+    const uncommented = stripComments(main)
+    if (!uncommented) return null
+
+    // 3. Check fork bomb on the uncommented main command line
+    const forkHit = checkForkBomb(uncommented)
+    if (forkHit) return forkHit
+
+    // 4. Check segment-by-segment
+    const segments = splitShellSegments(uncommented)
+    for (const segment of segments) {
+      const hit = evaluateSegment(segment, rules, depth)
+      if (hit) return hit
+    }
+
+    return null
+  } catch {
+    return null
+  }
 }
 
 /** Extract the shell command string from tool arguments (bash tool arg shapes). */

@@ -2363,9 +2363,52 @@ const blockedCommands = [
   ['rm -rf /*', /根目录/],
   ['rm -rf /.*', /根目录/],
   ['sudo rm -rf /*', /根目录/],
+  ['sudo --user root rm -rf /', /根目录/],
+  ['sudo -u admin rm -rf /', /根目录/],
+  ['sudo -C 3 rm -rf /', /根目录/],
+  ['env -u SAFE rm -rf /', /根目录/],
+  ['env --chdir /tmp rm -rf /', /根目录/],
+  ['exec -a cleanup rm -rf /', /根目录/],
+  ['timeout 10s rm -rf /', /根目录/],
+  ['timeout -k 5s 10s rm -rf /', /根目录/],
+  ['sh -c "rm -rf /"', /根目录/],
+  ['sh -c"rm -rf /"', /根目录/],
+  ['sh -lc "rm -rf /"', /根目录/],
+  ['sh -lc\'rm -rf /\'', /根目录/],
+  ['bash -c "rm -rf /"', /根目录/],
+  ['bash -c\'rm -rf /\'', /根目录/],
+  ['bash -c\'rm -rf\' /', /根目录/],
+  ['bash -c$\'rm -rf /\'', /根目录/],
+  ['bash -c $\'rm -rf /\'', /根目录/],
+  ['bash -c$\'\\u0072\\u006d -rf /\'', /根目录/],
+  ['bash -c$\'\\162\\155 -rf /\'', /根目录/],
+  ['bash -c$\'\\0162\\0155 -rf /\'', /根目录/],
+  ['bash -c$\'\\U00000072\\U0000006d -rf /\'', /根目录/],
+  ['$\'rm\' -rf /', /根目录/],
+  ['$\'\\x72\\x6d\' -rf /', /根目录/],
+  ['$"rm" -rf /', /根目录/],
+  ['bash -ec "rm -rf /"', /根目录/],
+  ['su -c "rm -rf /"', /根目录/],
+  ['sudo sh -c "rm -rf /"', /根目录/],
+  ['(rm -rf /)', /根目录/],
+  ['find / -exec rm -rf {} \\;', /根目录/],
+  ['find . -exec rm -rf / \\;', /根目录/],
+  ['find / -delete', /根目录/],
+  ['rm -rf $(echo /)', /根目录/],
+  ['rm -rf /$(echo tmp)', /根目录/],
+  ['rm -rf ./a/../../', /根目录/],
+  ['rm -rf a/../../b', /根目录/],
+  ['rm -rf ../*', /根目录/],
+  ['rm -rf /tmp/../', /根目录/],
   ['rm -rf / && echo done', /根目录/],
   ['echo $(rm -rf /)', /根目录/],
+  ['echo $(rm -rf / # c)', /根目录/],
+  ['echo $(rm -rf /; # c)', /根目录/],
+  ['echo $(rm -rf /; echo done)', /根目录/],
+  ['echo $(echo safe; rm -rf /)', /根目录/],
   ['echo `r\\m -rf /`', /根目录/],
+  ['echo `rm -rf / # c`', /根目录/],
+  ['echo `rm -rf /; echo done`', /根目录/],
   ['echo "$(rm -rf ~)"', /主目录/],
   ['rm -rf ~', /主目录/],
   ['rm -rf ~/*', /主目录/],
@@ -2403,6 +2446,13 @@ const safeCommands = [
   'git status',
   'ls -la /',
   'echo safe # rm -rf /',
+  'echo hi # :(){ :|:& };:',
+  'echo hi # $(rm -rf /)',
+  'echo hi # `rm -rf /`',
+  'find . -name "*.js"',
+  'sh -c "git status"',
+  'bash -c$\'\\Uffffffff\'',
+  'bash -c$\'\\U00110000\'',
   'node -e "console.log(\'git push --force origin main\')"',
   'grep -rn "rm -rf /" src/',
   'echo "rm -rf /"'
@@ -2412,6 +2462,31 @@ for (const cmd of safeCommands) {
 }
 assert.equal(checkDangerCommand('', defaultRules), null, 'Empty command passes')
 assert.equal(checkDangerCommand(undefined, defaultRules), null, 'Undefined command passes')
+
+// Deep recursion and stack safety test (CR-046, CR-047, CR-048)
+let deepNested = 'echo safe'
+for (let i = 0; i < 50; i++) {
+  deepNested = '$(' + deepNested + ')'
+}
+assert.doesNotThrow(() => {
+  const hit = checkDangerCommand(deepNested, defaultRules)
+  assert.ok(hit, 'Deeply nested command (depth > 32) must be fail-closed intercepted')
+  assert.match(hit.rule, /嵌套过深/)
+})
+
+let deepBlocked = 'rm -rf /'
+for (let i = 0; i < 20; i++) {
+  deepBlocked = '$(' + deepBlocked + ')'
+}
+assert.ok(checkDangerCommand(deepBlocked, defaultRules), 'Nested danger command within recursion limit is blocked')
+
+// Over-length command test (CR-048)
+const overLengthCmd = 'echo ' + 'a'.repeat(150000) + ' && rm -rf /'
+assert.doesNotThrow(() => {
+  const hit = checkDangerCommand(overLengthCmd, defaultRules)
+  assert.ok(hit, 'Command exceeding length limit must be fail-closed intercepted')
+  assert.match(hit.rule, /长度超限/)
+})
 
 // User allow-list overrides a built-in block for matching segment
 const allowRules = compileDangerRules({ block: [], allow: ['^rm -rf /$'] })
@@ -2424,6 +2499,13 @@ const unanchoredAllowRules = compileDangerRules({ block: [], allow: ['git status
 assert.equal(checkDangerCommand('git status', unanchoredAllowRules), null, 'Exact allowed command passes')
 assert.ok(checkDangerCommand('git status $(rm -rf /)', unanchoredAllowRules), 'Subshell injection in allowed command must be blocked')
 assert.ok(checkDangerCommand('git status `r\\m -rf /`', unanchoredAllowRules), 'Backtick subshell injection in allowed command must be blocked')
+
+// Alternation in allow pattern MUST NOT escape anchor boundaries
+const alternationAllowRules = compileDangerRules({ block: [], allow: ['^git status|git log$', '^git status|echo safe'] })
+assert.equal(checkDangerCommand('git status', alternationAllowRules), null, 'Exact first branch passes')
+assert.equal(checkDangerCommand('git log', alternationAllowRules), null, 'Exact second branch passes')
+assert.ok(checkDangerCommand('git status rm -rf /', alternationAllowRules), 'Alternation allow pattern must not allow trailing danger commands')
+assert.ok(checkDangerCommand('git log rm -rf /', alternationAllowRules), 'Alternation allow pattern must not allow trailing danger commands on branch 2')
 
 // Compound command: allow rule for one segment must NOT permit a dangerous sibling segment
 const compoundAllowRules = compileDangerRules({ block: [], allow: ['git status', 'echo safe'] })
