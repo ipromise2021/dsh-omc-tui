@@ -11,7 +11,7 @@
 
 保留终端 Scrollback，提供自主决策视觉 Subagent、多模态图片直贴、行内审批、Plan/Jobs、模型选择和上下文状态栏。
 
-[界面与设计说明](PRODUCT_SHOWCASE.md) · [兼容性记录](HARNESS_COMPATIBILITY.md) · [变更日志](CHANGELOG.md)
+[架构与全功能实现](ARCHITECTURE.md) · [界面与设计说明](PRODUCT_SHOWCASE.md) · [兼容性记录](HARNESS_COMPATIBILITY.md) · [变更日志](CHANGELOG.md)
 
 </div>
 
