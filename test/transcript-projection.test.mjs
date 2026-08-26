@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { projectTranscript, formatEvents, mergeTranscriptDocuments } from '../src/renderer/transcript.js'
+import { projectTranscript, formatEvents, mergeTranscriptDocuments, hasTurnHeaderInCurrentTurn } from '../src/renderer/transcript.js'
 import { groupActivitySpans } from '../src/renderer/activity.js'
 import { widthOf, visibleOf } from '../src/renderer/ansi.js'
 
@@ -194,5 +194,92 @@ const interDoc = projectTranscript(intermediateActivityEvents, 80, {
 const interText = interDoc.rows.join('\n')
 assert.ok(!interText.includes('✗ failed'), 'Intermediate assistant message without error must NOT append ✗ failed')
 assert.ok(interText.includes('Continuing inspection with b.js...'))
+
+// 12. Single top turn header in multi-step tool loops and active stream
+const multiStepLoopEvents = [
+  { seq: 1, type: 'user/message', time: 1000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Step 1' }] } },
+  { seq: 2, type: 'turn/start', time: 1050 },
+  { seq: 3, type: 'assistant/message', time: 1100, data: { message: { content: 'Let me run a command first.' } } },
+  { seq: 4, type: 'tool/call', time: 1150, data: { callId: 'c1', name: 'bash', arguments: JSON.stringify({ command: 'ls' }) } },
+  { seq: 5, type: 'tool/result', time: 1200, data: { callId: 'c1', message: { content: 'file.txt' } } },
+  { seq: 6, type: 'turn/end', time: 1250 },
+  { seq: 7, type: 'turn/start', time: 1300 }
+]
+
+const loopDocWithActiveStream = projectTranscript(multiStepLoopEvents, 80, {
+  activeStream: {
+    reasoning: 'Analyzing the directory listing...',
+    text: 'Here is what I found.',
+    model: 'deepseek-v4-flash',
+    time: 1350
+  }
+})
+
+const turnHeaders = loopDocWithActiveStream.blocks.filter(b => b.kind === 'turn-header')
+assert.equal(turnHeaders.length, 1, 'Only exactly 1 turn header must exist across multi-step assistant loop and active stream')
+
+// Second user prompt starts a second turn header
+const secondTurnEvents = [
+  ...multiStepLoopEvents,
+  { seq: 8, type: 'assistant/message', time: 1400, data: { message: { content: 'Here is what I found.' } } },
+  { seq: 9, type: 'turn/end', time: 1450 },
+  { seq: 10, type: 'user/message', time: 2000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Step 2' }] } },
+  { seq: 11, type: 'turn/start', time: 2050 },
+  { seq: 12, type: 'assistant/message', time: 2100, data: { message: { content: 'Second response.' } } }
+]
+const twoTurnDoc = projectTranscript(secondTurnEvents, 80)
+const twoTurnHeaders = twoTurnDoc.blocks.filter(b => b.kind === 'turn-header')
+assert.equal(twoTurnHeaders.length, 2, 'Two user messages must produce exactly 2 turn headers')
+
+// 13. Layered base + live document projection and merge integration test
+{
+  // 13.1. Base has user message and already output an assistant message (has turn-header)
+  const baseEventsWithHeader = [
+    { seq: 1, type: 'user/message', time: 1000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Task 1' }] } },
+    { seq: 2, type: 'assistant/message', time: 1100, data: { message: { content: 'Starting task.' } } },
+    { seq: 3, type: 'tool/call', time: 1200, data: { callId: 'c1', name: 'bash', arguments: JSON.stringify({ command: 'echo test' }) } },
+    { seq: 4, type: 'tool/result', time: 1300, data: { callId: 'c1', message: { content: 'test' } } }
+  ]
+  const baseDoc = projectTranscript(baseEventsWithHeader, 80)
+  assert.equal(hasTurnHeaderInCurrentTurn(baseDoc), true, 'Base document has turn-header in current turn')
+
+  const liveDocSuppressed = projectTranscript([], 80, {
+    activeStream: {
+      reasoning: 'Continuing deeper analysis...',
+      text: 'Final result.',
+      model: 'deepseek-v4-flash',
+      time: 1400
+    },
+    suppressTurnHeader: hasTurnHeaderInCurrentTurn(baseDoc)
+  })
+  const liveHeaders = liveDocSuppressed.blocks.filter(b => b.kind === 'turn-header')
+  assert.equal(liveHeaders.length, 0, 'Live document must NOT generate redundant header when base already has one')
+
+  const mergedDoc = mergeTranscriptDocuments([baseDoc, liveDocSuppressed])
+  const mergedHeaders = mergedDoc.blocks.filter(b => b.kind === 'turn-header')
+  assert.equal(mergedHeaders.length, 1, 'Merged document must contain exactly 1 turn-header across base and live tail')
+
+  // 13.2. Base has only user message (no assistant header yet)
+  const baseEventsUserOnly = [
+    { seq: 1, type: 'user/message', time: 1000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Fresh Question' }] } }
+  ]
+  const baseDocUserOnly = projectTranscript(baseEventsUserOnly, 80)
+  assert.equal(hasTurnHeaderInCurrentTurn(baseDocUserOnly), false, 'Base document has no turn-header yet')
+
+  const liveDocWithHeader = projectTranscript([], 80, {
+    activeStream: {
+      reasoning: 'First reasoning step...',
+      model: 'deepseek-v4-flash',
+      time: 1100
+    },
+    suppressTurnHeader: hasTurnHeaderInCurrentTurn(baseDocUserOnly)
+  })
+  const liveHeadersFirst = liveDocWithHeader.blocks.filter(b => b.kind === 'turn-header')
+  assert.equal(liveHeadersFirst.length, 1, 'Live document must generate initial turn-header when base has none')
+
+  const mergedDocFirst = mergeTranscriptDocuments([baseDocUserOnly, liveDocWithHeader])
+  const mergedHeadersFirst = mergedDocFirst.blocks.filter(b => b.kind === 'turn-header')
+  assert.equal(mergedHeadersFirst.length, 1, 'Merged document has exactly 1 initial turn-header')
+}
 
 console.log('✓ transcript projection unit tests passed')

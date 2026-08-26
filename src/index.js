@@ -44,6 +44,7 @@ import {
   formatEvents,
   projectTranscript,
   mergeTranscriptDocuments,
+  hasTurnHeaderInCurrentTurn,
   groupActivitySpans,
   ViewportState,
   ScreenRenderer,
@@ -1072,12 +1073,14 @@ export class TuiApp {
   }
 
   projectLiveStreamDocument(columns = process.stdout.columns || 80) {
+    const suppressTurnHeader = hasTurnHeaderInCurrentTurn(this.baseTranscriptDocument)
     return projectTranscript([], columns, {
       expandedKeys: this.expandedKeys,
       activeModel: this.activeModel,
       defaultModel: this.agent?.options?.model || '',
       ANSI,
-      activeStream: this.activeStreamPayload()
+      activeStream: this.activeStreamPayload(),
+      suppressTurnHeader
     })
   }
 

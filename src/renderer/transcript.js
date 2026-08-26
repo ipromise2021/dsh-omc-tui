@@ -55,7 +55,7 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
 
   // First group events into semantic items (activity spans, user messages, etc.)
   const groupedItems = groupActivitySpans(events)
-  let turnHeaderPrinted = false
+  let turnHeaderPrinted = Boolean(options.suppressTurnHeader)
   let lastTurnStartTime = undefined
 
   for (let itemIndex = 0; itemIndex < groupedItems.length; itemIndex++) {
@@ -208,7 +208,6 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
 
     switch (item.kind) {
       case 'turn/start': {
-        turnHeaderPrinted = false
         break
       }
 
@@ -389,7 +388,6 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
       }
 
       case 'turn/end': {
-        turnHeaderPrinted = false
         const rows = []
         const logicalLines = []
 
@@ -694,4 +692,24 @@ function finalizeTranscriptDocument(blocks, flatRows, layoutMap) {
 export function formatEvents(events, columns, options = {}) {
   const result = projectTranscript(events, columns, options)
   return result.rows
+}
+
+/**
+ * Checks if the current (last) turn in the document already contains a turn-header.
+ * Scans backwards from the end of blocks:
+ * - If a 'turn-header' is found first, returns true (the current turn already has a header).
+ * - If a 'user' block is found first (or doc is empty), returns false.
+ */
+export function hasTurnHeaderInCurrentTurn(doc) {
+  if (!doc?.blocks?.length) return false
+  for (let i = doc.blocks.length - 1; i >= 0; i--) {
+    const block = doc.blocks[i]
+    if (block.kind === 'turn-header') {
+      return true
+    }
+    if (block.kind === 'user') {
+      return false
+    }
+  }
+  return false
 }

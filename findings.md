@@ -39,6 +39,7 @@
 | CR-064 | P2 | resolved | 模型面板 | 简单连续子串匹配与命中高亮 |
 | CR-065 | P2 | resolved | ScreenRenderer | 差分渲染行尾追加 SGR reset 防止颜色样式外溢 |
 | CR-066 | P2 | resolved | `/status` 命令 | 上下文统计与 statusline 对齐使用 activeTokens 避免误报超限 |
+| CR-067 | P1 | resolved | 转写投影 | 分层投影（base+live）Turn Header 重复与闪现消除 |
 
 ## 详细发现
 
@@ -701,3 +702,12 @@
 - **影响：** 用户在首轮或已清空会话中查看 `/status` 时误判上下文占用。
 - **建议：** 使用 `Number.isFinite(usage.recentInput)` 精确处理 0 值，并与 statusline 一致优先展示当前轮次有效上下文。
 - **关闭验证：** 修正了判断逻辑并在 `usage.recentInput === 0` 时正确输出 0% 占用；单元测试断言验证通过。
+
+### CR-067：分层投影（base+live）Turn Header 重复与闪现消除
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/renderer/transcript.js:55-60,696-715`、`src/index.js:1072-1082`
+- **现象：** 生产路径将 durable events 投影为 base document，再使用空事件独立投影 activeStream 为 live document；live document 原先独立从 `turnHeaderPrinted = false` 开始投影，导致在 base document 已存在 `turn-header` 时产生重复的 `active-header`，合并后出现重复标题与闪现消失。
+- **影响：** 多步循环或流式回答过程中在中间突兀弹出并随后消失一个重复的 `DSH model · time` 标题行。
+- **建议：** 仅在接收到新的 `user/message` 时重置 `turnHeaderPrinted`；并在 `projectLiveStreamDocument` 时通过 `hasTurnHeaderInCurrentTurn(baseDoc)` 计算当前回合是否已有标题并向 live 投影透传 `suppressTurnHeader`。
+- **关闭验证：** 实现了 `hasTurnHeaderInCurrentTurn` 与 `suppressTurnHeader` 透传，并在单测中通过 `projectTranscript` + `mergeTranscriptDocuments` 真实分层合并断言验证通过。
