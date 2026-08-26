@@ -1,6 +1,6 @@
 import { ANSI as defaultAnsi } from '../renderer/themes.js'
 
-export const SETTINGS_KEYS = ['theme', 'statusline', 'contextMode', 'contextWarnAt', 'contextCriticalAt', 'autoCompact', 'promptSuggestions', 'hudGit', 'hudSpeed', 'hudTools', 'persistHistory', 'importSystemShellHistory']
+export const SETTINGS_KEYS = ['theme', 'statusline', 'contextMode', 'contextWarnAt', 'contextCriticalAt', 'autoCompact', 'autoRecap', 'promptSuggestions', 'hudGit', 'hudSpeed', 'hudTools', 'persistHistory', 'importSystemShellHistory']
 
 export function renderSettingsPicker(settingsPicker, preferences, ANSI = defaultAnsi) {
   const descriptions = {
@@ -10,6 +10,7 @@ export function renderSettingsPicker(settingsPicker, preferences, ANSI = default
     'context warning': 'amber warning threshold (percent full)',
     'context critical': 'coral critical threshold (percent full)',
     'auto compact': 'run /compact after a turn reaches the critical threshold',
+    'auto recap': 'show 1-line recap after session resume or 15m idle gap',
     'prompt suggestions': 'model-backed gray next-prompt suggestion after a turn',
     'statusline git': 'show git branch & dirty status in statusline',
     'statusline speed': 'show token speed & turn timing in statusline',
@@ -24,6 +25,7 @@ export function renderSettingsPicker(settingsPicker, preferences, ANSI = default
     ['context warning', `${preferences.contextWarnAt ?? 60}%`, descriptions['context warning']],
     ['context critical', `${preferences.contextCriticalAt ?? 80}%`, descriptions['context critical']],
     ['auto compact', (preferences.autoCompact ?? true) ? 'on' : 'off', descriptions['auto compact']],
+    ['auto recap', (preferences.autoRecap ?? true) ? 'on' : 'off', descriptions['auto recap']],
     ['prompt suggestions', (preferences.promptSuggestions ?? false) ? 'on' : 'off', descriptions['prompt suggestions']],
     ['statusline git', (preferences.hudGit ?? true) ? 'on' : 'off', descriptions['statusline git']],
     ['statusline speed', (preferences.hudSpeed ?? true) ? 'on' : 'off', descriptions['statusline speed']],

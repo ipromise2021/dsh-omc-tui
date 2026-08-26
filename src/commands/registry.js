@@ -157,7 +157,7 @@ export function handleLocalCommand(app, commandName, line = '') {
       void app.showHooks()
       break
     case 'recap':
-      handleRecap(app)
+      handleRecap(app, line)
       break
     case 'status':
       handleStatus(app)

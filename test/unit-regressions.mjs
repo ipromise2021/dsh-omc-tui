@@ -2244,7 +2244,8 @@ sessionIsolationApp.commitSessionState({
 })
 
 assert.equal(sessionIsolationApp.agent, candidateTargetAgent, 'Agent updated to candidate')
-assert.equal(sessionIsolationApp.localLog.length, 0, 'localLog must be empty after session commit')
+assert.ok(!sessionIsolationApp.localLog.some((e) => e.text === 'stale log from previous session'), 'stale localLog must be cleared after session commit')
+assert.equal(sessionIsolationApp.localLog.length, 1, 'localLog contains the fresh resumed session recap')
 assert.equal(sessionIsolationApp.expandedKeys.size, 0, 'expandedKeys must be reset after session commit')
 assert.equal(sessionIsolationApp.streamBuffer, '', 'streamBuffer must be empty after session commit')
 assert.equal(sessionIsolationApp.currentTurnReasoning, null, 'currentTurnReasoning must be null after session commit')
@@ -3325,6 +3326,300 @@ inertDispose()
   const { handleStatus } = await import('../src/commands/status.js')
   handleStatus(testStatusApp)
   assert.ok(statusLogOutput.includes('0 / 100.0k tokens (0%)') || statusLogOutput.includes('0 / 100k tokens (0%)') || statusLogOutput.includes('0 tokens (0%)'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
+}
+
+// ── Session Recap Summary & Auto-Recap after 15m idle gap ────────────────
+{
+  const { buildSessionRecapSummary, handleRecap } = await import('../src/commands/recap.js')
+  const { projectTranscript } = await import('../src/renderer/transcript.js')
+
+  const recapEvents = [
+    { seq: 1, type: 'user/message', time: 1000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '加固路径检查与回滚' }] } },
+    { seq: 2, type: 'tool/call', time: 2000, data: { name: 'edit_file', arguments: JSON.stringify({ targetFile: 'src/index.js' }) } },
+    { seq: 3, type: 'tool/call', time: 3000, data: { name: 'edit_file', arguments: JSON.stringify({ targetFile: 'src/renderer/transcript.js' }) } },
+    { seq: 4, type: 'turn/end', time: 4000, data: { durationMs: 3000 } }
+  ]
+
+  // 1. buildSessionRecapSummary output check (without explicit model next step)
+  const summary = buildSessionRecapSummary(recapEvents)
+  assert.ok(summary.includes('加固路径检查与回滚'), 'Recap summary contains user prompt goal')
+  assert.ok(summary.includes('index.js'), 'Recap summary mentions touched files')
+
+  // 1.1 buildSessionRecapSummary extracts model next-step when present in assistant/message
+  const recapEventsWithModelStep = [
+    ...recapEvents.slice(0, 3),
+    { seq: 4, type: 'assistant/message', data: { message: { content: '已完成加固！\n下一步可运行 npm test 进行测试。' } } },
+    { seq: 5, type: 'turn/end', time: 4000, data: { durationMs: 3000 } }
+  ]
+  const summaryWithStep = buildSessionRecapSummary(recapEventsWithModelStep)
+  assert.ok(summaryWithStep.includes('下一步可运行 npm test'), 'Recap extracts model-driven next step dynamically')
+
+  // 1.2 Control sequence sanitization (safe against OSC 52, ANSI escapes in tool args & messages)
+  const eventsWithEscapes = [
+    { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '\x1b[31m危险输入\x1b[0m' }] } },
+    { seq: 2, type: 'tool/call', data: { name: 'edit', arguments: JSON.stringify({ file_path: '\x1b]52;c;bWFsaWNpb3Vz\x07evil.js' }) } },
+    { seq: 3, type: 'assistant/message', data: { message: { content: '\x1b[32m建议\x1b[0m：检查安全性' } } }
+  ]
+  const safeSummary = buildSessionRecapSummary(eventsWithEscapes)
+  assert.ok(!safeSummary.includes('\x1b'), 'No raw ESC control sequences in safe summary')
+  assert.ok(safeSummary.includes('evil.js'), 'Extracts sanitized filename')
+
+  // 2. Settings schema retains autoRecap configuration
+  const { tuiSettingsSchema } = await import('../src/renderer/themes.js')
+  assert.equal(tuiSettingsSchema({ autoRecap: false }).autoRecap, false, 'tuiSettingsSchema retains autoRecap: false')
+  assert.equal(tuiSettingsSchema({}).autoRecap, true, 'tuiSettingsSchema defaults autoRecap to true')
+  assert.throws(() => tuiSettingsSchema({ autoRecap: 'invalid' }), /autoRecap must be boolean/, 'Validates autoRecap boolean')
+
+  // 3. handleRecap pushes user bubble and recap entry into localLog and commits to scrollback
+  let committedLines = []
+  const mockApp = {
+    agent: { session: { events: recapEvents, seq: 10 } },
+    localLog: [],
+    viewClearedSeq: 0,
+    commitToScrollback: (lines) => { committedLines = lines },
+    scheduleRender: () => {}
+  }
+  handleRecap(mockApp, '/recap')
+  assert.equal(mockApp.localLog.length, 2, 'handleRecap pushes user bubble and recap response')
+  assert.equal(mockApp.localLog[0].type, 'user/message', 'First entry is user bubble message')
+  assert.equal(mockApp.localLog[0].data.content[0].text, '/recap', 'User bubble contains /recap')
+  assert.equal(mockApp.localLog[1].data.isRecapResponse, true, 'Second entry is clean recap response')
+  assert.ok(mockApp.localLog[1].data.text.includes('加固路径检查与回滚'), 'Recap text contains summary')
+  assert.ok(committedLines.some((l) => l.includes('YOU')), 'Committed scrollback contains YOU header')
+  assert.ok(committedLines.some((l) => l.includes('╭') && l.includes('╮')), 'Committed scrollback contains top border of bubble')
+  assert.ok(committedLines.some((l) => l.includes('/recap')), 'Committed scrollback contains /recap inside bubble')
+  assert.ok(committedLines.some((l) => l.includes('加固路径检查与回滚')), 'Committed scrollback contains recap summary text')
+  assert.ok(!committedLines.some((l) => l.includes('※ recap:')), 'Manual /recap does not contain ※ recap: prefix')
+
+  // 3.1 Interleaved localLog entries and subsequent /recap maintain independent localId/localKey
+  assert.equal(mockApp.lastRecappedSeq, 4, 'lastRecappedSeq updated on manual /recap')
+  // Interleave a standard local log entry with baseline seq
+  mockApp.localLog.push({ localId: 3, localKey: 'local-log-3', seq: 10, time: Date.now(), type: 'local/log', data: { text: 'interleaved status log', level: 'ok' } })
+  // Subsequent /recap adds entries with unique localKey
+  handleRecap(mockApp, '/recap')
+  assert.equal(mockApp.localLog.length, 5, '5 total localLog entries')
+  const recapKeys = mockApp.localLog.map((e) => e.localKey || `local-${e.localId}`)
+  assert.equal(new Set(recapKeys).size, 5, 'All localLog localKey identifiers are strictly unique')
+
+  // 3.2 Cross-integer boundary: 5 consecutive /recap calls followed by seq 11 log do not cause block key collision
+  const multiRecapApp = new TuiApp({ get: () => null })
+  multiRecapApp.agent = { session: { events: recapEvents, seq: 10, header: { cwd: process.cwd() } }, status: 'idle' }
+  multiRecapApp.ctx = { agentDefaultModel: { currentSelection: () => ({ provider: 'test', model: 'test' }) } }
+  multiRecapApp.skills = []
+  multiRecapApp.expandedKeys = new Set()
+  for (let i = 0; i < 5; i++) {
+    handleRecap(multiRecapApp, '/recap')
+  }
+  assert.equal(multiRecapApp.localLog.length, 10, '5 /recap calls created 10 entries')
+  // Simulate next durable event or log entry at seq 11
+  multiRecapApp.log('ok', 'seq 11 log message', 'status')
+  assert.equal(multiRecapApp.localLog.length, 11, '11 total entries in multiRecapApp')
+
+  // Invoke full production reprojectDocument to ensure localId/localKey are preserved through event mapping
+  multiRecapApp.reprojectDocument(true)
+  assert.ok(multiRecapApp.baseTranscriptDocument, 'baseTranscriptDocument created by reprojectDocument')
+  const crossIntBlockKeys = multiRecapApp.baseTranscriptDocument.blocks.map((b) => b.key)
+  assert.equal(new Set(crossIntBlockKeys).size, crossIntBlockKeys.length, 'All block keys are strictly unique across integer boundaries in full reprojectDocument')
+
+  // 3.3 appendLocalLogEntry strictly caps localLog to 200 entries
+  for (let i = 0; i < 250; i++) {
+    multiRecapApp.appendLocalLogEntry({ text: `test entry ${i}` })
+  }
+  assert.equal(multiRecapApp.localLog.length, 200, 'localLog capped at 200 entries')
+
+  // 4. Production TuiApp.prototype.triggerIdleAutoRecap execution test
+  let idleRecapLines = []
+  const mockIdleApp = {
+    agent: { session: { events: recapEvents, seq: 10 } },
+    localLog: [],
+    viewClearedSeq: 0,
+    preferences: { autoRecap: true },
+    active: false,
+    input: '',
+    commitToScrollback: (lines) => { idleRecapLines = lines },
+    clearAutoRecapTimer: function() {
+      if (this.autoRecapTimer) clearTimeout(this.autoRecapTimer)
+      this.autoRecapTimer = undefined
+    },
+    scheduleRender: () => {}
+  }
+  TuiApp.prototype.triggerIdleAutoRecap.call(mockIdleApp)
+  assert.ok(idleRecapLines.length >= 3, 'Idle recap includes breathing space rows')
+  assert.equal(idleRecapLines[0], '', 'First row is blank line for breathing space')
+  assert.ok(visibleOf(idleRecapLines[1]).includes('※ recap:'), 'Second row contains ※ recap: prefix')
+  assert.ok(idleRecapLines.some((l) => visibleOf(l).includes('/settings')), 'Contains disable hint with /settings')
+
+  // 4.1 Disabled autoRecap does not trigger recap
+  idleRecapLines = []
+  mockIdleApp.preferences.autoRecap = false
+  TuiApp.prototype.triggerIdleAutoRecap.call(mockIdleApp)
+  assert.equal(idleRecapLines.length, 0, 'Does not emit recap when autoRecap is false')
+
+  // 4.2 scheduleAutoRecapTimer creates and clears timer
+  mockIdleApp.preferences.autoRecap = true
+  TuiApp.prototype.scheduleAutoRecapTimer.call(mockIdleApp)
+  assert.ok(mockIdleApp.autoRecapTimer !== undefined, 'scheduleAutoRecapTimer creates timer')
+  mockIdleApp.clearAutoRecapTimer()
+  assert.equal(mockIdleApp.autoRecapTimer, undefined, 'clearAutoRecapTimer clears timer')
+
+  // 4.3 Timer lifecycle: empty submit, local commands, and async error recovery
+  const lifecycleApp = new TuiApp({ get: () => null })
+  lifecycleApp.agent = {
+    session: { events: recapEvents, id: 'test-session' },
+    status: 'idle',
+    followup: async () => {}
+  }
+  lifecycleApp.preferences = { autoRecap: true }
+  lifecycleApp.scheduleAutoRecapTimer()
+  assert.ok(lifecycleApp.autoRecapTimer !== undefined, 'Timer active initially')
+
+  // Empty Enter in submit() does NOT cancel timer
+  lifecycleApp.input = ''
+  lifecycleApp.submit()
+  assert.ok(lifecycleApp.autoRecapTimer !== undefined, 'Timer preserved after empty submit')
+
+  // Local command (e.g. /status) in submit() does NOT cancel timer
+  lifecycleApp.input = '/status'
+  lifecycleApp.submit()
+  assert.ok(lifecycleApp.autoRecapTimer !== undefined, 'Timer preserved after local command')
+
+  // Setting off clears timer
+  lifecycleApp.applySettings({ autoRecap: false, persistHistory: true })
+  assert.equal(lifecycleApp.autoRecapTimer, undefined, 'Timer cleared when autoRecap: false')
+
+  // Setting off->on re-schedules timer when idle
+  lifecycleApp.applySettings({ autoRecap: true, persistHistory: true })
+  assert.ok(lifecycleApp.autoRecapTimer !== undefined, 'Timer restarted when toggled off->on while idle')
+
+  // Case A: Submitting real model prompt asynchronously clears timer
+  await lifecycleApp.submitUserMessage('real prompt')
+  assert.equal(lifecycleApp.autoRecapTimer, undefined, 'Timer cleared on successful followup')
+
+  // Case B: Cancelled queuedSubmission restores timer
+  lifecycleApp.scheduleAutoRecapTimer()
+  await lifecycleApp.submitUserMessage('prompt', [], [], { cancelled: true })
+  assert.ok(lifecycleApp.autoRecapTimer !== undefined, 'Timer restored on cancelled submission')
+
+  // Case C: Image persistence error restores timer
+  lifecycleApp.scheduleAutoRecapTimer()
+  lifecycleApp.persistImageDrafts = async () => { throw new Error('disk full') }
+  await lifecycleApp.submitUserMessage('prompt with image', [], [{ data: 'abc' }])
+  assert.ok(lifecycleApp.autoRecapTimer !== undefined, 'Timer restored on image error')
+
+  // Case D: Followup failure restores timer
+  lifecycleApp.scheduleAutoRecapTimer()
+  lifecycleApp.persistImageDrafts = async () => []
+  lifecycleApp.agent.followup = async () => { throw new Error('network down') }
+  await lifecycleApp.submitUserMessage('prompt with followup error')
+  assert.ok(lifecycleApp.autoRecapTimer !== undefined, 'Timer restored on followup error')
+
+  // Case E: expandFileReferences failure restores input, preserves timer, and does not invoke followup
+  let followupCalledOnExpandError = false
+  lifecycleApp.agent.followup = async () => { followupCalledOnExpandError = true }
+  lifecycleApp.expandFileReferences = async () => { throw new Error('Permission denied: @secret.js') }
+  lifecycleApp.input = ''
+  lifecycleApp.scheduleAutoRecapTimer()
+  await lifecycleApp.submitUserMessage('review @secret.js')
+  assert.equal(followupCalledOnExpandError, false, 'followup must NOT be called when file expansion fails')
+  assert.equal(lifecycleApp.input, 'review @secret.js', 'User input must be restored on expansion failure')
+  assert.ok(lifecycleApp.autoRecapTimer !== undefined, 'Timer must be preserved on expansion failure')
+  lifecycleApp.clearAutoRecapTimer()
+
+  // 5. Multi-round state transition & in-app /resume via commitSessionState
+  // 5.1 Long 16-minute event gap in projectTranscript does not throw ReferenceError
+  const longGapEvents = [
+    { seq: 1, type: 'user/message', time: 1000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '第一问' }] } },
+    { seq: 2, type: 'turn/end', time: 2000, data: { durationMs: 1000 } },
+    { seq: 3, type: 'user/message', time: 2000 + 16 * 60 * 1000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '第二问' }] } },
+    { seq: 4, type: 'turn/end', time: 2000 + 16 * 60 * 1000 + 2000, data: { durationMs: 2000 } }
+  ]
+  const docGap = projectTranscript(longGapEvents, 80)
+  assert.ok(docGap.rows.length > 0, 'No ReferenceError on 16m long gap events in projectTranscript')
+
+  // 5.2 In-app /resume via commitSessionState initializes stable recap in localLog
+  const sessionEvents = [
+    ...recapEvents,
+    { seq: 4, type: 'turn/end', time: 4000, data: { durationMs: 2000 } }
+  ]
+  const transitionApp = {
+    preferences: { autoRecap: true },
+    localLog: [],
+    lastRecappedSeq: undefined,
+    clearAutoRecapTimer: function() {
+      if (this.autoRecapTimer) clearTimeout(this.autoRecapTimer)
+      this.autoRecapTimer = undefined
+    },
+    refreshContextTokens: () => {},
+    commitToScrollback: () => {},
+    scheduleRender: () => {}
+  }
+  TuiApp.prototype.commitSessionState.call(transitionApp, {
+    handle: { agent: { session: { events: sessionEvents } } },
+    isResumed: true,
+    sessionEvents
+  })
+  assert.equal(transitionApp.localLog.length, 1, 'commitSessionState creates resume recap in localLog on in-app /resume')
+  assert.equal(transitionApp.lastRecappedSeq, 4, 'lastRecappedSeq set to last turn/end seq')
+  assert.ok(transitionApp.localLog[0].data.text.includes('加固路径检查与回滚'), 'Resume recap text contains summary')
+
+  // 5.3 New session via commitSessionState resets lastRecappedSeq and does not add recap
+  const newSessionApp = {
+    preferences: { autoRecap: true },
+    localLog: [],
+    lastRecappedSeq: 99,
+    clearAutoRecapTimer: () => {},
+    refreshContextTokens: () => {}
+  }
+  TuiApp.prototype.commitSessionState.call(newSessionApp, {
+    handle: { agent: { session: { events: [] } } },
+    isResumed: false
+  })
+  assert.equal(newSessionApp.localLog.length, 0, 'New blank session has 0 recaps')
+  assert.equal(newSessionApp.lastRecappedSeq, undefined, 'lastRecappedSeq reset on new session')
+
+  // 5.4 Completing a new turn: resume recap stays at turn 1 and does NOT move or disappear
+  const multiTurnEvents = [
+    ...sessionEvents,
+    { seq: 5, type: 'user/message', time: 5000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '继续新一轮' }] } },
+    { seq: 6, type: 'assistant/message', time: 6000, data: { message: { content: '已完成' } } },
+    { seq: 7, type: 'turn/end', time: 7000, data: { durationMs: 2000 } }
+  ]
+  const combinedTurn2 = [
+    ...multiTurnEvents,
+    ...transitionApp.localLog.map((e) => ({ type: 'local/log', time: e.time, seq: e.seq, data: e.data }))
+  ].sort((a, b) => a.seq - b.seq)
+
+  const docTurn2 = projectTranscript(combinedTurn2, 80)
+  const recapsTurn2 = docTurn2.rows.filter((r) => r.includes('※') && r.includes('recap:'))
+  assert.equal(recapsTurn2.length, 1, 'Resume recap stays at turn 1 and does not move to turn 2 or disappear')
+
+  // 5.5 15m idle triggers recap for turn 2 with deduplication
+  transitionApp.agent = { session: { events: multiTurnEvents, seq: 10 } }
+  TuiApp.prototype.triggerIdleAutoRecap.call(transitionApp)
+  assert.equal(transitionApp.localLog.length, 2, 'Second recap appended for turn 2')
+
+  // 5.6 Deduplication prevents second trigger on same turn
+  TuiApp.prototype.triggerIdleAutoRecap.call(transitionApp)
+  assert.equal(transitionApp.localLog.length, 2, 'Deduplication prevents repeat trigger on same turn')
+
+  const combinedFinal = [
+    ...multiTurnEvents,
+    ...transitionApp.localLog.map((e) => ({ type: 'local/log', time: e.time, seq: e.seq, data: e.data }))
+  ].sort((a, b) => a.seq - b.seq)
+  const docFinal = projectTranscript(combinedFinal, 80)
+  const recapsFinal = docFinal.rows.filter((r) => r.includes('※') && r.includes('recap:'))
+  assert.equal(recapsFinal.length, 2, 'Both recaps remain stably in history')
+
+  // 5.7 Explicit turn/end recap sanitizes escape sequences
+  const turnWithEscapes = [
+    { seq: 1, type: 'user/message', time: 1000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '测试' }] } },
+    { seq: 2, type: 'turn/end', time: 2000, data: { durationMs: 1000, recap: '\x1b[31m带有控制字符的回顾\x1b[0m' } }
+  ]
+  const docEscapes = projectTranscript(turnWithEscapes, 80)
+  const recapRow = docEscapes.rows.find((r) => r.includes('带有控制字符的回顾'))
+  assert.ok(recapRow, 'Explicit recap row exists')
+  assert.ok(!recapRow.includes('\x1b[31m'), 'Control sequence stripped from explicit recap')
+  assert.ok(recapRow.includes('(disable recaps in /settings)'), 'Contains /settings hint')
 }
 
 console.log('unit regressions: ok')

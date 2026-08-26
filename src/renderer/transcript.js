@@ -293,8 +293,9 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
         rows.push('')
         rowSpans.push({ sourceStart: userPromptText.length, sourceEnd: userPromptText.length, prefixCols: 0, text: '' })
 
+        const userBlockKey = event.localKey || (event.localId ? `user-local-${event.localId}` : `user-${event.seq || item.index}`)
         addBlock({
-          key: `user-${event.seq || item.index}`,
+          key: userBlockKey,
           kind: 'user',
           startSeq: event.seq,
           endSeq: event.seq,
@@ -419,6 +420,25 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
 
         rows.push(`  ${ANSI.dim}${summary}${ANSI.reset}`)
         logicalLines.push(summary)
+
+        if (event.data?.recap) {
+          const safeRecap = safe(String(event.data.recap))
+          if (safeRecap) {
+            rows.push('')
+            const fullText = `${safeRecap} (disable recaps in /settings)`
+            const prefix = `  ${ANSI.dim}※ ${ANSI.bold}recap:${ANSI.reset} `
+            const wrapWidth = Math.max(20, contentWidth - 11)
+            const wrappedLines = wrap(fullText, wrapWidth)
+            if (wrappedLines.length > 0) {
+              rows.push(`${prefix}${ANSI.dim}${wrappedLines[0]}${ANSI.reset}`)
+              logicalLines.push(`※ recap: ${wrappedLines[0]}`)
+              for (let i = 1; i < wrappedLines.length; i++) {
+                rows.push(`           ${ANSI.dim}${wrappedLines[i]}${ANSI.reset}`)
+                logicalLines.push(`           ${wrappedLines[i]}`)
+              }
+            }
+          }
+        }
         lastTurnStartTime = undefined
 
         rows.push('')
@@ -490,7 +510,26 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
         const color = entry.level === 'ok' ? ANSI.green : (entry.level === 'err' ? ANSI.coral : ANSI.dim)
         const icon = entry.level === 'ok' ? '✓' : (entry.level === 'err' ? '✗' : '·')
 
-        if (entry.badge) {
+        if (entry.isRecapResponse) {
+          const wrapWidth = Math.max(20, contentWidth - 4)
+          const wrapped = wrap(entry.text, wrapWidth)
+          for (const line of wrapped) {
+            rows.push(`  ${ANSI.answer}${safe(line)}${ANSI.reset}`)
+            logicalLines.push(line)
+          }
+        } else if (entry.badge === '※ recap') {
+          const prefix = `  ${ANSI.dim}※ ${ANSI.bold}recap:${ANSI.reset} `
+          const wrapWidth = Math.max(20, contentWidth - 11)
+          const wrapped = wrap(entry.text, wrapWidth)
+          if (wrapped.length > 0) {
+            rows.push(`${prefix}${ANSI.dim}${wrapped[0]}${ANSI.reset}`)
+            logicalLines.push(`※ recap: ${wrapped[0]}`)
+            for (let i = 1; i < wrapped.length; i++) {
+              rows.push(`           ${ANSI.dim}${wrapped[i]}${ANSI.reset}`)
+              logicalLines.push(`           ${wrapped[i]}`)
+            }
+          }
+        } else if (entry.badge) {
           rows.push(`  ${color}${icon} ${safe(entry.badge)}: ${safe(entry.text)}${ANSI.reset}`)
           logicalLines.push(`${entry.badge}: ${entry.text}`)
         } else {
@@ -501,8 +540,9 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
         }
         rows.push('')
 
+        const logBlockKey = event.localKey || (event.localId ? `log-local-${event.localId}` : `log-${event.seq || item.index}`)
         addBlock({
-          key: `log-${event.seq || item.index}`,
+          key: logBlockKey,
           kind: 'local/log',
           startSeq: event.seq,
           endSeq: event.seq,

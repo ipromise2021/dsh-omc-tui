@@ -225,6 +225,7 @@ import {
   handleLocalCommand,
   handleCompact,
   handleRecap,
+  buildSessionRecapSummary,
   handleStatus
 } from './commands/index.js'
 
@@ -320,7 +321,7 @@ export class TuiApp {
     this.effortPicker = undefined // { efforts, selected }
     this.settingsPicker = undefined
     this.settingsScope = undefined
-    this.preferences = { theme: defaultTheme, showWelcome: true, persistHistory: true, importSystemShellHistory: false, contextMode: 'both', contextWarnAt: 60, contextCriticalAt: 80, autoCompact: true, promptSuggestions: false, hudGit: true, hudSpeed: true, hudTools: true, disabledSkills: [...DEFAULT_DISABLED_SKILLS] }
+    this.preferences = { theme: defaultTheme, showWelcome: true, persistHistory: true, importSystemShellHistory: false, contextMode: 'both', contextWarnAt: 60, contextCriticalAt: 80, autoCompact: true, autoRecap: true, promptSuggestions: false, hudGit: true, hudSpeed: true, hudTools: true, disabledSkills: [...DEFAULT_DISABLED_SKILLS] }
     this.presetPicker = undefined // { entries, selected }
     this.presetConfirm = undefined
     this.exitConfirm = undefined // { code, selected, runningJobs }
@@ -401,6 +402,8 @@ export class TuiApp {
     this.dangerGuardDispose = undefined
     this.backgroundInitTimer = undefined
     this.autoCompactTimer = undefined
+    this.autoRecapTimer = undefined
+    this.lastRecappedSeq = undefined
     this.animationTimer = undefined
     this.caretRow = undefined
     this.caretCol = undefined
@@ -609,6 +612,7 @@ export class TuiApp {
         this.reasoningAt = undefined
         this.message = ''
         this.touchMru(resumeRecord.header.id)
+        this.initResumeRecap(agent.session.events)
       }
 
       this.disposers.push(this.ctx.on('session/event', (session, event) => this.onSessionEvent(session, event)))
@@ -737,6 +741,7 @@ export class TuiApp {
   }
 
   applySettings(next) {
+    const previousAutoRecap = this.preferences?.autoRecap ?? true
     const reloadShellHistory = this.preferences.persistHistory !== next.persistHistory
       || this.preferences.importSystemShellHistory !== next.importSystemShellHistory
     this.preferences = next
@@ -748,6 +753,11 @@ export class TuiApp {
       void this.loadShellHistory(this.agent.session.header.cwd)
     }
     if (next.promptSuggestions === false) this.clearPromptSuggestion()
+    if (next.autoRecap === false) {
+      this.clearAutoRecapTimer?.()
+    } else if (previousAutoRecap === false && next.autoRecap !== false && !this.active) {
+      this.scheduleAutoRecapTimer?.()
+    }
     this.scheduleRender()
   }
 
@@ -819,6 +829,8 @@ export class TuiApp {
         this.backgroundInitTimer = undefined
         clearTimeout(this.autoCompactTimer)
         this.autoCompactTimer = undefined
+        clearTimeout(this.autoRecapTimer)
+        this.autoRecapTimer = undefined
         clearTimeout(this.imageFlushTimer)
         clearInterval(this.animationTimer)
         this.animationTimer = undefined
@@ -956,6 +968,89 @@ export class TuiApp {
     }, 0)
   }
 
+  scheduleAutoRecapTimer() {
+    this.clearAutoRecapTimer()
+    if (this.preferences?.autoRecap === false || !this.agent || this.active) return
+    const events = this.agent.session?.events ?? []
+    if (events.length === 0) return
+    // 15-minute idle threshold (900s)
+    this.autoRecapTimer = setTimeout(() => {
+      this.autoRecapTimer = undefined
+      this.triggerIdleAutoRecap()
+    }, 15 * 60 * 1000)
+  }
+
+  clearAutoRecapTimer() {
+    if (this.autoRecapTimer) {
+      clearTimeout(this.autoRecapTimer)
+      this.autoRecapTimer = undefined
+    }
+  }
+
+  triggerIdleAutoRecap() {
+    if (this.preferences?.autoRecap === false || !this.agent || this.active || (this.input && this.input.trim() !== '')) return
+    const events = this.agent.session?.events ?? []
+    const lastTurnEnd = events.findLast?.((e) => e.type === 'turn/end') ?? events.filter((e) => e.type === 'turn/end').pop()
+    const lastSeq = lastTurnEnd?.seq ?? events[events.length - 1]?.seq ?? 0
+    if (this.lastRecappedSeq !== undefined && this.lastRecappedSeq === lastSeq) return
+    this.lastRecappedSeq = lastSeq
+
+    const summary = buildSessionRecapSummary(events, this.viewClearedSeq)
+    if (!summary) return
+
+    const columns = Math.max(60, process.stdout?.columns || 100)
+    const contentWidth = Math.max(20, columns - 2)
+
+    const fullText = `${safe(summary)} (disable recaps in /settings)`
+    const prefix = `  ${ANSI.dim}※ ${ANSI.bold}recap:${ANSI.reset} `
+    const wrapWidth = Math.max(20, contentWidth - 11)
+    const wrapped = wrap(fullText, wrapWidth)
+    const recapLines = [''] // 1 blank line breathing room!
+    if (wrapped.length > 0) {
+      recapLines.push(`${prefix}${ANSI.dim}${wrapped[0]}${ANSI.reset}`)
+      for (let i = 1; i < wrapped.length; i++) {
+        recapLines.push(`           ${ANSI.dim}${wrapped[i]}${ANSI.reset}`)
+      }
+    }
+    recapLines.push('')
+
+    const now = Date.now()
+    if (typeof this.appendLocalLogEntry === 'function') {
+      this.appendLocalLogEntry({
+        seq: lastSeq,
+        time: now,
+        type: 'local/log',
+        data: {
+          badge: '※ recap',
+          text: fullText,
+          level: 'ok'
+        }
+      })
+    } else if (Array.isArray(this.localLog)) {
+      const localId = (this.localLog.length || 0) + 1
+      this.localLog.push({
+        localId,
+        localKey: `local-log-${localId}`,
+        seq: lastSeq,
+        time: now,
+        type: 'local/log',
+        data: {
+          badge: '※ recap',
+          text: fullText,
+          level: 'ok'
+        }
+      })
+      if (this.localLog.length > 200) this.localLog.shift()
+    }
+
+    if (typeof this.commitToScrollback === 'function') {
+      this.commitToScrollback(recapLines)
+    } else {
+      this.reprojectDocument?.(true)
+      this.scheduleRender?.(true)
+    }
+  }
+
   createRequestOverride(agent) {
     return agent.ctx.on('agent/request', async (_payload, next) => {
       const request = await next()
@@ -1036,10 +1131,12 @@ export class TuiApp {
     const logEvents = this.localLog
       .filter((e) => e.seq >= (this.viewClearedSeq ?? 0) && e.command !== '!' && !/^exit /.test(e.command ?? ''))
       .map((entry) => ({
-        type: 'local/log',
+        localId: entry.localId,
+        localKey: entry.localKey,
+        type: entry.type || 'local/log',
         time: entry.time || Date.now(),
         seq: entry.seq ?? 0,
-        data: entry
+        data: entry.data || entry
       }))
     const combined = [...visibleEvents, ...logEvents].sort((a, b) => (a.time || 0) - (b.time || 0))
 
@@ -1058,7 +1155,8 @@ export class TuiApp {
       defaultModel: this.agent?.options?.model || '',
       ANSI,
       focusedBlockKey: this.focusedBlockKey,
-      welcomeRows: welcome
+      welcomeRows: welcome,
+      autoRecap: this.preferences?.autoRecap ?? true
     }
 
     this.baseTranscriptDocument = projectTranscript(combined, columns, options)
@@ -1436,6 +1534,7 @@ export class TuiApp {
     this.finishTurn()
     this.refreshContextTokens?.()
     this.scheduleAutoCompact?.()
+    this.scheduleAutoRecapTimer?.()
     if (!reason || reason.kind !== 'error') this.schedulePromptSuggestion?.()
     this.streamBuffer = ''
     this.reasoningAt = undefined
@@ -1905,10 +2004,25 @@ export class TuiApp {
     return false
   }
 
-  log(kind, text, command) {
-    const entry = { kind, text, command, seq: this.agent?.session?.seq ?? 0, time: Date.now() }
-    this.localLog.push(entry)
+  appendLocalLogEntry(entry) {
+    if (!Array.isArray(this.localLog)) this.localLog = []
+    this.localEventCounter = (this.localEventCounter || 0) + 1
+    const localId = this.localEventCounter
+    const baseSeq = entry.seq ?? this.agent?.session?.seq ?? 0
+    const localEntry = {
+      ...entry,
+      localId,
+      localKey: entry.localKey || `local-${entry.type || entry.kind || 'log'}-${localId}`,
+      seq: baseSeq,
+      time: entry.time || Date.now()
+    }
+    this.localLog.push(localEntry)
     if (this.localLog.length > 200) this.localLog.shift()
+    return localEntry
+  }
+
+  log(kind, text, command) {
+    const entry = this.appendLocalLogEntry({ kind, text, command, seq: this.agent?.session?.seq ?? 0, time: Date.now() })
     const lines = this.formatLogEntry(entry)
     this.commitToScrollback(lines)
   }
@@ -2536,8 +2650,29 @@ export class TuiApp {
   }
 
   async submitUserMessage(prompt, content = [], images = [], queuedSubmission) {
-    const { text, missing } = await this.expandFileReferences(prompt)
-    if (queuedSubmission?.cancelled) return
+    let text = prompt
+    let missing = []
+    try {
+      const expanded = await this.expandFileReferences(prompt)
+      text = expanded.text
+      missing = expanded.missing
+    } catch (error) {
+      this.queuedSubmissions = (this.queuedSubmissions ?? []).filter((submission) => submission !== queuedSubmission)
+      this.pendingImages = [...images, ...(this.pendingImages ?? [])]
+      if (prompt) {
+        this.input = this.input ? `${prompt}\n${this.input}` : prompt
+      }
+      this.cursor = this.input.length
+      this.message = ''
+      this.log('error', error instanceof Error ? error.message : String(error), 'expand')
+      if (!this.active) this.scheduleAutoRecapTimer?.()
+      this.scheduleRender()
+      return
+    }
+    if (queuedSubmission?.cancelled) {
+      if (!this.active) this.scheduleAutoRecapTimer?.()
+      return
+    }
     for (const path of missing) this.log('error', `@${path} not found`)
 
     // Check if current LLM model adapter supports native vision content blocks.
@@ -2573,12 +2708,16 @@ export class TuiApp {
         this.cursor = this.input.length
         this.message = ''
         this.log('error', error instanceof Error ? error.message : String(error), 'image attachment')
+        if (!this.active) this.scheduleAutoRecapTimer?.()
         this.scheduleRender()
         return
       }
     }
 
-    if (queuedSubmission?.cancelled) return
+    if (queuedSubmission?.cancelled) {
+      if (!this.active) this.scheduleAutoRecapTimer?.()
+      return
+    }
 
     if (supportsNativeVision) {
       for (const { ref } of persistedImages) content.push({ type: 'image', attachment: ref })
@@ -2614,6 +2753,7 @@ export class TuiApp {
     this.streamBuffer = ''
     this.streamHeaderCommitted = false
     this.turnHeaderCommitted = false
+    this.clearAutoRecapTimer?.()
     try {
       if (this.agent?.followup) {
         await this.agent.followup(message)
@@ -2628,6 +2768,7 @@ export class TuiApp {
       this.cursor = this.input.length
       this.message = ''
       this.lastQueuedText = undefined
+      if (!this.active) this.scheduleAutoRecapTimer?.()
       this.log('error', error instanceof Error ? error.message : String(error), 'followup')
     } finally {
       this.scheduleRender()
@@ -4072,6 +4213,43 @@ export class TuiApp {
     return blocks
   }
 
+  initResumeRecap(sessionEvents = []) {
+    if (this.preferences?.autoRecap === false || !Array.isArray(sessionEvents) || sessionEvents.length === 0) return
+    const summary = buildSessionRecapSummary(sessionEvents, 0)
+    if (!summary) return
+    const lastTurnEnd = sessionEvents.findLast?.((e) => e.type === 'turn/end') ?? sessionEvents.filter((e) => e.type === 'turn/end').pop()
+    const lastSeq = lastTurnEnd?.seq ?? sessionEvents[sessionEvents.length - 1]?.seq ?? 0
+    const fullText = `${safe(summary)} (disable recaps in /settings)`
+    if (typeof this.appendLocalLogEntry === 'function') {
+      this.appendLocalLogEntry({
+        seq: lastSeq,
+        time: Date.now(),
+        type: 'local/log',
+        data: {
+          badge: '※ recap',
+          text: fullText,
+          level: 'ok'
+        }
+      })
+    } else if (Array.isArray(this.localLog)) {
+      const localId = (this.localLog.length || 0) + 1
+      this.localLog.push({
+        localId,
+        localKey: `local-log-${localId}`,
+        seq: lastSeq,
+        time: Date.now(),
+        type: 'local/log',
+        data: {
+          badge: '※ recap',
+          text: fullText,
+          level: 'ok'
+        }
+      })
+      if (this.localLog.length > 200) this.localLog.shift()
+    }
+    this.lastRecappedSeq = lastSeq
+  }
+
   commitSessionState({
     handle,
     skillOverrideDisposers,
@@ -4114,6 +4292,9 @@ export class TuiApp {
     this.queuedSubmissions = []
     this.pendingImages = []
     this.localLog = []
+    this.localEventCounter = 0
+    this.lastRecappedSeq = undefined
+    this.clearAutoRecapTimer?.()
     this.expandedKeys = new Set()
     this.active = false
     this.focusedBlockKey = null
@@ -4122,7 +4303,12 @@ export class TuiApp {
     this.needsLiveProjection = false
 
     if (isResumed && sessionEvents) {
-      this.restoreImageAttachments(sessionEvents)
+      this.restoreImageAttachments?.(sessionEvents)
+      if (typeof this.initResumeRecap === 'function') {
+        this.initResumeRecap(sessionEvents)
+      } else {
+        TuiApp.prototype.initResumeRecap.call(this, sessionEvents)
+      }
     } else {
       this.imageAttachments?.clear()
     }
@@ -6823,7 +7009,7 @@ export class TuiApp {
       if (this.compactState.tip) {
         lines.push(`    ${ANSI.dim}└ ${this.compactState.tip}${ANSI.reset}`)
       }
-    } else if (this.active && !this.questionPanel && !this.pendingApproval) {
+    } else if (this.active && !this.questionPanel && !this.pendingApproval && !this.streaming?.text) {
       lines.push('')
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]

@@ -179,6 +179,9 @@ export function tuiSettingsSchema(value) {
   if (source.autoCompact !== undefined && typeof source.autoCompact !== 'boolean') {
     throw new TypeError('dsh-omc-tui.settings.autoCompact must be boolean')
   }
+  if (source.autoRecap !== undefined && typeof source.autoRecap !== 'boolean') {
+    throw new TypeError('dsh-omc-tui.settings.autoRecap must be boolean')
+  }
   if (source.promptSuggestions !== undefined && typeof source.promptSuggestions !== 'boolean') {
     throw new TypeError('dsh-omc-tui.settings.promptSuggestions must be boolean')
   }
@@ -203,6 +206,7 @@ export function tuiSettingsSchema(value) {
     hudSpeed: source.hudSpeed ?? true,
     hudTools: source.hudTools ?? true,
     autoCompact: source.autoCompact ?? true,
+    autoRecap: source.autoRecap ?? true,
     promptSuggestions: source.promptSuggestions ?? false,
     disabledSkills: [...disabledSkills]
   }
@@ -224,6 +228,7 @@ tuiSettingsSchema.toJSON = () => ({
     hudSpeed: { type: 'boolean', default: true },
     hudTools: { type: 'boolean', default: true },
     autoCompact: { type: 'boolean', default: true },
+    autoRecap: { type: 'boolean', default: true },
     promptSuggestions: { type: 'boolean', default: false },
     disabledSkills: { type: 'array', items: { type: 'string' }, default: DEFAULT_DISABLED_SKILLS }
   }
