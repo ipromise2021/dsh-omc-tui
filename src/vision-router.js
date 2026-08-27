@@ -7,7 +7,7 @@ const VISION_TIMEOUT_MS = 120000
 export function registerVisionRouter(app) {
   return app.ctx.tools.register({
     name: 'analyze_image',
-    description: 'Analyze a registered image attachment with the configured vision model. Use this whenever visual pixels are needed. User-provided image attachment IDs are included in the conversation text.',
+    description: 'Analyze a registered image attachment ID using a vision sidecar. Use this ONLY when an image attachment is referenced in text but visual content is not directly attached in the message (e.g. for text-only models). Do not call this if the image is already attached directly.',
     parameters: {
       type: 'object',
       properties: {

@@ -24,6 +24,122 @@ const MAX_BUFFERED_BYTES = 8 * 1024 * 1024
 const MAX_PNG_BYTES = 5 * 1024 * 1024
 const INACTIVITY_TIMEOUT_MS = 30000
 
+export const MAX_SAFE_IMAGE_PIXELS = 2048
+
+export function jpegDimensions(data) {
+  const bytes = Buffer.from(data ?? [])
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return undefined
+  let offset = 2
+  while (offset < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset++
+      continue
+    }
+    const marker = bytes[offset + 1]
+    if (marker === 0xd9) break // EOI
+    if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7)) {
+      offset += 2
+      continue
+    }
+    if (offset + 4 > bytes.length) break
+    const length = bytes.readUInt16BE(offset + 2)
+    const isSof = (marker >= 0xc0 && marker <= 0xcf) && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc
+    if (isSof) {
+      if (offset + 9 > bytes.length) break
+      const height = bytes.readUInt16BE(offset + 5)
+      const width = bytes.readUInt16BE(offset + 7)
+      if (width > 0 && height > 0) return { width, height }
+      break
+    }
+    offset += 2 + length
+  }
+  return undefined
+}
+
+export function imageDimensions(data, mediaType) {
+  if (!data || data.length === 0) return undefined
+  const bytes = Buffer.from(data)
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    return pngDimensions(bytes)
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    return jpegDimensions(bytes)
+  }
+  if (mediaType === 'image/png') return pngDimensions(bytes)
+  if (mediaType === 'image/jpeg' || mediaType === 'image/jpg') return jpegDimensions(bytes)
+  return undefined
+}
+
+export async function downscaleImageBuffer(data, mediaType = PNG_MEDIA_TYPE, maxSide = MAX_SAFE_IMAGE_PIXELS) {
+  if (!data || data.length === 0) return undefined
+  const bytes = Buffer.from(data)
+  const isJpeg = (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) || mediaType === 'image/jpeg' || mediaType === 'image/jpg'
+  const resolvedMediaType = isJpeg ? 'image/jpeg' : PNG_MEDIA_TYPE
+  const dims = imageDimensions(bytes, resolvedMediaType)
+  if (dims && dims.width <= maxSide && dims.height <= maxSide) {
+    return { data: bytes, mediaType: resolvedMediaType, dimensions: dims }
+  }
+
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { writeFile, readFile, unlink } = await import('node:fs/promises')
+  const { execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const execFileAsync = promisify(execFile)
+
+  const ext = isJpeg ? 'jpg' : 'png'
+  const tempFile = join(tmpdir(), `dsh-downscale-${Date.now()}-${Math.floor(Math.random() * 100000)}.${ext}`)
+  let resizedData = undefined
+
+  try {
+    await writeFile(tempFile, bytes)
+
+    if (process.platform === 'darwin') {
+      await execFileAsync('sips', ['-Z', String(maxSide), tempFile], { timeout: 8000 })
+      resizedData = await readFile(tempFile)
+    } else {
+      for (const cmd of ['magick', 'convert', 'gm']) {
+        try {
+          const args = cmd === 'gm'
+            ? ['convert', tempFile, '-resize', `${maxSide}x${maxSide}>`, tempFile]
+            : [tempFile, '-resize', `${maxSide}x${maxSide}>`, tempFile]
+          await execFileAsync(cmd, args, { timeout: 8000 })
+          resizedData = await readFile(tempFile)
+          break
+        } catch {
+          // try next command
+        }
+      }
+    }
+  } catch {
+    // scale failed
+  } finally {
+    await unlink(tempFile).catch(() => {})
+  }
+
+  if (resizedData && resizedData.length > 0) {
+    const newDims = imageDimensions(resizedData, resolvedMediaType)
+    if (newDims && newDims.width <= maxSide && newDims.height <= maxSide) {
+      return {
+        data: resizedData,
+        mediaType: resolvedMediaType,
+        dimensions: newDims
+      }
+    }
+  }
+
+  const isOversized = Boolean(dims && (dims.width > maxSide || dims.height > maxSide))
+  return {
+    data: bytes,
+    mediaType: resolvedMediaType,
+    dimensions: dims,
+    unscaled: isOversized,
+    error: isOversized
+      ? `image (${dims.width}×${dims.height}) exceeds ${maxSide}px limit and auto-downscale tool (sips/magick) is unavailable on ${process.platform}`
+      : undefined
+  }
+}
+
 export function formatImageBytes(bytes) {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`
   if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`

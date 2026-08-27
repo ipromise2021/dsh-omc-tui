@@ -161,13 +161,21 @@ dsh-omc-tui/
 
 ---
 
-### 4. 智能视觉 Sidecar Subagent (`src/subagent/vision-analyzer.js`)
-* **痛点**：DeepSeek 主模型为纯代码/文本模型，传统方案需频繁手动切换全局多模态模型或手工调用技能。
+### 4. 双模态视觉架构与高分屏缩放引擎 (`src/vision-router.js` & `src/image-protocol.js`)
+* **痛点**：
+  1. 高分屏（Retina）截图单边像素极易超过 2048px 甚至达到 4000+px，直接发送会触发模型/Harness 像素上限报错；
+  2. 当主模型为原生多模态模型（如 GPT-4o、Claude 3.5 Sonnet、Qwen-VL）时，强行使用子代理会导致响应变慢且浪费上下文；而当主模型为纯文本模型（如 DeepSeek-V3/R1、DeepSeek V4）时，直接塞入原生图片块会导致模型报错。
 * **架构实现**：
-  1. **图片无感直贴**：用户通过 `Cmd/Ctrl+V` 或 iTerm2/Kitty 协议粘贴图片，自动通过 Harness Attachment 落盘；
-  2. **Agent 自主决策**：主 Agent 在收到图片后，**自主判断**是否需要查看图像内容；若需要，自动触发底层的 `analyze_image` 工具；
-  3. **瞬时隔离 Sidecar**：TUI 动态拉起隔离的临时视觉子代理（可直接复用 DeepSeek Key 或绑定其他 Vision 模型），提取 UI 布局与 OCR 细节后立即销毁；
-  4. **主会话无缝协作**：分析结果以标准工具结果注入主 Agent，主模型保持原有上下文记忆继续编程。
+  1. **Retina 高分屏安全缩放引擎 (`src/image-protocol.js`)**：
+     - 内置 `MAX_SAFE_IMAGE_PIXELS = 2048` 安全基准线；
+     - 原生零外部 UI 依赖：macOS 优先调用系统自带 `sips`，Linux / Windows 自动检测 `magick` / `convert` / `gm` 图像工具链，缺少工具时精准返回友好指引；
+     - 原生二进制解析：内置 `jpegDimensions` 与 `pngDimensions`，自动保持 `image/jpeg` 与 `image/png` 原生 MIME 与尺寸；
+     - 缩放后元数据原子一致性：自动更新 `dimensions`（`width/height`）、基于新 Buffer 实时重新生成 `base64`，并清空指向旧原图的 `filePath`。
+  2. **双模态智能分流路由 (`resolveModelVisionSupport`)**：
+     - **严格元数据判定**：基于 Harness LLM Service 的 `inputModalities` 与 `capabilities.vision` 判定模型视觉能力，严格比对 `provider + model` 杜绝跨供应商同名模型污染；
+     - **纯文本零查询优化**：仅在包含待发送图片（`images.length > 0`）时才查询模型目录，纯文本消息完全跳过，杜绝远程 Provider 网络延迟阻塞日常对话；
+     - **原生多模态直识**：若当前模型支持原生视觉，消息体直接注入 `{ type: 'image', attachment: ref }` 原生图像块，由主模型直接识别；
+     - **纯文本模型 Sidecar 降级**：若当前模型为纯文本/代码模型，图片登记为 Durable Attachment，由主 Agent 自主按需调度 `analyze_image` 旁路子代理进行 OCR 与 UI 结构化提取。
 
 ---
 

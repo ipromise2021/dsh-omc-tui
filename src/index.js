@@ -5,7 +5,7 @@ import { appendFile, mkdir, readdir, readFile, realpath, unlink, writeFile } fro
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir, tmpdir } from 'node:os'
-import { ImageParser, formatImageBytes, pngDimensions } from './image-protocol.js'
+import { ImageParser, formatImageBytes, pngDimensions, jpegDimensions, imageDimensions, MAX_SAFE_IMAGE_PIXELS, downscaleImageBuffer } from './image-protocol.js'
 import { registerVisionRouter } from './vision-router.js'
 import { registerBrowserLease } from './browser-lease.js'
 import { createDangerGuard } from './core/danger-guard.js'
@@ -212,6 +212,51 @@ function imageAttachmentNotice(ref, configured) {
     : `[Image attachment ${id}${metadata} is available, but no vision route is configured. Ask the user to run /vision <provider>/<model>.]`
 }
 
+export async function resolveModelVisionSupport(llmService, selection, knownEntries = []) {
+  if (!selection) return false
+  const provider = String(selection.provider ?? '').trim().toLowerCase()
+  const model = String(selection.model ?? selection.id ?? '').trim().toLowerCase()
+  if (!provider && !model) return false
+
+  // 1. Check official catalog / model picker entries (inputModalities)
+  if (Array.isArray(knownEntries) && knownEntries.length > 0) {
+    const matched = knownEntries.find((e) => {
+      const ep = String(e.provider ?? '').toLowerCase()
+      const em = String(e.model ?? e.id ?? '').toLowerCase()
+      if (provider) {
+        return ep === provider && em === model
+      }
+      return em === model
+    })
+    if (matched) {
+      if (Array.isArray(matched.inputModalities)) {
+        return matched.inputModalities.includes('image')
+      }
+      if (typeof matched.capabilities?.vision === 'boolean') {
+        return matched.capabilities.vision
+      }
+    }
+  }
+
+  // 2. Query official Harness LLM service capability metadata
+  if (typeof llmService?.resolveModelInfo === 'function') {
+    try {
+      const info = await llmService.resolveModelInfo(selection.provider, selection.model)
+      if (Array.isArray(info?.inputModalities)) {
+        return info.inputModalities.includes('image')
+      }
+      if (typeof info?.capabilities?.vision === 'boolean') {
+        return info.capabilities.vision
+      }
+    } catch {}
+  }
+
+  // 3. Fail-safe: without explicit metadata advertising 'image' input modality,
+  // do not guess via heuristics. Default to false so text models won't fail on raw image blocks
+  // and images are safely routed through the analyze_image sidecar.
+  return false
+}
+
 import {
   userMessage,
   foldUsage,
@@ -336,6 +381,7 @@ export class TuiApp {
     this.approvalQueue = []
     this.questionPanel = undefined // { questions, index, selected, selectedOptions, answers, resolve, reject, abortCleanup }
     this.pendingImages = [] // ImageDraft[] waiting for the next submit
+    this.cachedModelEntries = undefined // Cached official model catalog entries for capability lookup
     this.imageAttachments = new Map() // attachment ID -> Harness image reference for analyze_image
     this.imageParser = new ImageParser()
     this.currentFileQuery = undefined
@@ -1933,33 +1979,99 @@ export class TuiApp {
   }
 
   async acceptImage(image) {
-    const bytes = image.data?.length ?? 0
-    const attachments = this.attachmentsService
-    if (typeof attachments?.validateImage === 'function') {
+    let data = image.data ? Buffer.from(image.data) : undefined
+    let mediaType = image.mediaType || (data && data[0] === 0xff && data[1] === 0xd8 ? 'image/jpeg' : 'image/png')
+    let filePath = image.filePath || image.path
+    let dimensions = imageDimensions(data, mediaType)
+    let width = dimensions?.width ?? image.width
+    let height = dimensions?.height ?? image.height
+    let didDownscale = false
+
+    if (data && (width > MAX_SAFE_IMAGE_PIXELS || height > MAX_SAFE_IMAGE_PIXELS)) {
       try {
-        await attachments.validateImage(image)
-      } catch (error) {
-        this.log('error', error instanceof Error ? error.message : String(error), 'Cmd+V')
-        this.scheduleRender()
-        return
+        const downscaled = await downscaleImageBuffer(data, mediaType, MAX_SAFE_IMAGE_PIXELS)
+        if (downscaled?.data && (downscaled.data.length !== data.length || downscaled.dimensions?.width !== dimensions?.width)) {
+          data = downscaled.data
+          mediaType = downscaled.mediaType || mediaType
+          dimensions = downscaled.dimensions || imageDimensions(data, mediaType)
+          width = dimensions?.width ?? width
+          height = dimensions?.height ?? height
+          didDownscale = true
+        } else if (downscaled?.error) {
+          this.log('error', `图片 (${width}×${height}) 超过 ${MAX_SAFE_IMAGE_PIXELS}px 限制，当前系统缺少图像缩放工具 (sips/magick)，请手动缩放后粘贴`, 'Cmd+V')
+          this.scheduleRender()
+          return
+        }
+      } catch {
+        // preserve original data on downscaling error
       }
     }
-    const filePath = image.filePath || image.path
-    const data = image.data ? Buffer.from(image.data) : undefined
-    const dimensions = image.mediaType === 'image/png' ? pngDimensions(data) : undefined
-    const base64 = typeof image.base64 === 'string'
-      ? image.base64
-      : data ? data.toString('base64') : undefined
+
+    let bytes = data?.length ?? (image.data?.length ?? 0)
+    const attachments = this.attachmentsService
+    if (typeof attachments?.validateImage === 'function') {
+      const candidate = {
+        ...image,
+        data,
+        mediaType,
+        width: dimensions?.width ?? image.width,
+        height: dimensions?.height ?? image.height,
+        bytes
+      }
+      try {
+        await attachments.validateImage(candidate)
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        if (/pixel limit|exceeds.*pixel|dimension/i.test(msg) && data) {
+          try {
+            const fallback = await downscaleImageBuffer(data, mediaType, 1568)
+            if (fallback?.data && (fallback.data.length !== data.length || fallback.dimensions?.width !== dimensions?.width)) {
+              data = fallback.data
+              mediaType = fallback.mediaType || mediaType
+              dimensions = fallback.dimensions || imageDimensions(data, mediaType)
+              width = dimensions?.width ?? width
+              height = dimensions?.height ?? height
+              bytes = data.length
+              didDownscale = true
+              candidate.data = data
+              candidate.mediaType = mediaType
+              candidate.bytes = bytes
+              candidate.width = width
+              candidate.height = height
+              await attachments.validateImage(candidate)
+            } else {
+              throw error
+            }
+          } catch (retryError) {
+            this.log('error', retryError instanceof Error ? retryError.message : String(retryError), 'Cmd+V')
+            this.scheduleRender()
+            return
+          }
+        } else {
+          this.log('error', msg, 'Cmd+V')
+          this.scheduleRender()
+          return
+        }
+      }
+    }
+
+    const base64 = didDownscale
+      ? (data ? data.toString('base64') : undefined)
+      : (typeof image.base64 === 'string' ? image.base64 : (data ? data.toString('base64') : undefined))
+    const effectiveFilePath = didDownscale ? undefined : filePath
+    const effectiveWidth = dimensions?.width ?? image.width
+    const effectiveHeight = dimensions?.height ?? image.height
+
     this.pendingImages.push({
       data,
       base64,
       name: image.name || 'clipboard.png',
       bytes,
-      mediaType: image.mediaType || 'image/png',
-      width: image.width ?? dimensions?.width,
-      height: image.height ?? dimensions?.height,
-      filePath,
-      path: filePath
+      mediaType,
+      width: effectiveWidth,
+      height: effectiveHeight,
+      filePath: effectiveFilePath,
+      path: effectiveFilePath
     })
     this.scheduleRender()
   }
@@ -1987,7 +2099,16 @@ export class TuiApp {
       const filePath = stdout.trim()
       if (filePath && filePath.endsWith('.png')) {
         const { readFile, unlink } = await import('node:fs/promises')
-        const data = await readFile(filePath)
+        let data = await readFile(filePath)
+        const dims = pngDimensions(data)
+        if (dims && (dims.width > MAX_SAFE_IMAGE_PIXELS || dims.height > MAX_SAFE_IMAGE_PIXELS)) {
+          try {
+            await execFileAsync('sips', ['-Z', String(MAX_SAFE_IMAGE_PIXELS), filePath], { timeout: 5000 })
+            data = await readFile(filePath)
+          } catch {
+            // retain original data
+          }
+        }
         await unlink(filePath).catch(() => {})
         if (data && data.length > 0) {
           await this.acceptImage({
@@ -2675,25 +2796,8 @@ export class TuiApp {
     }
     for (const path of missing) this.log('error', `@${path} not found`)
 
-    // Check if current LLM model adapter supports native vision content blocks.
-    // DSH rc.1 exposes this through inputModalities; keep the model-name
-    // fallback for adapters that do not return exact metadata.
-    const selection = this.activeModel ?? this.ctx?.agentDefaultModel?.currentSelection?.()
-    const isDeepSeek = /deepseek/i.test(selection?.provider ?? '') || /deepseek/i.test(selection?.model ?? '')
-    let supportsNativeVision = !isDeepSeek || /vision/i.test(selection?.model ?? '')
-    if (this.llmService?.resolveModelInfo) {
-      try {
-        const info = await this.llmService.resolveModelInfo(selection?.provider, selection?.model)
-        if (Array.isArray(info?.inputModalities)) {
-          supportsNativeVision = info.inputModalities.includes('image')
-        } else if (info?.capabilities && typeof info.capabilities.vision === 'boolean') {
-          // Compatibility with older adapters.
-          supportsNativeVision = info.capabilities.vision
-        }
-      } catch {}
-    }
-
     let persistedImages = []
+    let supportsNativeVision = false
     if (images.length > 0) {
       try {
         persistedImages = await this.persistImageDrafts(images)
@@ -2712,6 +2816,17 @@ export class TuiApp {
         this.scheduleRender()
         return
       }
+
+      // Check if current LLM model adapter supports native vision content blocks ONLY when images are attached
+      const selection = this.activeModel ?? this.ctx?.agentDefaultModel?.currentSelection?.()
+      const knownEntries = typeof this.getModelCatalog === 'function'
+        ? await this.getModelCatalog()
+        : (this.cachedModelEntries ?? [])
+      supportsNativeVision = await resolveModelVisionSupport(
+        this.llmService,
+        selection,
+        knownEntries
+      )
     }
 
     if (queuedSubmission?.cancelled) {
@@ -3306,7 +3421,8 @@ export class TuiApp {
     this.scheduleRender()
   }
 
-  async openModelPicker() {
+  async getModelCatalog(forceRefresh = false) {
+    if (this.cachedModelEntries && !forceRefresh) return this.cachedModelEntries
     try {
       const llm = this.llmService
       const providers = llm?.listProviders?.() ?? []
@@ -3331,7 +3447,7 @@ export class TuiApp {
         }
       }
       try {
-        if (this.ctx.settings?.describe) {
+        if (this.ctx?.settings?.describe) {
           const desc = await this.ctx.settings.describe({})
           const piAiNs = desc?.result?.value?.namespaces?.find((n) => n.ns === 'llm-pi-ai')
           if (piAiNs?.value?.providers) {
@@ -3355,12 +3471,21 @@ export class TuiApp {
           }
         }
       } catch {}
-      if (entries.length === 0) {
+      if (entries.length > 0) {
+        this.cachedModelEntries = entries
+      }
+    } catch {}
+    return this.cachedModelEntries ?? []
+  }
+
+  async openModelPicker() {
+    try {
+      const allEntries = await this.getModelCatalog(true)
+      if (!allEntries || allEntries.length === 0) {
         this.log('error', 'no models listed by providers', '/model')
         this.scheduleRender()
         return
       }
-      const allEntries = entries
       const current = this.ctx.agentDefaultModel?.currentSelection?.() ?? {}
       let selected = allEntries.findIndex((entry) => entry.provider === current.provider && entry.model === current.model)
       if (selected === -1) selected = 0

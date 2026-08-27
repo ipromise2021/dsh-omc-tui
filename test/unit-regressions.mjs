@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { TuiApp, registerTuiSkillOverrides, registerBundledSkills, repeatedActionIntent, withTimeout } from '../src/index.js'
+import { TuiApp, registerTuiSkillOverrides, registerBundledSkills, repeatedActionIntent, withTimeout, resolveModelVisionSupport } from '../src/index.js'
 import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
-import { pngDimensions } from '../src/image-protocol.js'
+import { pngDimensions, jpegDimensions, imageDimensions, MAX_SAFE_IMAGE_PIXELS, downscaleImageBuffer } from '../src/image-protocol.js'
 import { alignCodePoint, moveCursorLine, moveWordLeft, moveWordRight } from '../src/input/editor.js'
 import { handleCompact } from '../src/commands/compact.js'
 import { renderMarkdownRows } from '../src/renderer/markdown.js'
@@ -92,6 +92,171 @@ assert.match(visionTool.output.render({}, { model: 'deepseek/vision', analysis: 
 
 const pngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 16, 0, 0, 0, 8])
 assert.deepEqual(pngDimensions(pngHeader), { width: 16, height: 8 })
+
+const oversizedPngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 15, 160, 0, 0, 11, 184])
+assert.deepEqual(pngDimensions(oversizedPngHeader), { width: 4000, height: 3000 })
+assert.equal(MAX_SAFE_IMAGE_PIXELS, 2048)
+
+const mockAppForAccept = {
+  pendingImages: [],
+  scheduleRender: () => {},
+  log: () => {},
+  attachmentsService: {
+    validateImage: async (candidate) => {
+      if (candidate.width > 2048) {
+        throw new Error('Image exceeds the configured per-side pixel limit.')
+      }
+    }
+  }
+}
+await TuiApp.prototype.acceptImage.call(mockAppForAccept, { data: pngHeader, mediaType: 'image/png' })
+assert.equal(mockAppForAccept.pendingImages.length, 1)
+assert.equal(mockAppForAccept.pendingImages[0].width, 16)
+assert.equal(mockAppForAccept.pendingImages[0].height, 8)
+
+// JPEG & Generic image dimensions
+const mockJpegHeader = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x04, 0xb0, 0x06, 0x40, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01])
+assert.deepEqual(jpegDimensions(mockJpegHeader), { width: 1600, height: 1200 })
+assert.deepEqual(imageDimensions(mockJpegHeader), { width: 1600, height: 1200 })
+assert.deepEqual(imageDimensions(pngHeader), { width: 16, height: 8 })
+
+// Real downscale fixture verification in acceptImage
+const { execFileSync } = await import('node:child_process')
+const { existsSync: existsSyncTest, unlinkSync: unlinkSyncTest, readFileSync: readFileSyncTest } = await import('node:fs')
+const tmpOversizedPng = `/tmp/dsh-test-oversized-${Date.now()}.png`
+try {
+  if (process.platform === 'darwin') {
+    execFileSync('sips', ['-s', 'format', 'png', '/System/Library/CoreServices/DefaultDesktop.heic', '--out', tmpOversizedPng, '-z', '3000', '4000'])
+    const oversizedBuffer = readFileSyncTest(tmpOversizedPng)
+    const appForRealDownscale = {
+      pendingImages: [],
+      scheduleRender: () => {},
+      log: () => {},
+      attachmentsService: {
+        validateImage: async (candidate) => {
+          assert.ok(candidate.width <= 2048, `width ${candidate.width} must be <= 2048`)
+          assert.ok(candidate.height <= 2048, `height ${candidate.height} must be <= 2048`)
+        }
+      }
+    }
+    await TuiApp.prototype.acceptImage.call(appForRealDownscale, {
+      data: oversizedBuffer,
+      mediaType: 'image/png',
+      filePath: tmpOversizedPng,
+      path: tmpOversizedPng,
+      base64: 'stale-base64'
+    })
+    const saved = appForRealDownscale.pendingImages[0]
+    assert.ok(saved, 'must save image draft')
+    assert.equal(saved.width, 2048)
+    assert.equal(saved.height, 1536)
+    assert.ok(saved.bytes < oversizedBuffer.length, 'data must be downsized')
+    assert.equal(saved.base64, saved.data.toString('base64'), 'base64 must match downsized buffer')
+    assert.equal(saved.filePath, undefined, 'stale filePath must be cleared')
+    assert.equal(saved.path, undefined, 'stale path must be cleared')
+  }
+} finally {
+  if (existsSyncTest(tmpOversizedPng)) unlinkSyncTest(tmpOversizedPng)
+}
+
+// resolveModelVisionSupport tests (strictly metadata-driven & fail-safe)
+assert.equal(await resolveModelVisionSupport(null, { provider: 'unknown', model: 'unknown-model' }), false)
+assert.equal(await resolveModelVisionSupport({
+  resolveModelInfo: async () => ({ inputModalities: ['text'] })
+}, { provider: 'deepseek', model: 'deepseek-v4-flash' }), false)
+assert.equal(await resolveModelVisionSupport({
+  resolveModelInfo: async () => ({ inputModalities: ['text', 'image'] })
+}, { provider: 'openai', model: 'gpt-4o' }), true)
+assert.equal(await resolveModelVisionSupport({
+  resolveModelInfo: async () => ({ capabilities: { vision: true } })
+}, { provider: 'anthropic', model: 'claude-3-5-sonnet' }), true)
+assert.equal(await resolveModelVisionSupport(null, { provider: 'dashscope', model: 'qwen-vl' }, [
+  { provider: 'dashscope', model: 'qwen-vl', inputModalities: ['text', 'image'] }
+]), true)
+assert.equal(await resolveModelVisionSupport(null, { provider: 'custom', model: 'custom-text' }, [
+  { provider: 'custom', model: 'custom-text', inputModalities: ['text'] }
+]), false)
+
+// P1 Regression: Cross-provider duplicate model name matching
+const entriesWithDuplicateModels = [
+  { provider: 'first', model: 'shared', inputModalities: ['text', 'image'] },
+  { provider: 'selected', model: 'shared', inputModalities: ['text'] }
+]
+assert.equal(await resolveModelVisionSupport(null, { provider: 'selected', model: 'shared' }, entriesWithDuplicateModels), false)
+assert.equal(await resolveModelVisionSupport(null, { provider: 'first', model: 'shared' }, entriesWithDuplicateModels), true)
+
+// P1 Regression: Independent model catalog caching when modelPicker is closed / undefined
+let listModelsCalled = 0
+const catalogCachingApp = {
+  ctx: {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'custom-provider', model: 'vision-model' }) },
+    get(name) {
+      return name === 'attachments' ? catalogCachingApp.attachmentsService : name === 'llm' ? catalogCachingApp.llmService : undefined
+    }
+  },
+  llmService: {
+    listProviders: () => [{ id: 'custom-provider' }],
+    listModels: async (providerId) => {
+      listModelsCalled++
+      return [{ id: 'vision-model', inputModalities: ['text', 'image'] }]
+    }
+  },
+  attachmentsService: {
+    saveImages: async () => [{ attachmentId: 'att-cached', mediaType: 'image/png', bytes: 1, width: 1, height: 1 }]
+  },
+  expandFileReferences: async (text) => ({ text, missing: [] }),
+  persistImageDrafts: TuiApp.prototype.persistImageDrafts,
+  getModelCatalog: TuiApp.prototype.getModelCatalog,
+  agent: { status: 'idle', followup(msg) { submittedCatalogMessage = msg } },
+  pendingImages: [],
+  modelPicker: undefined, // modelPicker is closed/undefined!
+  scheduleRender: () => {},
+  log: () => {},
+  streamBuffer: '',
+  streamHeaderCommitted: false,
+  turnHeaderCommitted: false
+}
+let submittedCatalogMessage
+await TuiApp.prototype.submitUserMessage.call(catalogCachingApp, 'inspect with cached catalog', [], [{ data: Buffer.from('x'), mediaType: 'image/png' }])
+assert.equal(submittedCatalogMessage.content[0].type, 'image')
+assert.equal(submittedCatalogMessage.content[0].attachment.attachmentId, 'att-cached')
+assert.equal(listModelsCalled, 1)
+// Second call should use cache without refetching
+await catalogCachingApp.getModelCatalog()
+assert.equal(listModelsCalled, 1)
+
+// P1 Regression: Plain text message submission must NOT query getModelCatalog / listModels
+let textOnlyListModelsCalled = 0
+const textOnlyCatalogApp = {
+  ctx: {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'custom-provider', model: 'text-model' }) },
+    get(name) {
+      return name === 'attachments' ? textOnlyCatalogApp.attachmentsService : name === 'llm' ? textOnlyCatalogApp.llmService : undefined
+    }
+  },
+  llmService: {
+    listProviders: () => [{ id: 'custom-provider' }],
+    listModels: async () => {
+      textOnlyListModelsCalled++
+      return [{ id: 'text-model', inputModalities: ['text'] }]
+    }
+  },
+  attachmentsService: {},
+  expandFileReferences: async (text) => ({ text, missing: [] }),
+  persistImageDrafts: TuiApp.prototype.persistImageDrafts,
+  getModelCatalog: TuiApp.prototype.getModelCatalog,
+  agent: { status: 'idle', followup(msg) { submittedTextMessage = msg } },
+  pendingImages: [],
+  scheduleRender: () => {},
+  log: () => {},
+  streamBuffer: '',
+  streamHeaderCommitted: false,
+  turnHeaderCommitted: false
+}
+let submittedTextMessage
+await TuiApp.prototype.submitUserMessage.call(textOnlyCatalogApp, 'pure text prompt', [], [])
+assert.equal(submittedTextMessage.content[0].text, 'pure text prompt')
+assert.equal(textOnlyListModelsCalled, 0, 'getModelCatalog / listModels must NOT be called for text messages')
 
 const chromeReadTool = 'mcp__chrome_devtools__list_network_requests'
 const chromeWriteTool = 'mcp__chrome_devtools__click'
