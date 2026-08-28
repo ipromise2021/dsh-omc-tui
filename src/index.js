@@ -1279,6 +1279,14 @@ export class TuiApp {
     }
   }
 
+  clearScreen() {
+    this.screenRenderer?.invalidate?.()
+    if (!this.screenRenderer?.isAltScreen) {
+      process.stdout.write('\x1b[3J\x1b[2J\x1b[H')
+    }
+    this.repaint(true)
+  }
+
   repaint(clearScreen = false) {
     if (!this.terminalOpen) return
     if (clearScreen) this.clearScreenRequested = true
@@ -2694,7 +2702,26 @@ export class TuiApp {
         return
       }
     }
-    const raw = this.input
+    let raw = this.input
+    if (this.pastedTexts && this.pastedTexts.size > 0) {
+      for (const [tag, item] of this.pastedTexts.entries()) {
+        if (!raw.includes(tag)) {
+          const corruptedRegex = new RegExp(`\\[Pasted text #${item.id}[^\\]]*\\]?`, 'i')
+          if (corruptedRegex.test(raw)) {
+            this.log?.('error', `检测到损坏的粘贴占位符 (ID #${item.id})，已拒绝提交以防原文丢失。`, 'Submit')
+            this.scheduleRender?.()
+            return
+          }
+        }
+      }
+      for (const [tag, item] of this.pastedTexts.entries()) {
+        if (raw.includes(tag)) {
+          raw = raw.replaceAll(tag, () => item.text)
+        }
+      }
+      this.pastedTexts.clear()
+      this.pastedTextCounter = 0
+    }
     const prompt = raw.trim()
     const images = this.pendingImages.slice()
     if (!prompt && images.length === 0) return
@@ -3057,7 +3084,7 @@ export class TuiApp {
   }
 
   handleLocalCommand(commandName, line = '') {
-    handleLocalCommand(this, commandName, line)
+    return handleLocalCommand(this, commandName, line)
   }
 
   async reasoningVariants(provider, model) {
@@ -4426,6 +4453,9 @@ export class TuiApp {
     this.baseTranscriptDocument = undefined
     this.baseTranscriptColumns = undefined
     this.needsLiveProjection = false
+    this.statusRowsCache = undefined
+    this.pastedTexts?.clear?.()
+    this.pastedTextCounter = 0
 
     if (isResumed && sessionEvents) {
       this.restoreImageAttachments?.(sessionEvents)
@@ -4466,11 +4496,19 @@ export class TuiApp {
       } else if (!confirm && id) {
         this.log('ok', `Preset change cancelled. Start a new session to use preset "${id}".`, '/preset')
       }
-      this.scheduleRender()
+      this.scheduleRender?.()
       return
     }
-    // User confirmed: create a fresh Harness session through the official API.
-    const source = isNewSession ? '/new' : '/preset'
+    if (typeof this.startNewSession === 'function') {
+      await this.startNewSession({ presetId: id, source: isNewSession ? '/new' : '/preset' })
+    } else {
+      await TuiApp.prototype.startNewSession.call(this, { presetId: id, source: isNewSession ? '/new' : '/preset' })
+    }
+  }
+
+  async startNewSession({ presetId, source = '/new' } = {}) {
+    const isNewSession = source !== '/preset'
+    const id = presetId ?? this.presetName ?? this.ctx.agentPresets.defaultId
     const permissionName = isNewSession ? this.permissionName : undefined
     this.message = isNewSession ? 'starting new session…' : `switching preset · ${id}…`
     this.scheduleRender()
@@ -4523,7 +4561,7 @@ export class TuiApp {
       await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers, previousDangerGuardDispose)
 
       void this.refreshSkills()
-      this.log('ok', isNewSession ? 'New session started.' : `New session started with preset "${id}"`, source)
+      this.log('ok', isNewSession ? (source === '/clear' ? 'Session cleared. New session started.' : 'New session started.') : `New session started with preset "${id}"`, source)
       try {
         this.repaint(true)
       } catch (error) {
@@ -5366,20 +5404,94 @@ export class TuiApp {
     this.bracketTimer = undefined
   }
 
+  getPastedTagRanges() {
+    if (!this.pastedTexts || this.pastedTexts.size === 0 || !this.input) return []
+    const ranges = []
+    for (const [tag, item] of this.pastedTexts.entries()) {
+      let startIndex = 0
+      while (startIndex < this.input.length) {
+        const found = this.input.indexOf(tag, startIndex)
+        if (found === -1) break
+        ranges.push({
+          tag,
+          item,
+          start: found,
+          end: found + tag.length
+        })
+        startIndex = found + tag.length
+      }
+    }
+    ranges.sort((a, b) => a.start - b.start)
+    return ranges
+  }
+
+  findPastedTagInside(index) {
+    const ranges = this.getPastedTagRanges()
+    for (const r of ranges) {
+      if (index > r.start && index < r.end) {
+        return r
+      }
+    }
+    return undefined
+  }
+
+  findPastedTagAt(index) {
+    const ranges = this.getPastedTagRanges()
+    for (const r of ranges) {
+      if (index >= r.start && index <= r.end) {
+        return r
+      }
+    }
+    return undefined
+  }
+
+  cleanOrphanedPastedTexts() {
+    if (this.pastedTexts && this.pastedTexts.size > 0) {
+      for (const tag of Array.from(this.pastedTexts.keys())) {
+        if (!this.input.includes(tag)) {
+          this.pastedTexts.delete(tag)
+        }
+      }
+    }
+    if (!this.pastedTexts || this.pastedTexts.size === 0) {
+      this.pastedTextCounter = 0
+    }
+  }
+
   insertText(text, { allowFilePicker = true, render = true } = {}) {
     this.clearPromptSuggestion?.()
     this.clearShellCompletion?.()
     if (this.bracketing) this.bracketLines += text.split('\n').length - 1
     else this.pasteFolded = undefined
+    const align = typeof this.alignCodePoint === 'function' ? (i, d) => this.alignCodePoint(i, d) : (i, d) => alignCodePoint(this.input, i, d)
     if (this.selection) {
-      const start = this.alignCodePoint(Math.min(this.selection.start, this.selection.end), 1)
-      const end = this.alignCodePoint(Math.max(this.selection.start, this.selection.end), 1)
+      let start = Math.min(this.selection.start, this.selection.end)
+      let end = Math.max(this.selection.start, this.selection.end)
+      if (this.pastedTexts && this.pastedTexts.size > 0 && typeof this.getPastedTagRanges === 'function') {
+        const ranges = this.getPastedTagRanges()
+        for (const r of ranges) {
+          if ((start > r.start && start < r.end) || (end > r.start && end < r.end) || (start <= r.start && end >= r.end)) {
+            start = Math.min(start, r.start)
+            end = Math.max(end, r.end)
+          }
+        }
+      }
+      start = align(start, 1)
+      end = align(end, 1)
       this.input = this.input.slice(0, start) + text + this.input.slice(end)
       this.cursor = start + text.length
       this.selection = undefined
+      this.cleanOrphanedPastedTexts?.()
     } else {
+      if (this.pastedTexts && this.pastedTexts.size > 0 && typeof this.findPastedTagInside === 'function') {
+        const inside = this.findPastedTagInside(this.cursor)
+        if (inside) {
+          this.cursor = inside.end
+        }
+      }
       this.input = this.input.slice(0, this.cursor) + text + this.input.slice(this.cursor)
       this.cursor += text.length
+      this.cleanOrphanedPastedTexts?.()
     }
     this.help = false
     this.updateMenu()
@@ -5391,16 +5503,44 @@ export class TuiApp {
     this.clearPromptSuggestion?.()
     this.clearShellCompletion?.()
     this.pasteFolded = undefined
+    const align = typeof this.alignCodePoint === 'function' ? (i, d) => this.alignCodePoint(i, d) : (i, d) => alignCodePoint(this.input, i, d)
     if (this.selection) {
-      const start = this.alignCodePoint(Math.min(this.selection.start, this.selection.end), 1)
-      const end = this.alignCodePoint(Math.max(this.selection.start, this.selection.end), 1)
+      let start = Math.min(this.selection.start, this.selection.end)
+      let end = Math.max(this.selection.start, this.selection.end)
+      if (this.pastedTexts && this.pastedTexts.size > 0 && typeof this.getPastedTagRanges === 'function') {
+        const ranges = this.getPastedTagRanges()
+        for (const r of ranges) {
+          if ((start > r.start && start < r.end) || (end > r.start && end < r.end) || (start <= r.start && end >= r.end)) {
+            start = Math.min(start, r.start)
+            end = Math.max(end, r.end)
+          }
+        }
+      }
+      start = align(start, 1)
+      end = align(end, 1)
       this.input = this.input.slice(0, start) + this.input.slice(end)
       this.cursor = start
       this.selection = undefined
+      this.cleanOrphanedPastedTexts?.()
       this.updateMenu()
       this.maybeOpenFilePicker()
       this.scheduleRender(true)
       return
+    }
+    if (this.pastedTexts && this.pastedTexts.size > 0 && typeof this.getPastedTagRanges === 'function') {
+      const ranges = this.getPastedTagRanges()
+      for (const r of ranges) {
+        if (this.cursor > r.start && this.cursor <= r.end) {
+          this.input = this.input.slice(0, r.start) + this.input.slice(r.end)
+          this.cursor = r.start
+          this.pastedTexts.delete(r.tag)
+          this.cleanOrphanedPastedTexts?.()
+          this.updateMenu()
+          this.maybeOpenFilePicker()
+          this.scheduleRender(true)
+          return
+        }
+      }
     }
     if (this.cursor <= 0) {
       if (this.input === '' && this.pendingImages.length > 0) {
@@ -5409,10 +5549,11 @@ export class TuiApp {
       }
       return
     }
-    const cursor = this.alignCodePoint(this.cursor, -1)
-    const start = this.alignCodePoint(Math.max(0, cursor - 1), -1)
+    const cursor = align(this.cursor, -1)
+    const start = align(Math.max(0, cursor - 1), -1)
     this.input = this.input.slice(0, start) + this.input.slice(cursor)
     this.cursor = start
+    this.cleanOrphanedPastedTexts?.()
     this.updateMenu()
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
@@ -5423,10 +5564,27 @@ export class TuiApp {
     this.clearShellCompletion?.()
     this.pasteFolded = undefined
     if (this.cursor >= this.input.length) return
-    const start = this.alignCodePoint(this.cursor, -1)
-    const end = this.alignCodePoint(start + 1, 1)
+    if (this.pastedTexts && this.pastedTexts.size > 0 && typeof this.getPastedTagRanges === 'function') {
+      const ranges = this.getPastedTagRanges()
+      for (const r of ranges) {
+        if (this.cursor >= r.start && this.cursor < r.end) {
+          this.input = this.input.slice(0, r.start) + this.input.slice(r.end)
+          this.cursor = r.start
+          this.pastedTexts.delete(r.tag)
+          this.cleanOrphanedPastedTexts?.()
+          this.updateMenu()
+          this.maybeOpenFilePicker()
+          this.scheduleRender(true)
+          return
+        }
+      }
+    }
+    const align = typeof this.alignCodePoint === 'function' ? (i, d) => this.alignCodePoint(i, d) : (i, d) => alignCodePoint(this.input, i, d)
+    const start = align(this.cursor, -1)
+    const end = align(start + 1, 1)
     this.input = this.input.slice(0, start) + this.input.slice(end)
     this.cursor = start
+    this.cleanOrphanedPastedTexts?.()
     this.updateMenu()
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
@@ -5439,6 +5597,7 @@ export class TuiApp {
     const end = lineEnd === -1 ? this.input.length : lineEnd
     if (end === this.cursor) return
     this.input = this.input.slice(0, this.cursor) + this.input.slice(end)
+    this.cleanOrphanedPastedTexts?.()
     this.updateMenu()
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
@@ -5452,10 +5611,28 @@ export class TuiApp {
       this.eraseBefore()
       return
     }
-    const start = moveWordLeft(this.input, this.cursor)
+    if (this.pastedTexts && this.pastedTexts.size > 0 && typeof this.getPastedTagRanges === 'function') {
+      const ranges = this.getPastedTagRanges()
+      for (const r of ranges) {
+        if (this.cursor > r.start && this.cursor <= r.end) {
+          this.input = this.input.slice(0, r.start) + this.input.slice(r.end)
+          this.cursor = r.start
+          this.pastedTexts.delete(r.tag)
+          this.cleanOrphanedPastedTexts?.()
+          this.updateMenu()
+          this.maybeOpenFilePicker()
+          this.scheduleRender(true)
+          return
+        }
+      }
+    }
+    const align = typeof this.alignCodePoint === 'function' ? (i, d) => this.alignCodePoint(i, d) : (i, d) => alignCodePoint(this.input, i, d)
+    let start = moveWordLeft(this.input, this.cursor)
+    start = align(start, -1)
     if (start === this.cursor) return
     this.input = this.input.slice(0, start) + this.input.slice(this.cursor)
     this.cursor = start
+    this.cleanOrphanedPastedTexts?.()
     this.updateMenu()
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
@@ -5469,9 +5646,27 @@ export class TuiApp {
       this.eraseBefore()
       return
     }
-    const end = moveWordRight(this.input, this.cursor)
+    if (this.pastedTexts && this.pastedTexts.size > 0 && typeof this.getPastedTagRanges === 'function') {
+      const ranges = this.getPastedTagRanges()
+      for (const r of ranges) {
+        if (this.cursor >= r.start && this.cursor < r.end) {
+          this.input = this.input.slice(0, r.start) + this.input.slice(r.end)
+          this.cursor = r.start
+          this.pastedTexts.delete(r.tag)
+          this.cleanOrphanedPastedTexts?.()
+          this.updateMenu()
+          this.maybeOpenFilePicker()
+          this.scheduleRender(true)
+          return
+        }
+      }
+    }
+    const align = typeof this.alignCodePoint === 'function' ? (i, d) => this.alignCodePoint(i, d) : (i, d) => alignCodePoint(this.input, i, d)
+    let end = moveWordRight(this.input, this.cursor)
+    end = align(end, 1)
     if (end === this.cursor) return
     this.input = this.input.slice(0, this.cursor) + this.input.slice(end)
+    this.cleanOrphanedPastedTexts?.()
     this.updateMenu()
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
@@ -5482,8 +5677,9 @@ export class TuiApp {
     this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
-    this.cursor = this.alignCodePoint(this.cursor, -1)
-    if (this.cursor > 0) this.cursor = this.alignCodePoint(this.cursor - 1, -1)
+    const align = typeof this.alignCodePoint === 'function' ? (i, d) => this.alignCodePoint(i, d) : (i, d) => alignCodePoint(this.input, i, d)
+    this.cursor = align(this.cursor, -1)
+    if (this.cursor > 0) this.cursor = align(this.cursor - 1, -1)
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
   }
@@ -5495,8 +5691,9 @@ export class TuiApp {
     this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
-    this.cursor = this.alignCodePoint(this.cursor, 1)
-    if (this.cursor < this.input.length) this.cursor = this.alignCodePoint(this.cursor + 1, 1)
+    const align = typeof this.alignCodePoint === 'function' ? (i, d) => this.alignCodePoint(i, d) : (i, d) => alignCodePoint(this.input, i, d)
+    this.cursor = align(this.cursor, 1)
+    if (this.cursor < this.input.length) this.cursor = align(this.cursor + 1, 1)
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
   }
@@ -5506,7 +5703,9 @@ export class TuiApp {
     this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
-    this.cursor = this.input.lastIndexOf('\n', this.cursor - 1) + 1
+    const align = typeof this.alignCodePoint === 'function' ? (i, d) => this.alignCodePoint(i, d) : (i, d) => alignCodePoint(this.input, i, d)
+    const target = this.input.lastIndexOf('\n', this.cursor - 1) + 1
+    this.cursor = align(target, -1)
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
   }
@@ -5516,8 +5715,10 @@ export class TuiApp {
     this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
+    const align = typeof this.alignCodePoint === 'function' ? (i, d) => this.alignCodePoint(i, d) : (i, d) => alignCodePoint(this.input, i, d)
     const next = this.input.indexOf('\n', this.cursor)
-    this.cursor = next === -1 ? this.input.length : next
+    const target = next === -1 ? this.input.length : next
+    this.cursor = align(target, 1)
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
   }
@@ -5527,7 +5728,9 @@ export class TuiApp {
     this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
-    this.cursor = moveWordLeft(this.input, this.cursor)
+    const align = typeof this.alignCodePoint === 'function' ? (i, d) => this.alignCodePoint(i, d) : (i, d) => alignCodePoint(this.input, i, d)
+    const target = moveWordLeft(this.input, this.cursor)
+    this.cursor = align(target, -1)
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
   }
@@ -5537,7 +5740,9 @@ export class TuiApp {
     this.clearShellCompletion?.()
     this.pasteFolded = undefined
     this.clearSelection()
-    this.cursor = moveWordRight(this.input, this.cursor)
+    const align = typeof this.alignCodePoint === 'function' ? (i, d) => this.alignCodePoint(i, d) : (i, d) => alignCodePoint(this.input, i, d)
+    const target = moveWordRight(this.input, this.cursor)
+    this.cursor = align(target, 1)
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
   }
@@ -5615,7 +5820,22 @@ export class TuiApp {
   }
 
   alignCodePoint(index, direction) {
-    return alignCodePoint(this.input, index, direction)
+    let aligned = alignCodePoint(this.input, index, direction)
+    if (this.pastedTexts && this.pastedTexts.size > 0) {
+      const ranges = this.getPastedTagRanges()
+      for (const r of ranges) {
+        if (aligned > r.start && aligned < r.end) {
+          if (direction < 0) {
+            aligned = r.start
+          } else if (direction > 0) {
+            aligned = r.end
+          } else {
+            aligned = (aligned - r.start < r.end - aligned) ? r.start : r.end
+          }
+        }
+      }
+    }
+    return aligned
   }
 
   copySelection(keep = false) {
@@ -5761,7 +5981,7 @@ export class TuiApp {
     this.pasteFolded = undefined
     const next = moveCursorLine(this.input, this.cursor, delta)
     if (next === null) return false
-    this.cursor = next
+    this.cursor = this.alignCodePoint(next, delta < 0 ? -1 : 1)
     this.clearSelection()
     this.scheduleRender()
     return true
@@ -5884,11 +6104,27 @@ export class TuiApp {
     }
   }
 
+  insertPastedText(text) {
+    if (!text) return
+    const lines = text.split('\n')
+    if (lines.length > 3) {
+      if (!this.pastedTexts) this.pastedTexts = new Map()
+      this.pastedTextCounter = (this.pastedTextCounter ?? 0) + 1
+      const id = this.pastedTextCounter
+      const tag = `[Pasted text #${id} +${lines.length} lines]`
+      this.pastedTexts.set(tag, { id, lines: lines.length, text })
+      this.insertText(tag, { allowFilePicker: false, render: false })
+      this.scheduleRender(true)
+      return
+    }
+    this.insertText(text, { allowFilePicker: false, render: false })
+    this.scheduleRender(true)
+  }
+
   handlePaste(content) {
     if (!content) return
     const safeContent = content.replace(/\r?\n/g, '\n')
-    this.insertText(safeContent)
-    this.scheduleRender(true)
+    this.insertPastedText(safeContent)
   }
 
   // ── input dispatch ─────────────────────────────────────────────────────
@@ -6377,7 +6613,7 @@ export class TuiApp {
             const { promisify } = await import('node:util')
             const execFileAsync = promisify(execFile)
             const { stdout } = await execFileAsync(process.platform === 'darwin' ? 'pbpaste' : 'xclip', process.platform === 'darwin' ? [] : ['-selection', 'clipboard', '-o'], { timeout: 2000 })
-            if (stdout) this.insertText(stdout, { allowFilePicker: false })
+            if (stdout) this.handlePaste(stdout)
           } catch {}
         }
       })()
@@ -6395,12 +6631,14 @@ export class TuiApp {
       this.input = ''
       this.cursor = 0
       this.pasteFolded = undefined
+      this.pastedTexts?.clear?.()
+      this.pastedTextCounter = 0
       this.updateMenu()
       this.scheduleRender()
       return
     }
     if (value === '\x0c') {
-      this.handleLocalCommand('clear')
+      this.clearScreen()
       return
     }
     if (value === '\x1b[Z') return this.cyclePermission()
@@ -6948,6 +7186,9 @@ export class TuiApp {
     for (const match of displayInput.matchAll(/(^|[\s])(@[^\s@]+)/g)) {
       const prefixLength = match[1].length
       addSpan(match.index + prefixLength, match.index + match[0].length, fileColor, 2)
+    }
+    for (const match of displayInput.matchAll(/\[Pasted text #\d+ \+\d+ lines\]/g)) {
+      addSpan(match.index, match.index + match[0].length, `${(ANSI.cyan ?? ANSI.teal ?? ANSI.blueSoft)}${ANSI.bold}`, 2)
     }
     semanticSpans.sort((a, b) => a.start - b.start || b.priority - a.priority)
     const selectionStart = this.selection ? Math.min(this.selection.start, this.selection.end) : undefined

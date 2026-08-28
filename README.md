@@ -24,23 +24,24 @@
 个人比较喜欢 Claude Code 终端的交互方式，项目参考了它的交互习惯，在终端中运行 DSH 的同时，完整保留了原生滚轮回看、文本划选与自由复制等功能特性。
 
 > 📌 **项目说明与动态**：
-> - **版本基准与适配**：本插件目前主要基于 DSH `v0.1.1-rc.2` 版本进行开发与验证。由于此前 DSH 官方仓库的提交记录一直显示停留在上周，因此当前插件主要基于上一个版本做好了底层适配；对于近期官方新增的一系列提交，后续有时间会持续跟进仓库的新版本，积极做好底层接口与功能的适配工作。
+> - **版本基准与适配**：插件依赖基线为 DSH `v0.1.1-rc.2`。附件保存、会话事件与子代理创建的源码契约已完成比对；图片、视觉 Sidecar 与 PTY 的真实 Profile 回归仍会持续补充。
 > - **官方审核状态**：本插件已在官方插件列表提交，目前仍在等待官方审核中（暂无法确定具体的审核完成时间），审核通过前推荐直接通过 npm 或 GitHub 命令快速安装体验。
 > - **持续维护**：功能会按需扩展，Bug 也会持续修复。欢迎使用、点 Star 和反馈问题。
 
-## DSH `v0.1.2-alpha.1` 适配计划
+## DSH `v0.1.1-rc.2` 适配记录
 
-最新上游目标为预发布版 `v0.1.2-alpha.1`。它包含 rc.2 的 Files API 图片上传/复用与模型级图片预处理，并新增图片后台压缩上传、图片上下文计量、子代理可选提供方/模型/推理力度/输出长度，以及会话初始化和 Profile 启动等运行时调整。[查看 alpha.1 官方发布说明](https://github.com/deepseek-ai/deepseek-harness/releases#release-dsh-v0.1.2-alpha.1) · [查看 rc.2 图片变更](https://github.com/deepseek-ai/deepseek-harness/releases#release-dsh-v0.1.1-rc.2)
+`v0.1.1-rc.2` 的发布重点是 DeepSeek 图片处理：适配器优先使用 Files API 上传并复用图片文件，且会按模型要求自动缩放、转换图片格式。[查看官方发布说明](https://github.com/deepseek-ai/deepseek-harness/releases#release-dsh-v0.1.1-rc.2)
 
-这不是单纯的版本号升级。TUI 已有图片附件保存、原生视觉直传、文本模型的旁路视觉、本地 2048px 安全预缩放和临时视觉子代理，因此需先核对附件、事件与子代理契约，再调整依赖基线。
+TUI 的 `saveImages/saveImage`、附件引用元数据、`agents.create({ agentOptions })` 与 `session/event` 使用方式均已与 rc.2 源码比对。因图片处理由 Harness 负责，TUI 保留本地 2048px 安全保护，真实图片回归确认前不移除它。
 
 | 阶段 | 适配内容 | 验收结果 |
 | :--- | :--- | :--- |
-| 1. Profile 与会话契约 | 在隔离的 alpha.1 profile 中检查启动、会话初始化、恢复、durable event 与模型能力元数据。 | 不出现启动、状态投影、恢复或 Profile 配置兼容错误。 |
-| 2. 图片附件链路 | 用支持图片输入的 DeepSeek 模型验证 PNG、JPEG、重复图片、后台压缩/上传及 Files API 的可复用引用。 | 图片可被读取；同一文件不丢失引用或重复上传，排队/取消时状态可恢复。 |
-| 3. 预处理与上下文边界 | 验证超大、超长和需要格式转换的图片，比较 TUI 的 2048px 安全限制与 Harness 的模型级预处理、图片 Context 计量。 | 不双重缩放、不因格式或尺寸元数据缺失而失败，压缩后的上下文状态正确。 |
-| 4. 子代理与旁路视觉 | 验证 `analyze_image`、多图、取消和恢复会话；核对 alpha.1 子代理的 provider/model/effort/max-output 参数与当前视觉 Sidecar。 | Sidecar 能读取持久化附件，主会话不受影响，失败时给出可恢复提示。 |
-| 5. 回归与发布 | 补齐上述边界的自动化测试，运行模块、单元和 PTY 回归；同步兼容性记录和 peer 依赖。 | 所有验证通过后，才将 README、`package.json` 与兼容性基线提升到 alpha.1。 |
+| 范围 | 结果 | 后续验证 |
+| :--- | :--- | :--- |
+| 依赖与服务契约 | 所有 DSH peer 依赖已提升到 rc.2；附件、Agent 创建和 durable event 源码接口保持兼容。 | 在实际 rc.2 Profile 中执行启动、创建和恢复会话。 |
+| 图片附件 | `saveImages/saveImage` 与可复用 `attachmentId` 引用仍可用。 | 验证 PNG、JPEG、重复图片、超大图与格式转换。 |
+| 原生与旁路视觉 | 原生 image content block 和 `analyze_image` Sidecar 的调用契约未变。 | 验证多图、取消和恢复会话后的附件读取。 |
+| 回归 | 本项目单元与模块验证通过。 | 补跑带 Harness fixture 的 PTY/交互测试。 |
 
 适配期间不会为了同步上游而复制其 UI 功能，也不会提前移除本地安全保护；只处理 Harness API 与 durable event 契约产生的实际兼容问题。
 
@@ -109,19 +110,19 @@ deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片�
 从 npm 安装到 `tui` profile（推荐，直接分发构建产物，无需 Git 依赖构建授权）：
 
 ```sh
-npx --yes @deepseek-ai/dsh@latest plugin --profile tui add dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile tui add dsh-omc-tui
 ```
 
 也可以从 GitHub 安装（会拉取源码，首次需按 pnpm 提示授权 `prepare` 构建脚本）：
 
 ```sh
-npx --yes @deepseek-ai/dsh@latest plugin --profile tui add github:ipromise2021/dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile tui add github:ipromise2021/dsh-omc-tui
 ```
 
 启动：
 
 ```sh
-npx --yes @deepseek-ai/dsh@latest --profile tui
+npx --yes @deepseek-ai/dsh@0.1.1-rc.2 --profile tui
 ```
 
 如果已经全局安装 DSH，也可以直接运行：
@@ -154,8 +155,8 @@ omc
 
 ```sh
 export DSH_HOME=/private/tmp/dsh-tui-dev
-npx --yes @deepseek-ai/dsh@latest plugin --profile tui add /absolute/path/to/dsh-omc-tui
-npx --yes @deepseek-ai/dsh@latest --profile tui
+npx --yes @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile tui add /absolute/path/to/dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.1.1-rc.2 --profile tui
 ```
 
 ## 常用快捷键

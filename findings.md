@@ -6,6 +6,36 @@
 - **范围：** 全部产品源码、发布元数据、npm 包内容、Harness 契约、TUI 投影与输入、危险命令守卫、平台边界和资源生命周期
 - **当前结论：** CR-001～CR-059 全部审查发现的代码整改与全量单元/回归测试均已 100% 闭环；未发现新的阻断项，模块导入与打包预检完整通过。
 
+## DSH v0.1.2-alpha.1 兼容性调研（2026-08-28）
+
+- **外部来源：** DeepSeek Harness 官方 Release `v0.1.1-rc.2`（发布于 2026-08-21）及最新预发布版 `v0.1.2-alpha.1`（发布于 2026-08-27）。
+- **发布变化：** rc.2 的 DeepSeek 适配器优先使用 Files API 上传图像并复用上传文件，且按模型要求自动缩放、转换格式；alpha.1 继续调整图片异步上传和 Context 计量，并扩展子代理启动配置。
+- **本插件影响面：** `src/index.js` 的 `persistImageDrafts()`、图片原生直传决策、`src/image-protocol.js` 的本地缩放，以及 `src/vision-router.js` 的 text-only 回退路径。
+- **初步判断：** 这是中等风险的运行时兼容升级，而非需要立即同步的 UI 功能；在 alpha.1 fixture 上完成原生视觉、回退视觉、重复图片和超大/非 PNG-JPEG 图片验证前，不应宣称已兼容或上调 peer 依赖基线。
+- **最新范围：** `v0.1.2-alpha.1` 在上述图片变更基础上调整会话初始化、图片异步压缩/上传与 Context 计量，并扩展子代理的 provider/model/effort/max-output 选择。TUI 需将 Profile/恢复与视觉 Sidecar 纳入同一 alpha fixture；网页会话流样式、国际化和 WebFetch 默认策略不属于本插件的投影范围。
+
+## 未提交代码审查：会话清理与大段文本粘贴（2026-08-28）
+
+- **审查范围：** `src/commands/registry.js`、`src/index.js` 与 `test/unit-regressions.mjs` 的 `/clear` 会话重启和多行粘贴折叠改动。
+- **已确认正确项：** `/clear` 复用官方 `agents.create()` 创建新会话，并在 `commitSessionState()` 后释放旧 handle；用量、上下文和状态栏缓存随新会话重置。命令处理器现在返回 Promise，测试不再依赖固定延迟。
+- **CR-060（P1，resolved）：** `submit()` 已改用回调 replacement（`replaceAll(tag, () => item.text)`），消除字符串 replacement 对 `$&`、`$'`、``$` ``、`$1`、`$$` 等特殊模式的解析；预校验先检测追踪项是否残缺再安全展开，且不在展开后的全文上运行通用占位符正则，避免包含 `[Pasted text #99...]` 等日志内容的合法用户原文被误判与丢失。回归测试已覆盖各类 Shell/JS 替换字面量与合法占位符字面量，确认提交内容 100% 逐字符保真。
+- **CR-061（P1，resolved）：** 占位符已实现为不可分割编辑单元：`alignCodePoint`、`moveWordLeft`、`moveWordRight`、`moveCursorLine` 左右与分词导航直接跨越占位符边界；Backspace / Delete 触及占位符时原子删除整个 tag 并清理 `pastedTexts`；`submit()` 在展开前预校验残缺占位符并安全拒绝提交，且在成功前不清空映射，防止静默丢失原文。`Ctrl+L` 快捷键独立为 `clearScreen()` 仅刷新重绘终端并保留上下文与会话，`/clear` 与 `Ctrl+L` 语义在代码与 `PRODUCT_SHOWCASE.md` 文档中完全对齐。
+- **测试状态：** `npm test`、`npm run verify`、`git diff --check` 以及打包预检全量通过。PTY suite 仍因缺少含 `profiles/tui` 的 Harness fixture 未运行。
+- **alpha.1 关系：** 此次未提交代码没有更新 `package.json` peer 依赖，也没有实现或验证 alpha.1 的图片、Profile、会话恢复或子代理契约适配。
+
+## alpha.1 安装可用性（2026-08-28）
+
+- **结论：** `@deepseek-ai/dsh@0.1.2-alpha.1` 尚未在 npm registry 发布；隔离安装返回 `ETARGET: No matching version found`。
+- **影响：** 当前不能通过 npm 直接运行该 GitHub Release tag，因此不得将插件 peer 依赖升至 alpha.1。若继续验证，必须使用官方源码 tag 的本地构建产物，或等待对应 npm 版本发布。
+- **本轮决策：** 用户指定改为适配 npm 已发布的 `v0.1.1-rc.2`；后续依赖和兼容性验证以 rc.2 为唯一目标。
+
+## rc.2 隔离安装环境阻塞（2026-08-28）
+
+- **确认项：** npm registry 已发布 `@deepseek-ai/dsh@0.1.1-rc.2`，包提供 `dsh` binary，且其 DSH 子包依赖均为 rc.2。
+- **异常：** 在 `/private/tmp` 目标目录分别通过 `npx`、`npm exec` 与 Node 22 的直接 npm CLI 安装，均无错误退出但未创建任何 `node_modules` 或 Profile 文件；npm `dry-run=false`、`package-lock=true`、`ignore-scripts=false`。
+- **影响：** 此沙箱暂无法运行 rc.2 fixture。后续可做源码静态契约比对，但 peer 依赖升级仍须以真实 rc.2 Profile 启动和图片/Sidecar 回归为准。
+- **静态适配结果：** rc.2 保留插件调用的 `saveImages/saveImage`、附件元数据、`agents.create({ agentOptions })` 与 `session/event`；所有 18 个 `@deepseek-ai/dsh-*` peer 依赖现已统一为 `^0.1.1-rc.2`。该变更明确最低兼容基线，不代表真实 Profile 图片/PTY 回归已经完成。
+
 ## 问题总览
 
 | ID | 优先级 | 状态 | 模块 | 摘要 |

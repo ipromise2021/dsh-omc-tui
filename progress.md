@@ -91,6 +91,30 @@
 |------|------|---------|---------|
 | 2026-08-25 | PTY suite requires Harness home fixture | 1 | 记录环境阻塞，待具备 fixture 后补跑 |
 
+## 会话：2026-08-28
+
+### 阶段 15：DSH v0.1.2-alpha.1 兼容性评估与 README 计划
+- **状态：** complete
+- 已读取 DSH 官方 `v0.1.1-rc.2` 发布说明：变更聚焦 DeepSeek 适配器的 Files API 图片上传/复用，以及按模型自动图像缩放与格式转换。
+- 已确认插件当前 peerDependencies 以 `^0.1.1-rc.1` 为基线；主要适配面是 `persistImageDrafts()`、原生 vision 内容块和本地图片预缩放，暂不修改运行时代码或依赖版本。
+- 已在 README 写入分阶段验证矩阵，并将公开安装与兼容性表述回调至已验证的 rc.1 基线；待 rc.2 fixture 回归全部通过后再升级声明与 peer 基线。
+- 已根据最新发布更正目标为 `v0.1.2-alpha.1`：在原有图片验证外，新增 Profile/会话初始化、图片异步上传与 Context 计量、子代理参数契约的验证范围；rc.2 作为其中的图片链路中间版本保留参考。
+
+### 阶段 16：未提交代码审查与大段粘贴折叠整改
+- **状态：** complete
+- `/clear` 改为创建新 Harness 会话，生命周期、用量和状态缓存重置路径合理；对应测试已改为等待命令返回 Promise。
+- CR-060（P1）：修复 `submit()` 中的 `replaceAll(tag, () => item.text)` 回调替换，彻底避免 `$`、`$&`、`$'`、``$` `` 等特殊替换语法篡改原文；先预校验追踪占位符再展开，展开后不运行通用占位符正则，防止包含 `[Pasted text #99...]` 等日志内容的合法原文被误判与丢失。已添加包含这些字面量的回归测试。
+- CR-061（P1）：将占位符实现为不可分割编辑单元，光标左右移动、分词导航均自动跨越 tag；Backspace / Delete 原子删除整个占位符并维护 `pastedTexts` 与计数器；`submit()` 成功前不清空映射以防数据丢失；`Ctrl+L` 独立为 `clearScreen()` 刷新清屏并保留上下文，与 `/clear` 创建新会话清晰解耦，文档已在 `PRODUCT_SHOWCASE.md` 同步。
+- 验证结果：`npm test`、`npm run verify`、`git diff --check` 以及打包预检全部通过；PTY suite 仍因缺少 `DSH_HOME` / `DSH_TEST_FIXTURE_HOME` fixture 未执行。
+
+### 阶段 17：DSH v0.1.1-rc.2 隔离环境适配验证
+- **状态：** in_progress
+- 用户确认将实际适配目标切换为 npm 已发布的 `v0.1.1-rc.2`；将使用独立 DSH Home 挂载当前本地插件，不覆盖全局 rc.1 安装。
+- alpha.1 安装尝试返回 `ETARGET`，且 npm 版本列表最高为 `0.1.1-rc.2`；已停止 alpha.1 源码验证，不将其作为本轮依赖基线。
+- rc.2 npm 包元数据已确认存在并声明 `dsh` 二进制及完整 rc.2 子包依赖；但本执行环境中 `npx`、`npm exec` 和直接 npm CLI 的临时安装均无错误退出且未写入目标目录。npm 配置确认非 dry-run、未禁用 lockfile 或 scripts，暂记录为环境落盘异常，不能作为 rc.2 运行验证结果。
+- 已完成源码静态契约比对：rc.2 保留 `saveImages/saveImage`、可复用的附件引用元数据、`agents.create({ agentOptions })` 与 `session/event`，与插件调用方式兼容。所有 18 个 `@deepseek-ai/dsh-*` peer 依赖已统一提升为 `^0.1.1-rc.2`；README 安装命令和 Harness 兼容性契约同步更新。
+- 验证结果：peer 基线结构检查、`npm test`、`npm run verify` 和 `git diff --check` 通过。实际 rc.2 Profile 的启动、图片与 PTY 验证仍因临时 npm 安装未落盘而待补。
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|

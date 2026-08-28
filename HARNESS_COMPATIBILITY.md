@@ -8,7 +8,7 @@
 2. 业务写入走官方 API：不要由 TUI 直接篡改 session log、权限状态、模型状态或 Harness 配置文件。
 3. durable event 是可重放状态的依据：恢复会话时，应由事件重建 UI，而不是使用未持久化的内存缓存猜测状态。
 4. 可选服务须 capability-detect：服务未挂载时显示明确提示或关闭该入口，不能静默伪造结果。
-5. Harness 仍为 developer preview：当前已验证 `@deepseek-ai/dsh@0.1.1-rc.1`；每次升级后，须复核 patch、注入服务、命令签名、事件 payload，并运行 mock/PTY 回归。
+5. Harness 仍为 developer preview：依赖基线为 `@deepseek-ai/dsh@0.1.1-rc.2`；已复核附件、Agent 创建和 session event 源码契约。每次升级后，仍须复核 patch、注入服务、命令签名、事件 payload，并运行真实 Profile 的图片与 PTY 回归。
 
 ## 已适配的 Harness 能力
 

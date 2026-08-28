@@ -7,6 +7,7 @@ import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
 import { pngDimensions, jpegDimensions, imageDimensions, MAX_SAFE_IMAGE_PIXELS, downscaleImageBuffer } from '../src/image-protocol.js'
 import { alignCodePoint, moveCursorLine, moveWordLeft, moveWordRight } from '../src/input/editor.js'
 import { handleCompact } from '../src/commands/compact.js'
+import { handleLocalCommand } from '../src/commands/registry.js'
 import { renderMarkdownRows } from '../src/renderer/markdown.js'
 import { renderStatusRows } from '../src/renderer/statusline.js'
 import { renderJobPanel } from '../src/panels/jobs-panel.js'
@@ -3785,6 +3786,233 @@ inertDispose()
   assert.ok(recapRow, 'Explicit recap row exists')
   assert.ok(!recapRow.includes('\x1b[31m'), 'Control sequence stripped from explicit recap')
   assert.ok(recapRow.includes('(disable recaps in /settings)'), 'Contains /settings hint')
+}
+
+// ── CR-058: /clear resets session and statusline context ──────────
+{
+  let clearCandidateDisposed = false
+  const oldAgent = { session: { events: [{ type: 'user/message', seq: 1 }, { type: 'turn/end', seq: 2 }], seq: 2 } }
+  let newAgentCreated = false
+
+  const clearTestApp = {
+    handle: { agent: oldAgent, dispose: async () => { clearCandidateDisposed = true } },
+    agent: oldAgent,
+    presetName: 'deepseek',
+    permissionName: 'workspace-write',
+    usage: { input: 50000, output: 2000, contextWindow: 200000 },
+    contextTokens: 52000,
+    statusRowsCache: { key: 'old-cache', rows: ['old status'] },
+    localLog: [{ kind: 'ok', text: 'old log' }],
+    message: '',
+    ctx: {
+      agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' }) },
+      agents: {
+        create: async ({ setup }) => {
+          newAgentCreated = true
+          await setup({})
+          return {
+            agent: {
+              ctx: { on: () => noop },
+              session: { events: [], seq: 0, header: { cwd: process.cwd() } }
+            },
+            dispose: async () => {}
+          }
+        }
+      },
+      agentPresets: { mount: async () => {}, composedPreset: () => 'deepseek', defaultId: 'deepseek' },
+      permissionPresets: { set: noop, current: () => 'workspace-write' }
+    },
+    scheduleRender: noop,
+    repaint: noop,
+    refreshSkills: noop,
+    log(kind, text, command) { this.localLog.push({ kind, text, command }) }
+  }
+  Object.setPrototypeOf(clearTestApp, TuiApp.prototype)
+
+  // Execute /clear and wait for completion
+  await handleLocalCommand(clearTestApp, 'clear')
+
+  assert.equal(newAgentCreated, true, 'New agent session must be created on /clear')
+  assert.equal(clearCandidateDisposed, true, 'Old session must be properly disposed')
+  assert.equal(clearTestApp.usage.input, 0, 'Usage input must be reset to 0')
+  assert.equal(clearTestApp.usage.output, 0, 'Usage output must be reset to 0')
+  assert.equal(clearTestApp.contextTokens, undefined, 'Context tokens must be reset')
+  assert.equal(clearTestApp.statusRowsCache, undefined, 'Statusline rows cache must be invalidated')
+  assert.ok(clearTestApp.localLog.some((e) => e.text.includes('Session cleared') || e.text.includes('New session started')), 'Log must indicate new session started')
+}
+
+// ── CR-060: Multi-line paste folding preserves '$' special sequences ($&, $', $`, $1, $$, ${VAR}) ──
+{
+  let submittedPrompt = ''
+  const dollarTestApp = {
+    input: '',
+    cursor: 0,
+    history: [],
+    pendingImages: [],
+    skills: [],
+    agent: { session: { id: 'test-dollar-session', events: [], seq: 1 } },
+    pastedTexts: new Map(),
+    pastedTextCounter: 0,
+    scheduleRender: noop,
+    clearPromptSuggestion: noop,
+    clearShellCompletion: noop,
+    appendHistory: noop,
+    touchMru: noop,
+    trackQueuedSubmission: noop,
+    updateMenu: noop,
+    maybeOpenFilePicker: noop,
+    log: noop,
+    async submitUserMessage(prompt) {
+      submittedPrompt = prompt
+    }
+  }
+  Object.setPrototypeOf(dollarTestApp, TuiApp.prototype)
+
+  const dollarScript = [
+    '#!/usr/bin/env bash',
+    'echo "$& $` $\' $1 $2 $$ ${HOME}"',
+    'const replaced = text.replaceAll(/foo/, "$& $\' $`")',
+    'regex_pattern="(\\$[a-zA-Z0-9_]+)"',
+    'eval "$@"'
+  ].join('\n')
+
+  dollarTestApp.handlePaste(dollarScript)
+  assert.equal(dollarTestApp.input, '[Pasted text #1 +5 lines]')
+  dollarTestApp.submit()
+  assert.equal(submittedPrompt, dollarScript, 'Pasted text with $, $&, $\', $`, $1, $$ must be preserved 100% identically without tampering')
+  assert.equal(dollarTestApp.pastedTexts.size, 0, 'pastedTexts map cleared after successful submit')
+}
+
+// ── CR-061: Placeholder atomic editing and corruption detection ──────────────
+{
+  let submittedPrompt = ''
+  let errorLogged = ''
+  const atomicTestApp = {
+    input: '',
+    cursor: 0,
+    history: [],
+    pendingImages: [],
+    skills: [],
+    agent: { session: { id: 'test-atomic-session', events: [], seq: 1 } },
+    pastedTexts: new Map(),
+    pastedTextCounter: 0,
+    scheduleRender: noop,
+    clearPromptSuggestion: noop,
+    clearShellCompletion: noop,
+    appendHistory: noop,
+    touchMru: noop,
+    trackQueuedSubmission: noop,
+    updateMenu: noop,
+    maybeOpenFilePicker: noop,
+    log(kind, text) {
+      if (kind === 'error') errorLogged = text
+    },
+    async submitUserMessage(prompt) {
+      submittedPrompt = prompt
+    }
+  }
+  Object.setPrototypeOf(atomicTestApp, TuiApp.prototype)
+
+  // 1. Paste multi-line text
+  const multiLine = 'a\nb\nc\nd\ne'
+  atomicTestApp.insertText('start ')
+  atomicTestApp.handlePaste(multiLine)
+  atomicTestApp.insertText(' end')
+  // input: "start [Pasted text #1 +5 lines] end"
+  // start is index 0..5 ("start ")
+  // tag is index 6..31 ("[Pasted text #1 +5 lines]" length 25)
+  // end is index 31..35 (" end" length 4)
+  assert.equal(atomicTestApp.input, 'start [Pasted text #1 +5 lines] end')
+  assert.equal(atomicTestApp.cursor, 35)
+
+  // 2. Cursor navigation jumps across tag atomically
+  atomicTestApp.moveLeft() // 34
+  atomicTestApp.moveLeft() // 33
+  atomicTestApp.moveLeft() // 32
+  atomicTestApp.moveLeft() // 31 (right after tag)
+  assert.equal(atomicTestApp.cursor, 31, 'Cursor is at the right edge of tag')
+  atomicTestApp.moveLeft() // Should jump directly to 6 (left edge of tag)
+  assert.equal(atomicTestApp.cursor, 6, 'Left arrow jumps across tag atomically to index 6')
+  atomicTestApp.moveRight() // Should jump directly to 31 (right edge of tag)
+  assert.equal(atomicTestApp.cursor, 31, 'Right arrow jumps across tag atomically to index 31')
+
+  // 3. Word movement jumps across tag atomically
+  atomicTestApp.moveWordLeft()
+  assert.ok(atomicTestApp.cursor <= 6, 'moveWordLeft jumps before or at the start of tag')
+  atomicTestApp.moveWordRight()
+  assert.ok(atomicTestApp.cursor >= 31, 'moveWordRight jumps after or at the end of tag')
+
+  // 4. EraseAt (Delete key) at tag start deletes entire tag atomically
+  atomicTestApp.cursor = 6
+  atomicTestApp.eraseAt()
+  assert.equal(atomicTestApp.input, 'start  end', 'Delete at tag start deletes entire tag atomically')
+  assert.equal(atomicTestApp.pastedTexts.size, 0, 'pastedTexts map cleared after atomic tag delete')
+
+  // 5. Backspace inside tag (if cursor was placed inside) deletes entire tag atomically
+  atomicTestApp.input = ''
+  atomicTestApp.cursor = 0
+  atomicTestApp.handlePaste(multiLine)
+  assert.equal(atomicTestApp.input, '[Pasted text #1 +5 lines]')
+  atomicTestApp.cursor = 10 // artificially inside tag
+  atomicTestApp.eraseBefore()
+  assert.equal(atomicTestApp.input, '', 'Backspace inside tag deletes entire tag atomically')
+  assert.equal(atomicTestApp.pastedTexts.size, 0, 'pastedTexts map is empty')
+
+  // 6. Submit detects corrupted placeholder and refuses to lose text
+  atomicTestApp.input = ''
+  atomicTestApp.cursor = 0
+  atomicTestApp.handlePaste(multiLine)
+  // Corrupt the tag in input
+  atomicTestApp.input = '[Pasted text #1 modified'
+  errorLogged = ''
+  submittedPrompt = ''
+  atomicTestApp.submit()
+  assert.equal(submittedPrompt, '', 'Submit must be rejected when corrupted placeholder is detected')
+  assert.ok(errorLogged.includes('占位符'), 'Error logged for corrupted placeholder')
+  assert.equal(atomicTestApp.pastedTexts.size, 1, 'pastedTexts map preserved to prevent data loss')
+
+  // 7. Legitimate user content containing [Pasted text #...] must expand and submit properly
+  const logWithPlaceholder = 'log line 1\n[Pasted text #99 +20 lines] in log\nlog line 3\nlog line 4'
+  atomicTestApp.input = ''
+  atomicTestApp.cursor = 0
+  atomicTestApp.pastedTexts.clear()
+  atomicTestApp.pastedTextCounter = 0
+  atomicTestApp.handlePaste(logWithPlaceholder)
+  assert.equal(atomicTestApp.input, '[Pasted text #1 +4 lines]')
+  submittedPrompt = ''
+  atomicTestApp.submit()
+  assert.equal(submittedPrompt, logWithPlaceholder, 'Legitimate user text containing [Pasted text #...] must be submitted without false positive rejection')
+}
+
+// ── Ctrl+L clears screen and repaints while keeping session/context ──────────
+{
+  let repainted = false
+  let screenInvalidated = false
+  const ctrlLApp = {
+    terminalOpen: true,
+    screenRenderer: {
+      isAltScreen: true,
+      invalidate() { screenInvalidated = true }
+    },
+    agent: { session: { id: 'ctrl-l-session', events: [{ type: 'user/message', seq: 1 }], seq: 1 } },
+    usage: { input: 1234, output: 567 },
+    contextTokens: 1801,
+    input: 'hello draft',
+    cursor: 11,
+    scheduleRender: noop,
+    reprojectDocument: noop,
+    render: noop,
+    repaint(clear) {
+      repainted = true
+    }
+  }
+  Object.setPrototypeOf(ctrlLApp, TuiApp.prototype)
+  ctrlLApp.handleToken('\x0c')
+  assert.equal(screenInvalidated, true, 'ScreenRenderer must be invalidated on Ctrl+L')
+  assert.equal(repainted, true, 'repaint(true) must be called on Ctrl+L')
+  assert.equal(ctrlLApp.agent.session.id, 'ctrl-l-session', 'Session must be preserved on Ctrl+L')
+  assert.equal(ctrlLApp.usage.input, 1234, 'Usage must be preserved on Ctrl+L')
+  assert.equal(ctrlLApp.contextTokens, 1801, 'Context tokens must be preserved on Ctrl+L')
 }
 
 console.log('unit regressions: ok')

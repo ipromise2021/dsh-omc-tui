@@ -14,7 +14,7 @@ export const LOCAL_COMMANDS = [
   { name: 'rename', description: 'rename the current session' },
   { name: 'context', description: 'show context window usage and token distribution' },
   { name: 'help', description: 'show keyboard shortcuts' },
-  { name: 'clear', description: 'clear the local transcript view' },
+  { name: 'clear', description: 'clear conversation history and start a new session' },
   { name: 'new', description: 'start a new session with the current setup' },
   { name: 'resume', description: 'pick a past session to resume' },
   { name: 'model', description: 'pick the default model' },
@@ -80,26 +80,32 @@ export function handleLocalCommand(app, commandName, line = '') {
       app.help = true
       break
     case 'clear': {
-      app.viewClearedSeq = app.agent.session.seq + 1
-      app.lastCommittedSeq = app.agent.session.seq
+      if (typeof app.startNewSession === 'function') {
+        return app.startNewSession({ source: '/clear' })
+      }
+      app.viewClearedSeq = (app.agent?.session?.seq ?? 0) + 1
+      app.lastCommittedSeq = app.agent?.session?.seq ?? 0
       app.streaming = { text: '', reasoning: '', tool: undefined }
       app.pendingImages = []
       app.localLog = []
-      app.clearFooter()
+      app.usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      app.contextTokens = undefined
+      app.statusRowsCache = undefined
+      app.clearFooter?.()
       app.clearScreenRequested = true
       app.screenRenderer?.invalidate?.()
       if (!app.screenRenderer?.isAltScreen) {
         process.stdout.write('\x1b[3J\x1b[2J\x1b[H')
       }
-      const cwd = app.agent.session.header.cwd ?? process.cwd()
+      const cwd = app.agent?.session?.header?.cwd ?? process.cwd()
       const columns = Math.max(60, process.stdout.columns || 100)
       const contentWidth = Math.max(24, columns - 2)
       const workspace = truncateWidth(safe(cwd), Math.max(24, contentWidth - 24))
-      const selection = app.ctx.agentDefaultModel.currentSelection()
+      const selection = app.ctx?.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek', model: 'deepseek-chat' }
       const model = truncateWidth(`${selection.provider}/${selection.model}`, Math.max(20, contentWidth - 28))
-      const welcome = welcomeCardRows(columns, workspace, model, app.currentEffort().toUpperCase())
-      app.commitToScrollback(welcome)
-      app.log('ok', 'view cleared (model context unchanged)', '/clear')
+      const welcome = welcomeCardRows(columns, workspace, model, (app.currentEffort?.() ?? 'DEFAULT').toUpperCase())
+      app.commitToScrollback?.(welcome)
+      app.log?.('ok', 'Session cleared. New session started.', '/clear')
       break
     }
     case 'new':
