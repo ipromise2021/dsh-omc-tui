@@ -4,7 +4,7 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-ipromise2021%2Fdsh--omc--tui-181717?style=flat-square&logo=github)](https://github.com/ipromise2021/dsh-omc-tui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![DeepSeek Harness](https://img.shields.io/badge/Harness-0.1.1--rc.1-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/Harness-0.1.1--rc.2-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-green?style=flat-square)](package.json)
 
 **DeepSeek Harness 的终端原生 TUI**
@@ -21,9 +21,12 @@
 
 插件专注于终端渲染与键盘交互；模型、会话、工具、权限、后台任务及持久化均由 Harness 官方服务提供。
 
-个人比较喜欢 Claude Code 终端的交互方式，项目参考了它的习惯，适合希望在终端中使用 DSH，同时保留滚轮回看、文本选择和复制体验的用户。
+个人比较喜欢 Claude Code 终端的交互方式，项目参考了它的交互习惯，在终端中运行 DSH 的同时，完整保留了原生滚轮回看、文本划选与自由复制等功能特性。
 
-> **个人尝试开发**的插件工具，功能会按需扩展，Bug 也会持续修复。欢迎使用、点 Star 和反馈问题。
+> 📌 **项目说明与动态**：
+> - **版本基准与适配**：本插件目前主要基于 DSH `v0.1.1-rc.2` 版本进行开发与验证。由于此前 DSH 官方仓库的提交记录一直显示停留在上周，因此当前插件主要基于上一个版本做好了底层适配；对于近期官方新增的一系列提交，后续有时间会持续跟进仓库的新版本，积极做好底层接口与功能的适配工作。
+> - **官方审核状态**：本插件已在官方插件列表提交，目前仍在等待官方审核中（暂无法确定具体的审核完成时间），审核通过前推荐直接通过 npm 或 GitHub 命令快速安装体验。
+> - **持续维护**：功能会按需扩展，Bug 也会持续修复。欢迎使用、点 Star 和反馈问题。
 
 ## 插件功能
 
@@ -79,7 +82,7 @@ deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片�
 ## 环境要求
 
 - Node.js 20 或更高版本
-- DeepSeek Harness `0.1.1-rc.1`
+- DeepSeek Harness `0.1.1-rc.2`
 - 支持 ANSI 256 色的终端
 - 图片显示建议使用 iTerm2 或支持 Kitty Graphics 的终端
 
