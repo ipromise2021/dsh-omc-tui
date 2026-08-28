@@ -86,14 +86,34 @@ assert.equal(mouseEvents[0].deltaY, -2)
 assert.equal(historyNavCalled, false, 'X10 mouse wheel must never trigger historyNav')
 assert.equal(tokenEvents.length, 0, 'X10 mouse wheel must never leak characters to input')
 
-// 8. Split Escape Sequence across chunks (SGR Mouse)
+// 8. Delayed split Escape Sequence across chunks (SGR Mouse)
 mouseEvents = []
 tokenEvents = []
 router.processInput('\x1b[<64;2')
+await new Promise((resolve) => setTimeout(resolve, 60))
 router.processInput('0;10M')
-assert.equal(mouseEvents.length, 1, 'Split SGR mouse must be parsed successfully across chunk boundary')
+assert.equal(mouseEvents.length, 1, 'Delayed SGR mouse input must be parsed successfully across chunk boundary')
 assert.equal(mouseEvents[0].type, 'wheel')
-assert.equal(tokenEvents.length, 0, 'No partial sequence must leak as raw token')
+assert.equal(tokenEvents.length, 0, 'Delayed partial mouse input must never leak as raw tokens')
+
+// 8.1 A permanently truncated SGR report must not poison later typing
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b[<35;94;')
+await new Promise((resolve) => setTimeout(resolve, 60))
+router.processInput('123')
+router.processInput('hello')
+assert.deepEqual(tokenEvents, ['1', '2', '3', 'h', 'e', 'l', 'l', 'o'], 'Typing after a truncated SGR report must remain intact')
+assert.equal(mouseEvents.length, 0, 'A truncated SGR report must not create a mouse event')
+
+// 8.2 A permanently truncated X10 report expires without swallowing typing
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b[M`+')
+await new Promise((resolve) => setTimeout(resolve, 60))
+router.processInput('abc')
+assert.deepEqual(tokenEvents, ['a', 'b', 'c'], 'Typing after a truncated X10 report must remain intact')
+assert.equal(mouseEvents.length, 0, 'An expired X10 report must not create a mouse event')
 
 // 9. Split Bracketed Paste across chunks
 pasteEvents = []

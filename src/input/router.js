@@ -1,9 +1,15 @@
 import { parseSgrMouse, parseX10Mouse } from './mouse.js'
 
+const SGR_MOUSE_SEQUENCE = /^(\x1b\[<\d+;\d+;\d+[Mm])/
+const SGR_MOUSE_PREFIX = /^\x1b\[<\d*(?:;\d*){0,2}$/
+const MAX_SGR_MOUSE_LENGTH = 64
+
 export class InputRouter {
   constructor(options = {}) {
     this.app = options.app
     this.buffer = ''
+    this.bufferKind = undefined
+    this.bufferContinuation = ''
     this.inPaste = false
     this.pasteBuffer = ''
     this.flushTimer = null
@@ -13,11 +19,27 @@ export class InputRouter {
    * Process raw incoming string from process.stdin
    */
   processInput(data) {
-    let str = this.buffer + String(data)
+    const incoming = String(data)
+    const pending = this.buffer
+    const pendingKind = this.bufferKind
+    const pendingContinuation = this.bufferContinuation
+    let str = pending + incoming
     this.buffer = ''
+    this.bufferKind = undefined
+    this.bufferContinuation = ''
     if (this.flushTimer) {
       clearTimeout(this.flushTimer)
       this.flushTimer = null
+    }
+
+    // A truncated SGR report has an explicit M/m terminator. If later input
+    // cannot continue that grammar, discard only the stale mouse prefix and
+    // process the newly arrived bytes normally.
+    if (pendingKind === 'sgr-mouse' && (
+      (!SGR_MOUSE_SEQUENCE.test(str) && !SGR_MOUSE_PREFIX.test(str)) ||
+      str.length > MAX_SGR_MOUSE_LENGTH
+    )) {
+      str = pendingContinuation + incoming
     }
 
     // 1. Bracketed paste mode continuation
@@ -65,7 +87,7 @@ export class InputRouter {
 
         // SGR Mouse Protocol: \x1b[<Cb;Cx;Cy(M|m)
         if (tail.startsWith('\x1b[<')) {
-          const sgrMatch = tail.match(/^(\x1b\[<\d+;\d+;\d+[Mm])/)
+          const sgrMatch = tail.match(SGR_MOUSE_SEQUENCE)
           if (sgrMatch) {
             const sgrToken = sgrMatch[1]
             const mouseEvent = parseSgrMouse(sgrToken)
@@ -73,9 +95,15 @@ export class InputRouter {
             i += sgrToken.length
             continue
           }
-          if (/^\x1b\[<\d*(?:;\d*){0,2}$/.test(tail)) {
+          if (SGR_MOUSE_PREFIX.test(tail)) {
             this.buffer = tail
-            this.setFlushTimer()
+            this.bufferKind = 'sgr-mouse'
+            this.bufferContinuation = pendingKind === 'sgr-mouse'
+              ? pendingContinuation + incoming
+              : ''
+            // Mouse reports are framed by a final M/m. Unlike a bare Escape,
+            // a partial report must survive arbitrary transport delays (for
+            // example after sleep/wake) or its bytes leak into the composer.
             return
           }
         }
@@ -90,6 +118,10 @@ export class InputRouter {
             continue
           }
           this.buffer = tail
+          this.bufferKind = 'x10-mouse'
+          // X10 has no terminator, so an abandoned frame cannot be
+          // distinguished from later typing. Keep its wait bounded and drop
+          // the partial frame silently on timeout.
           this.setFlushTimer()
           return
         }
@@ -153,7 +185,12 @@ export class InputRouter {
     this.flushTimer = setTimeout(() => {
       if (this.buffer) {
         const buf = this.buffer
+        const kind = this.bufferKind
         this.buffer = ''
+        this.bufferKind = undefined
+        this.bufferContinuation = ''
+        this.flushTimer = null
+        if (kind === 'x10-mouse') return
         if (buf === '\x1b') {
           this.app?.handleToken?.('\x1b')
         } else {
@@ -170,6 +207,9 @@ export class InputRouter {
       clearTimeout(this.flushTimer)
       this.flushTimer = null
     }
+    this.buffer = ''
+    this.bufferKind = undefined
+    this.bufferContinuation = ''
   }
 
   dispatchMouseEvent(event) {
