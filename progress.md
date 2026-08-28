@@ -115,6 +115,18 @@
 - 已完成源码静态契约比对：rc.2 保留 `saveImages/saveImage`、可复用的附件引用元数据、`agents.create({ agentOptions })` 与 `session/event`，与插件调用方式兼容。所有 18 个 `@deepseek-ai/dsh-*` peer 依赖已统一提升为 `^0.1.1-rc.2`；README 安装命令和 Harness 兼容性契约同步更新。
 - 验证结果：peer 基线结构检查、`npm test`、`npm run verify` 和 `git diff --check` 通过。实际 rc.2 Profile 的启动、图片与 PTY 验证仍因临时 npm 安装未落盘而待补。
 
+## 会话：2026-08-29
+
+### 阶段 18：v0.2.7 发布
+- **状态：** in_progress
+- 用户已明确授权发布 `v0.2.7`，范围为 reasoning effort 能力投影、第三方中转自定义映射、Gemini 三档示例及相关测试与文档。
+- 保持 DSH npm 兼容基线为 `v0.1.1-rc.2`；不宣称已适配尚未发布到 npm 的 `v0.1.2-alpha.1`。
+- 发布前检查确认 `v0.2.7` 尚未占用、GitHub CLI 登录正常；普通 `npm whoami` 曾因默认 registry 指向镜像站返回 `ENEEDAUTH`。
+- npm 问题已定位为默认 registry 使用 npmmirror；现有 `NPM_TOKEN` 有效，显式指定 npm 官方 registry 后 `npm whoami` 返回 `tangsz`。
+- 已将 `package.json` 更新为 `0.2.7`，并将 CHANGELOG 的 Unreleased 条目固化为 `v0.2.7`（2026-08-29）。
+- `npm test`、`npm run verify` 与 `git diff --check` 通过；首次打包预检因全局 npm cache 中旧的 root-owned 文件返回 `EPERM`，将使用隔离临时 cache 重试。
+- 隔离 cache 下 `npm pack --dry-run --json` 通过：`dsh-omc-tui@0.2.7` 包含 61 个文件，压缩体积 358,584 bytes，解包体积 946,923 bytes。
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|

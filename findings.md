@@ -1,5 +1,13 @@
 # 代码审查发现与跟踪
 
+## v0.2.7 发布预检（2026-08-29）
+
+- 预检时已发布版本为 `0.2.6`，`v0.2.7` Git tag、npm 包版本和 GitHub Release 均不存在，可作为下一补丁版本发布。
+- GitHub CLI 已登录 `ipromise2021`，具备 `repo` 权限。
+- 默认 registry 指向 `npmmirror.com`，而现有 `NPM_TOKEN` 绑定 `registry.npmjs.org`，因此普通 `npm whoami` 返回 `ENEEDAUTH`。显式指定 npm 官方 registry 后已验证账号 `tangsz`，无需修改 token；发布命令必须继续显式指定官方 registry。
+- 发布范围保持 DSH `v0.1.1-rc.2` npm 基线，不纳入尚未发布到 npm 的 `v0.1.2-alpha.1`。
+- 发布门禁通过：完整测试、模块导入与 diff 检查均成功；隔离 cache 下 npm 打包预检为 61 个文件、358,584 bytes 压缩、946,923 bytes 解包。
+
 ## 审查信息
 - **审查日期：** 2026-08-26
 - **审查基线：** `40a1c22` (`main`, `origin/main`, `v0.2.2`)

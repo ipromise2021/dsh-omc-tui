@@ -1,6 +1,6 @@
 {
   "name": "dsh-omc-tui",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "DeepSeek Harness (DSH) 原生全功能终端交互界面 · Keyboard-first Terminal TUI for DeepSeek Harness",
   "type": "module",
   "scripts": {

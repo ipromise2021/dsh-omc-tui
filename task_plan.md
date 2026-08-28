@@ -1,10 +1,10 @@
 # 任务计划：关闭 2026-08-25 代码审查问题
 
 ## 目标
-修复本轮代码审查发现的权限投影、后台任务退出、跨平台进程清理、Jobs 输出拼接和 Browser 文档一致性问题，并通过提交前验证。
+完成 `v0.2.7` 的版本固化、验证、Git/npm/GitHub 发布，并保留历史审查与 rc.2 兼容验证记录。
 
 ## 当前阶段
-阶段 14（v0.2.2 发布后全项目代码审查，已完成）
+阶段 18（v0.2.7 发布，进行中）
 
 ## 各阶段
 
@@ -132,6 +132,14 @@
 - [ ] 根据验证结果更新 peer 依赖与发布元数据
 - **状态：** in_progress
 
+### 阶段 18：v0.2.7 发布
+- [x] 确认 Git、npm 与 GitHub Release 发布前状态
+- [x] 更新 package 版本和 CHANGELOG 发布条目
+- [x] 运行完整测试、模块验证、diff 检查与 npm 打包预检
+- [ ] 创建 release commit 与 `v0.2.7` 标签并推送
+- [ ] 发布 npm 包并创建 GitHub Release
+- **状态：** in_progress
+
 ## 建议实现顺序
 1. CR-001 权限状态投影
 2. CR-002 无取消能力时的退出保护
@@ -155,6 +163,8 @@
 ## 遇到的错误
 | 错误 | 尝试次数 | 解决方案 |
 |------|---------|---------|
+| `npm pack --dry-run` 因 `~/.npm/_cacache` 存在 root-owned 文件返回 `EPERM` | 1 | 不修改全局缓存权限；改用 `/private/tmp/dsh-omc-tui-npm-cache-v027` 隔离 cache 重试 |
+| `npm whoami` 返回 `ENEEDAUTH` | 1 | 默认 registry 指向 npmmirror，而 token 绑定 npmjs；发布命令显式使用 `https://registry.npmjs.org/`，官方身份验证成功 |
 | PTY 测试缺少 `DSH_HOME` 或 `DSH_TEST_FIXTURE_HOME` | 1 | 记录为环境阻塞；准备 Harness fixture 后补跑 |
 | 首次同步阶段 14 记录时补丁上下文格式错误 | 1 | 拆分为标准多文件 patch 后成功写入 |
 | 第二次同步阶段 14 记录时多文件 patch hunk 格式错误 | 1 | 分为两个独立 apply_patch 调用后写入 |
