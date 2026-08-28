@@ -28,6 +28,22 @@
 > - **官方审核状态**：本插件已在官方插件列表提交，目前仍在等待官方审核中（暂无法确定具体的审核完成时间），审核通过前推荐直接通过 npm 或 GitHub 命令快速安装体验。
 > - **持续维护**：功能会按需扩展，Bug 也会持续修复。欢迎使用、点 Star 和反馈问题。
 
+## DSH `v0.1.2-alpha.1` 适配计划
+
+最新上游目标为预发布版 `v0.1.2-alpha.1`。它包含 rc.2 的 Files API 图片上传/复用与模型级图片预处理，并新增图片后台压缩上传、图片上下文计量、子代理可选提供方/模型/推理力度/输出长度，以及会话初始化和 Profile 启动等运行时调整。[查看 alpha.1 官方发布说明](https://github.com/deepseek-ai/deepseek-harness/releases#release-dsh-v0.1.2-alpha.1) · [查看 rc.2 图片变更](https://github.com/deepseek-ai/deepseek-harness/releases#release-dsh-v0.1.1-rc.2)
+
+这不是单纯的版本号升级。TUI 已有图片附件保存、原生视觉直传、文本模型的旁路视觉、本地 2048px 安全预缩放和临时视觉子代理，因此需先核对附件、事件与子代理契约，再调整依赖基线。
+
+| 阶段 | 适配内容 | 验收结果 |
+| :--- | :--- | :--- |
+| 1. Profile 与会话契约 | 在隔离的 alpha.1 profile 中检查启动、会话初始化、恢复、durable event 与模型能力元数据。 | 不出现启动、状态投影、恢复或 Profile 配置兼容错误。 |
+| 2. 图片附件链路 | 用支持图片输入的 DeepSeek 模型验证 PNG、JPEG、重复图片、后台压缩/上传及 Files API 的可复用引用。 | 图片可被读取；同一文件不丢失引用或重复上传，排队/取消时状态可恢复。 |
+| 3. 预处理与上下文边界 | 验证超大、超长和需要格式转换的图片，比较 TUI 的 2048px 安全限制与 Harness 的模型级预处理、图片 Context 计量。 | 不双重缩放、不因格式或尺寸元数据缺失而失败，压缩后的上下文状态正确。 |
+| 4. 子代理与旁路视觉 | 验证 `analyze_image`、多图、取消和恢复会话；核对 alpha.1 子代理的 provider/model/effort/max-output 参数与当前视觉 Sidecar。 | Sidecar 能读取持久化附件，主会话不受影响，失败时给出可恢复提示。 |
+| 5. 回归与发布 | 补齐上述边界的自动化测试，运行模块、单元和 PTY 回归；同步兼容性记录和 peer 依赖。 | 所有验证通过后，才将 README、`package.json` 与兼容性基线提升到 alpha.1。 |
+
+适配期间不会为了同步上游而复制其 UI 功能，也不会提前移除本地安全保护；只处理 Harness API 与 durable event 契约产生的实际兼容问题。
+
 ## 插件功能
 
 ### 保留终端 Scrollback
