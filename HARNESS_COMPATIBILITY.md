@@ -27,6 +27,8 @@
 | 图片命令 | `ctx.commands` + `ctx.attachments` | 以新版 `execute(agent, line, images, signal)` 传递 `/goal`、官方 `/plan` 等命令图片附件；准入失败保留 composer draft |
 | TUI 设置 | `ctx.settings` / settings-file | `dsh-omc-tui` namespace，主题与输入历史偏好持久化到 `$DSH_HOME/settings.yaml` |
 
+Reasoning effort 必须来自具体模型的 `reasoning.efforts` 元数据。官方适配器可直接提供能力；第三方中转或本地反向代理无法暴露该元数据时，由用户在 `models[].reasoningEfforts` 中声明选择 ID 到网关值的映射。元数据缺失时使用 Provider 默认行为，TUI 显示 `PROVIDER`，不生成或发送猜测档位；能力查询本身失败时则显示真实诊断。
+
 ## 允许保留在 TUI 本地的内容
 
 - ANSI 主题渲染、终端尺寸、光标、选区、滚动位置、动画和当前面板选中项。

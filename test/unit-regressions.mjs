@@ -1325,6 +1325,28 @@ const textOnlyRequest = await requestOverrideHandler({}, async () => ({
 assert.equal('reasoningEffort' in textOnlyRequest, false)
 assert.equal(textOnlyRequest.messages[0].content[0].type, 'image')
 
+requestOverrideApp.reasoningEffort = 'high'
+requestOverrideApp.activeModel = { provider: 'local-cpa', model: 'gemini-3.7-flash' }
+requestOverrideApp.llmService.resolveModelInfo = async () => ({
+  reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'medium', name: 'Medium' }] }
+})
+const unsupportedEffortRequest = await requestOverrideHandler({}, async () => ({
+  provider: 'old',
+  model: 'old',
+  reasoningEffort: 'max',
+  messages: []
+}))
+assert.equal('reasoningEffort' in unsupportedEffortRequest, false)
+
+requestOverrideApp.llmService.resolveModelInfo = async () => { throw new Error('catalog offline') }
+const unresolvedEffortRequest = await requestOverrideHandler({}, async () => ({
+  provider: 'old',
+  model: 'old',
+  reasoningEffort: 'high',
+  messages: []
+}))
+assert.equal('reasoningEffort' in unresolvedEffortRequest, false)
+
 let bashCommand
 const bashImage = { data: Buffer.from('x'), mediaType: 'image/png' }
 const bashImageApp = {
@@ -1359,7 +1381,49 @@ assert.equal(effortMetadata.defaultEffort, 'off')
 const noEffortMetadata = await TuiApp.prototype.reasoningMetadata.call({
   llmService: { resolveModelInfo: async () => ({ name: 'plain-model' }) }
 }, 'provider', 'plain-model')
-assert.deepEqual(noEffortMetadata, { entries: [], defaultEffort: undefined })
+assert.deepEqual(noEffortMetadata, { entries: [], defaultEffort: undefined, capability: 'undeclared' })
+
+const unavailableEffortMetadata = await TuiApp.prototype.reasoningMetadata.call({
+  llmService: { resolveModelInfo: async () => { throw new Error('catalog offline') } }
+}, 'provider', 'missing-model')
+assert.deepEqual(unavailableEffortMetadata, {
+  entries: [],
+  defaultEffort: undefined,
+  capability: 'unavailable',
+  error: 'catalog offline'
+})
+
+const geminiEffortMetadata = await TuiApp.prototype.reasoningMetadata.call({
+  llmService: {
+    resolveModelInfo: async () => ({
+      reasoning: {
+        efforts: [
+          { id: 'low', name: 'Low' },
+          { id: 'medium', name: 'Medium' },
+          { id: 'high', name: 'High' }
+        ]
+      }
+    })
+  }
+}, 'local-cpa', 'gemini-3.7-flash')
+assert.deepEqual(geminiEffortMetadata.entries.map((entry) => entry.id), ['low', 'medium', 'high'])
+
+let effortDiagnostic
+await TuiApp.prototype.openEffortPicker.call({
+  activeModel: { provider: 'local-cpa', model: 'gemini-3.7-flash' },
+  reasoningMetadata: TuiApp.prototype.reasoningMetadata,
+  llmService: { resolveModelInfo: async () => ({ name: 'gemini-3.7-flash' }) },
+  log(level, text) { effortDiagnostic = { level, text } }
+})
+assert.equal(effortDiagnostic.level, 'ok')
+assert.match(effortDiagnostic.text, /models\[\]\.reasoningEfforts/)
+assert.match(effortDiagnostic.text, /provider default/)
+
+assert.equal(TuiApp.prototype.currentEffort.call({
+  reasoningEffort: undefined,
+  agent: undefined,
+  ctx: { agentDefaultModel: { currentSelection: () => ({ reasoningEffort: 'DEFAULT' }) } }
+}), 'provider')
 
 const modelSwitchApp = {
   modelPicker: { entries: [{ provider: 'deepseek', model: 'vision', name: 'vision' }], selected: 0 },
@@ -1515,6 +1579,7 @@ assert.ok(turnLifecycleApp.turnStats.speed > 0)
 assert.equal(turnLifecycleApp.turnStartTime, undefined)
 
 const status = renderStatusRows({ columns: 100, sessionEvents: [] })
+assert.match(visibleOf(status.rows.join('\n')), /effort PROVIDER/)
 const changedStatus = renderStatusRows({
   columns: 100,
   sessionEvents: [{ type: 'session/title', data: { title: 'updated' } }],

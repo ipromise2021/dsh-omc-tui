@@ -1110,10 +1110,16 @@ export class TuiApp {
         modelInfo = await this.llmService?.resolveModelInfo?.(provider, model)
       } catch {}
 
-      if (modelInfo && modelInfo.reasoning === undefined) {
+      const advertisedEfforts = modelInfo?.reasoning?.efforts
+      const requestedEffort = this.reasoningEffort ?? result?.reasoningEffort
+      const supportsRequestedEffort = requestedEffort !== undefined
+        && Array.isArray(advertisedEfforts)
+        && advertisedEfforts.some((effort) => String(effort.id).toLowerCase() === String(requestedEffort).toLowerCase())
+
+      if ((modelInfo && !supportsRequestedEffort) || (!modelInfo && this.activeModel)) {
         const { reasoningEffort: _staleEffort, ...withoutReasoningEffort } = result
         result = withoutReasoningEffort
-      } else if (this.reasoningEffort !== undefined) {
+      } else if (modelInfo && this.reasoningEffort !== undefined) {
         result = { ...result, reasoningEffort: this.reasoningEffort }
       }
 
@@ -3092,14 +3098,16 @@ export class TuiApp {
   }
 
   async reasoningMetadata(provider, model) {
-    const fallback = [
-      { id: 'default', label: 'default', desc: '标准模式 (极速响应 · 无多余思考)' },
-      { id: 'low', label: 'low', desc: '轻量思考 (低延迟 · 适合简单任务)' },
-      { id: 'high', label: 'high', desc: '深度思考 (Deep Reasoning · 推荐)' },
-      { id: 'max', label: 'max', desc: '最大思考预算 (Ultra Depth · 攻坚复杂问题)' }
-    ]
     try {
       const info = await this.llmService?.resolveModelInfo?.(provider, model)
+      if (!info) {
+        return {
+          entries: [],
+          defaultEffort: undefined,
+          capability: 'unavailable',
+          error: 'model capability lookup returned no metadata'
+        }
+      }
       const efforts = info?.reasoning?.efforts
       if (Array.isArray(efforts) && efforts.length > 0) {
         return {
@@ -3110,12 +3118,19 @@ export class TuiApp {
           })),
           defaultEffort: info?.reasoning?.defaultEffort
             ? String(info.reasoning.defaultEffort)
-            : undefined
+            : undefined,
+          capability: 'selectable'
         }
       }
-      if (info) return { entries: [], defaultEffort: undefined }
-    } catch {}
-    return { entries: fallback, defaultEffort: 'default' }
+      return { entries: [], defaultEffort: undefined, capability: 'undeclared' }
+    } catch (error) {
+      return {
+        entries: [],
+        defaultEffort: undefined,
+        capability: 'unavailable',
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
   }
 
   async openEffortPicker() {
@@ -3123,7 +3138,12 @@ export class TuiApp {
     const metadata = await this.reasoningMetadata(liveModel.provider, liveModel.model)
     const variants = metadata.entries
     if (variants.length === 0) {
-      this.log('ok', 'the current model does not expose selectable reasoning efforts', '/effort')
+      const identity = `${liveModel.provider}/${liveModel.model}`
+      if (metadata.capability === 'unavailable') {
+        this.log('error', `unable to resolve reasoning efforts for ${identity}: ${metadata.error}`, '/effort')
+      } else {
+        this.log('ok', `${identity} does not declare models[].reasoningEfforts; using the provider default`, '/effort')
+      }
       return
     }
     let sel = variants.findIndex((v) => v.id.toLowerCase() === (this.reasoningEffort ?? metadata.defaultEffort ?? 'high').toLowerCase())
@@ -5090,7 +5110,8 @@ export class TuiApp {
   }
 
   currentEffort() {
-    return this.reasoningEffort ?? this.agent?.session?.requestHeader?.()?.config?.reasoningEffort ?? this.ctx?.agentDefaultModel?.currentSelection?.()?.reasoningEffort ?? 'default'
+    const effort = this.reasoningEffort ?? this.agent?.session?.requestHeader?.()?.config?.reasoningEffort ?? this.ctx?.agentDefaultModel?.currentSelection?.()?.reasoningEffort
+    return !effort || String(effort).toLowerCase() === 'default' ? 'provider' : String(effort)
   }
 
   planModeService() {

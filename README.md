@@ -199,6 +199,30 @@ npx --yes @deepseek-ai/dsh@0.1.1-rc.2 --profile tui
 
 其他命令和快捷键可以在 TUI 中通过 `?`、`/help` 或 `Ctrl+P` 查看。
 
+### Reasoning effort
+
+`/effort` 严格显示当前模型通过 Harness 声明的档位，不会猜测模型能力。官方适配器或内置模型目录通常会提供这类元数据；第三方中转、兼容接口和本地反向代理的模型列表往往只返回模型 ID，无法自动提供思考等级。此时状态栏显示 `effort PROVIDER`，表示请求未指定档位并继续使用模型或网关默认行为，不代表模型调用失败。
+
+需要在 TUI 中选择档位时，可在 `settings.yaml` 的具体模型上声明 `reasoningEfforts`。下面是本地反向代理 `local-cpa` 提供 `gemini-3.7-flash`、且该模型支持 `low`、`medium`、`high` 三档时的配置示例：
+
+```yaml
+llm-pi-ai:
+  providers:
+    local-cpa:
+      apiKeyEnv: LOCAL_CPA_API_KEY
+      api: anthropic-messages
+      baseURL: http://127.0.0.1:8317
+      models:
+        - id: gemini-3.7-flash
+          name: gemini-3.7-flash
+          reasoningEfforts:
+            low: low
+            medium: medium
+            high: high
+```
+
+映射左侧是 TUI 使用的 Harness effort ID，右侧是发送给网关的实际值。若中转服务使用不同拼写，可以映射为它要求的值；例如 `high: deep` 会在 TUI 中显示 `HIGH`，并向中转发送 `deep`。只声明模型和网关真实支持的档位，未声明的值不会出现在选择器中，也不会由插件强制发送。修改配置后重启 DSH，再运行 `/effort` 即可选择。
+
 ## 主题和终端显示
 
 内置以下主题：
