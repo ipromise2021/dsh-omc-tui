@@ -118,7 +118,7 @@
 ## 会话：2026-08-29
 
 ### 阶段 18：v0.2.7 发布
-- **状态：** in_progress
+- **状态：** complete
 - 用户已明确授权发布 `v0.2.7`，范围为 reasoning effort 能力投影、第三方中转自定义映射、Gemini 三档示例及相关测试与文档。
 - 保持 DSH npm 兼容基线为 `v0.1.1-rc.2`；不宣称已适配尚未发布到 npm 的 `v0.1.2-alpha.1`。
 - 发布前检查确认 `v0.2.7` 尚未占用、GitHub CLI 登录正常；普通 `npm whoami` 曾因默认 registry 指向镜像站返回 `ENEEDAUTH`。
@@ -126,6 +126,9 @@
 - 已将 `package.json` 更新为 `0.2.7`，并将 CHANGELOG 的 Unreleased 条目固化为 `v0.2.7`（2026-08-29）。
 - `npm test`、`npm run verify` 与 `git diff --check` 通过；首次打包预检因全局 npm cache 中旧的 root-owned 文件返回 `EPERM`，将使用隔离临时 cache 重试。
 - 隔离 cache 下 `npm pack --dry-run --json` 通过：`dsh-omc-tui@0.2.7` 包含 61 个文件，压缩体积 358,584 bytes，解包体积 946,923 bytes。
+- 已创建 release commit `12fb440` 和注释标签 `v0.2.7`，并将 `main` 与标签推送到 GitHub。
+- 已通过 npm 官方 registry 发布 `dsh-omc-tui@0.2.7`，dist-tag 为 `latest`。
+- 已创建正式 GitHub Release `v0.2.7`；复核确认 npm `latest=0.2.7`，GitHub Release 非草稿、非预发布。
 
 ## 五问重启检查
 | 问题 | 答案 |

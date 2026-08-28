@@ -4,7 +4,7 @@
 完成 `v0.2.7` 的版本固化、验证、Git/npm/GitHub 发布，并保留历史审查与 rc.2 兼容验证记录。
 
 ## 当前阶段
-阶段 18（v0.2.7 发布，进行中）
+阶段 18（v0.2.7 发布，已完成）
 
 ## 各阶段
 
@@ -136,9 +136,9 @@
 - [x] 确认 Git、npm 与 GitHub Release 发布前状态
 - [x] 更新 package 版本和 CHANGELOG 发布条目
 - [x] 运行完整测试、模块验证、diff 检查与 npm 打包预检
-- [ ] 创建 release commit 与 `v0.2.7` 标签并推送
-- [ ] 发布 npm 包并创建 GitHub Release
-- **状态：** in_progress
+- [x] 创建 release commit 与 `v0.2.7` 标签并推送
+- [x] 发布 npm 包并创建 GitHub Release
+- **状态：** complete
 
 ## 建议实现顺序
 1. CR-001 权限状态投影

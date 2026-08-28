@@ -7,6 +7,8 @@
 - 默认 registry 指向 `npmmirror.com`，而现有 `NPM_TOKEN` 绑定 `registry.npmjs.org`，因此普通 `npm whoami` 返回 `ENEEDAUTH`。显式指定 npm 官方 registry 后已验证账号 `tangsz`，无需修改 token；发布命令必须继续显式指定官方 registry。
 - 发布范围保持 DSH `v0.1.1-rc.2` npm 基线，不纳入尚未发布到 npm 的 `v0.1.2-alpha.1`。
 - 发布门禁通过：完整测试、模块导入与 diff 检查均成功；隔离 cache 下 npm 打包预检为 61 个文件、358,584 bytes 压缩、946,923 bytes 解包。
+- npm 官方 registry 已成功接收 `dsh-omc-tui@0.2.7`，发布输出确认使用 `latest` 和 public access。
+- GitHub Release `v0.2.7` 已正式发布，状态为非草稿、非预发布；npm 复核确认 `version=0.2.7`、`latest=0.2.7`。
 
 ## 审查信息
 - **审查日期：** 2026-08-26
