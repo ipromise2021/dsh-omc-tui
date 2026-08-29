@@ -8,7 +8,7 @@
 2. 业务写入走官方 API：不要由 TUI 直接篡改 session log、权限状态、模型状态或 Harness 配置文件。
 3. durable event 是可重放状态的依据：恢复会话时，应由事件重建 UI，而不是使用未持久化的内存缓存猜测状态。
 4. 可选服务须 capability-detect：服务未挂载时显示明确提示或关闭该入口，不能静默伪造结果。
-5. Harness 仍为 developer preview：依赖基线为 `@deepseek-ai/dsh@0.1.1-rc.2`；已复核附件、Agent 创建和 session event 源码契约。每次升级后，仍须复核 patch、注入服务、命令签名、事件 payload，并运行真实 Profile 的图片与 PTY 回归。
+5. Harness 仍为 developer preview：依赖基线为 [`@deepseek-ai/dsh@0.1.1-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)；截至 2026-08-29，该版本同时是官方 npm 包的 `latest` 与 `next`。已复核附件、Agent 创建和 session event 源码契约。每次升级后，仍须复核 patch、注入服务、命令签名、事件 payload，并运行真实 Profile 的图片与 PTY 回归。
 
 ## 已适配的 Harness 能力
 
@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | 创建、恢复和提交对话 | `ctx.agents`、`ctx.sessions`、`sessionPersistence`、`sessionQuery` | `agents.create/resume`、`agent.followup`、durable `session/event` |
 | 流式输出、reasoning、工具调用、usage | `session/event`、`agent/status` | durable 消息/工具/usage 事件与 agent 状态 |
-| 模型与 effort | `ctx.llm`、`agentDefaultModel` | `inputModalities` 视觉能力、动态 reasoning efforts、request override、默认模型选择 |
+| 模型与 effort | `ctx.llm`、`agentDefaultModel` | `inputModalities` 视觉能力、动态 reasoning efforts、request override、通过 `saveSelection()` 持久化完整默认模型与 effort 选择 |
 | Agent preset 与 plan/build | `agentPresets`、`planMode` | preset mount/recompose 与 durable preset/plan 事件 |
 | 权限审批 | `permissionPresets`、`approval/request` | 预设服务、审批回调、durable permission 事件 |
 | Slash 命令 | `ctx.commands` | 官方 command registry 的 find/list/execute |
@@ -28,6 +28,8 @@
 | TUI 设置 | `ctx.settings` / settings-file | `dsh-omc-tui` namespace，主题与输入历史偏好持久化到 `$DSH_HOME/settings.yaml` |
 
 Reasoning effort 必须来自具体模型的 `reasoning.efforts` 元数据。官方适配器可直接提供能力；第三方中转或本地反向代理无法暴露该元数据时，由用户在 `models[].reasoningEfforts` 中声明选择 ID 到网关值的映射。元数据缺失时使用 Provider 默认行为，TUI 显示 `PROVIDER`，不生成或发送猜测档位；能力查询本身失败时则显示真实诊断。
+
+用户确认 effort 后，TUI 将当前 provider、model 与规范化 effort ID 作为一份完整选择交给 `agentDefaultModel.saveSelection()`。内存状态只在 Harness 设置写入成功后更新，因此新会话可通过 `currentSelection()` 恢复相同档位，写入失败也不会造成界面状态与持久化配置分叉。直接命令输入必须先匹配当前模型声明的 effort；无效值不会持久化。选择不支持 reasoning effort 的模型时，通过省略 `reasoningEffort` 的完整保存清除旧覆盖值。
 
 ## 允许保留在 TUI 本地的内容
 

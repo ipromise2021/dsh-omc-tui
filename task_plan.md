@@ -140,6 +140,14 @@
 - [x] 发布 npm 包并创建 GitHub Release
 - **状态：** complete
 
+### 阶段 19：v0.2.8 发布
+- [x] 完成 reasoning effort 持久化、能力校验和失败状态一致性修复
+- [x] 更新 README、兼容性契约与变更日志，确认官方 npm DSH 基线
+- [x] 运行发布前测试、模块验证、空白检查与 npm 打包预检
+- [ ] 创建 release commit、标签并推送
+- [ ] 发布 npm 包并创建 GitHub Release
+- **状态：** in_progress（等待提交、推送与发布）
+
 ## 建议实现顺序
 1. CR-001 权限状态投影
 2. CR-002 无取消能力时的退出保护

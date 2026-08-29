@@ -24,7 +24,7 @@
 个人比较喜欢 Claude Code 终端的交互方式，项目参考了它的交互习惯，在终端中运行 DSH 的同时，完整保留了原生滚轮回看、文本划选与自由复制等功能特性。
 
 > 📌 **项目说明与动态**：
-> - **版本基准与适配**：插件依赖基线为 DSH `v0.1.1-rc.2`。附件保存、会话事件与子代理创建的源码契约已完成比对；图片、视觉 Sidecar 与 PTY 的真实 Profile 回归仍会持续补充。
+> - **版本基准与适配**：插件依赖基线为 DSH `v0.1.1-rc.2`。截至 2026-08-29，官方 npm 包 [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) 的 `latest` 与 `next` 均为 `0.1.1-rc.2`。附件保存、会话事件与子代理创建的源码契约已完成比对；图片、视觉 Sidecar 与 PTY 的真实 Profile 回归仍会持续补充。
 > - **后续版本跟进**：截至 2026-08-29，DSH `v0.1.2-alpha.1` 尚未发布到 npm registry，因此本插件暂不将其声明为可安装依赖或正式兼容基线。待上游 npm 包发布后，将继续验证 API、durable event、模型能力与真实 Profile，并按验证结果持续适配和保持向后兼容。
 > - **持续维护**：功能会按需扩展，Bug 也会持续修复。欢迎使用、点 Star 和反馈问题。
 
@@ -32,7 +32,7 @@
 
 `v0.1.1-rc.2` 的发布重点是 DeepSeek 图片处理：适配器优先使用 Files API 上传并复用图片文件，且会按模型要求自动缩放、转换图片格式。[查看官方发布说明](https://github.com/deepseek-ai/deepseek-harness/releases#release-dsh-v0.1.1-rc.2)
 
-当前发布版插件以 npm 可获取的 `v0.1.1-rc.2` 为安装和兼容基线。GitHub 上游虽已提供 `v0.1.2-alpha.1` 预览版本，但对应 npm 包尚未正式发布；待官方正式发布后，本插件将统一开展升级适配与兼容回归验证。
+当前发布版插件以 npm 可获取的 `v0.1.1-rc.2` 为安装和兼容基线；可在官方 npm 页面查看 [`@deepseek-ai/dsh` 的版本与 dist-tag](https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions)。GitHub 上游虽已提供 `v0.1.2-alpha.1` 预览版本，但对应 npm 包尚未正式发布；待官方正式发布后，本插件将统一开展升级适配与兼容回归验证。
 
 TUI 的 `saveImages/saveImage`、附件引用元数据、`agents.create({ agentOptions })` 与 `session/event` 使用方式均已与 rc.2 源码比对。因图片处理由 Harness 负责，TUI 保留本地 2048px 安全保护，真实图片回归确认前不移除它。
 
@@ -101,7 +101,7 @@ deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片�
 ## 环境要求
 
 - Node.js 20 或更高版本
-- DeepSeek Harness `0.1.1-rc.2`
+- DeepSeek Harness [`@deepseek-ai/dsh@0.1.1-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)（截至 2026-08-29 为 npm `latest` / `next`）
 - 支持 ANSI 256 色的终端
 - 图片显示建议使用 iTerm2 或支持 Kitty Graphics 的终端
 
@@ -205,6 +205,8 @@ npx --yes @deepseek-ai/dsh@0.1.1-rc.2 --profile tui
 
 `/effort` 严格显示当前模型通过 Harness 声明的档位，不会猜测模型能力。官方适配器或内置模型目录通常会提供这类元数据；第三方中转、兼容接口和本地反向代理的模型列表往往只返回模型 ID，无法自动提供思考等级。此时状态栏显示 `effort PROVIDER`，表示请求未指定档位并继续使用模型或网关默认行为，不代表模型调用失败。
 
+通过 `/effort` 或模型选择器确认档位后，TUI 会调用 Harness 的 `agentDefaultModel.saveSelection()` 保存完整的 `{ provider, model, reasoningEffort }` 默认选择。该档位立即用于当前 TUI，之后创建的新会话也会恢复并显示相同等级；例如选择 `high` 后，新会话状态栏仍显示 `effort HIGH`。直接执行 `/effort <id>` 时也会先校验当前模型声明的档位，不支持的值不会写入设置。切换到未声明 reasoning effort 的模型时会清除旧覆盖值，并回到 `PROVIDER`。
+
 需要在 TUI 中选择档位时，可在 `settings.yaml` 的具体模型上声明 `reasoningEfforts`。下面是本地反向代理 `local-cpa` 提供 `gemini-3.7-flash`、且该模型支持 `low`、`medium`、`high` 三档时的配置示例：
 
 ```yaml
@@ -223,7 +225,7 @@ llm-pi-ai:
             high: high
 ```
 
-映射左侧是 TUI 使用的 Harness effort ID，右侧是发送给网关的实际值。若中转服务使用不同拼写，可以映射为它要求的值；例如 `high: deep` 会在 TUI 中显示 `HIGH`，并向中转发送 `deep`。只声明模型和网关真实支持的档位，未声明的值不会出现在选择器中，也不会由插件强制发送。修改配置后重启 DSH，再运行 `/effort` 即可选择。
+映射左侧是 TUI 使用的 Harness effort ID，右侧是发送给网关的实际值。若中转服务使用不同拼写，可以映射为它要求的值；例如 `high: deep` 会在 TUI 中显示 `HIGH`，并向中转发送 `deep`。只声明模型和网关真实支持的档位，未声明的值不会出现在选择器中，也不会由插件强制发送。修改模型能力配置后需要重启 DSH；随后通过 `/effort` 选择一次，所选档位会由 Harness 设置服务持久化，不需要编辑插件内部文件。
 
 ## 主题和终端显示
 

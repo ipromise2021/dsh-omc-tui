@@ -10,6 +10,12 @@
 - npm 官方 registry 已成功接收 `dsh-omc-tui@0.2.7`，发布输出确认使用 `latest` 和 public access。
 - GitHub Release `v0.2.7` 已正式发布，状态为非草稿、非预发布；npm 复核确认 `version=0.2.7`、`latest=0.2.7`。
 
+## v0.2.8 发布预检（2026-08-29）
+
+- 发布内容为 reasoning effort 默认选择持久化、模型能力校验和设置写入失败时的投影一致性修复，以及配套 README、Harness 兼容性契约和 CHANGELOG 说明。
+- 上游 npm 基线已通过官方 registry 核实：`@deepseek-ai/dsh` 的 `latest` 与 `next` 均为 `0.1.1-rc.2`。
+- 发布前应继续使用 npm 官方 registry 与隔离 cache；默认 registry 指向镜像站，不能用于此账号 token 的发布认证。
+
 ## 审查信息
 - **审查日期：** 2026-08-26
 - **审查基线：** `40a1c22` (`main`, `origin/main`, `v0.2.2`)

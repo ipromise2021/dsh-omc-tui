@@ -117,6 +117,14 @@
 
 ## 会话：2026-08-29
 
+### 阶段 19：v0.2.8 发布
+- **状态：** in_progress
+- 用户授权将已提交的 reasoning effort 持久化修复与后续文档更新发布为 `v0.2.8`。
+- 代码提交 `8f8c25e` 已完成但尚未推送；README、HARNESS_COMPATIBILITY 和 CHANGELOG 的说明更新仍在工作区。
+- 已确认官方 npm registry 中 `@deepseek-ai/dsh` 的 `latest` / `next` 为 `0.1.1-rc.2`；发布目标保持该兼容基线。
+- 发布预检通过：`npm test`、`npm run verify`、`git diff --check` 和隔离 cache 下的 `npm pack --dry-run --json` 均成功；预检包共 61 个文件、压缩 359,289 bytes、解包 950,427 bytes。
+- npm 官方 registry 查询 `dsh-omc-tui@0.2.8` 返回 404，确认该版本号尚未占用。
+
 ### 阶段 18：v0.2.7 发布
 - **状态：** complete
 - 用户已明确授权发布 `v0.2.7`，范围为 reasoning effort 能力投影、第三方中转自定义映射、Gemini 三档示例及相关测试与文档。
