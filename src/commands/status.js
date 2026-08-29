@@ -1,4 +1,8 @@
+import { createRequire } from 'node:module'
 import { formatTokens } from '../renderer/ansi.js'
+
+const require = createRequire(import.meta.url)
+const { name: packageName, version: packageVersion } = require('../../package.json')
 
 export function handleStatus(app) {
   const selection = app.ctx.agentDefaultModel?.currentSelection?.() ?? {}
@@ -33,6 +37,7 @@ export function handleStatus(app) {
     .filter((job) => job.status === 'running' || job.status === 'stopping').length
 
   const lines = [
+    `TUI:          ${packageName} v${packageVersion}`,
     `Model:        ${modelStr} · effort ${effortStr}`,
     `Mode:         ${modeStr} · Preset: ${presetStr}`,
     `Directory:    ${cwd}`,
