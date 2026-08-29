@@ -127,7 +127,7 @@ export function handleLocalCommand(app, commandName, line = '') {
       break
     }
     case 'export':
-      void app.exportSession()
+      app.exportSession()
       break
     case 'paste':
     case 'image':

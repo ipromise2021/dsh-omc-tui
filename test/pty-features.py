@@ -114,10 +114,13 @@ try:
     send("\x0f")  # collapse back
     drain(0.5)
 
-    # 3. /export writes a markdown transcript
+    # 3. /export requires confirmation before writing a markdown transcript
     send("/export\r")
+    assert wait_for("EXPORT SESSION", 10), "export confirmation missing"
+    send("\r")  # validate default project directory and move to Export
+    send("e")
     assert wait_for("exported ·", 10), "export notice missing"
-    exports = glob.glob("dsh-session-*.md")
+    exports = glob.glob(os.path.join(ENV["DSH_HOME"], "exports", os.path.basename(os.getcwd()), "dsh-session-*.md"))
     assert len(exports) >= 1, "no exported markdown file found"
     snapshot("export-notice")
 
@@ -170,7 +173,7 @@ except Exception as error:
     cleanup("error")
     raise SystemExit(1)
 finally:
-    for path in glob.glob("dsh-session-*.md"):
+    for path in glob.glob(os.path.join(ENV["DSH_HOME"], "exports", os.path.basename(os.getcwd()), "dsh-session-*.md")):
         try:
             os.unlink(path)
         except OSError:

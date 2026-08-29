@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { appendFile, mkdir, readdir, readFile, realpath, unlink, writeFile } from 'node:fs/promises'
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { constants, existsSync, readdirSync, readFileSync } from 'node:fs'
+import { access, appendFile, mkdir, readdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir, tmpdir } from 'node:os'
 import { ImageParser, formatImageBytes, pngDimensions, jpegDimensions, imageDimensions, MAX_SAFE_IMAGE_PIXELS, downscaleImageBuffer } from './image-protocol.js'
@@ -328,7 +328,8 @@ import {
   renderProviderForm,
   renderDiscoverModelsModal,
   renderDeleteConfirmModal,
-  renderExitConfirm
+  renderExitConfirm,
+  renderExportConfirm
 } from './panels/index.js'
 
 const PRESET_PROVIDERS = [
@@ -370,6 +371,7 @@ export class TuiApp {
     this.presetPicker = undefined // { entries, selected }
     this.presetConfirm = undefined
     this.exitConfirm = undefined // { code, selected, runningJobs }
+    this.exportConfirm = undefined // { directoryInput, directoryCursor, directorySelected, isDefaultDirectory, filename, relativeFile, focus, error, eventCount }
     this.localBackgroundJobs = []
     this.localJobsCount = 0
     this.jobOutputCache = new Map()
@@ -944,7 +946,7 @@ export class TuiApp {
             const speed = (generatedTokens > 0 && durationMs > 500) ? (generatedTokens / (durationMs / 1000)) : (this.turnStats?.speed || 0)
             this.turnStats = { speed, durationMs, active: true }
           }
-          const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.providerPanel || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.exitConfirm || this.skillsPanel
+          const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.providerPanel || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.exitConfirm || this.exportConfirm || this.skillsPanel
           if (hasOverlay) return
           this.scheduleRender()
         }, 100)
@@ -3361,9 +3363,105 @@ export class TuiApp {
     return servers.filter((server) => server.servername)
   }
 
-  async exportSession() {
+  exportDirectory(destination = '') {
+    const workspace = this.agent?.session?.header?.cwd ?? process.cwd()
+    if (destination) return resolve(workspace, destination)
+    const projectName = basename(resolve(workspace)).replace(/[^a-zA-Z0-9._-]+/g, '-') || 'workspace'
+    const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
+    return join(dshHome, 'exports', projectName)
+  }
+
+  resolveExportDirectoryInput(input) {
+    const directory = String(input ?? '').trim()
+    if (!directory) throw new Error('export directory is required')
+    const workspace = this.agent?.session?.header?.cwd ?? process.cwd()
+    return resolve(workspace, directory)
+  }
+
+  syncExportDirectoryKind(request = this.exportConfirm) {
+    if (!request?.defaultDirectory) return false
     try {
-      const events = this.agent.session.events
+      request.isDefaultDirectory = this.resolveExportDirectoryInput(request.directoryInput) === request.defaultDirectory
+    } catch {
+      request.isDefaultDirectory = false
+    }
+    return request.isDefaultDirectory
+  }
+
+  async validateExportDirectory(directory) {
+    let resolved
+    try {
+      resolved = await realpath(directory)
+    } catch {
+      throw new Error(`export directory does not exist: ${directory}`)
+    }
+    const details = await stat(resolved)
+    if (!details.isDirectory()) throw new Error(`export path is not a directory: ${resolved}`)
+    try {
+      await access(resolved, constants.W_OK)
+    } catch {
+      throw new Error(`export directory is not writable: ${resolved}`)
+    }
+    return resolved
+  }
+
+  exportSession() {
+    if (!this.agent || this.exportConfirm) return
+    const sessionId = this.agent.session?.id ?? 'session'
+    const timestamp = new Date().toISOString().replace(/[-:.]/g, '')
+    const directory = this.exportDirectory()
+    const filename = `dsh-session-${sessionId.slice(-4)}-${timestamp}.md`
+    this.exportConfirm = {
+      filename,
+      defaultDirectory: directory,
+      directoryInput: directory,
+      directoryCursor: directory.length,
+      directorySelected: true,
+      isDefaultDirectory: true,
+      relativeFile: join(directory, filename),
+      focus: 'directory',
+      eventCount: this.agent.session?.events?.length ?? 0,
+      error: undefined
+    }
+    this.scheduleRender()
+  }
+
+  async verifyExportDirectory() {
+    const request = this.exportConfirm
+    if (!request) return false
+    try {
+      const requestedDirectory = this.resolveExportDirectoryInput(request.directoryInput)
+      if (this.syncExportDirectoryKind(request)) await mkdir(requestedDirectory, { recursive: true, mode: 0o700 })
+      const directory = await this.validateExportDirectory(requestedDirectory)
+      request.directoryInput = directory
+      request.directoryCursor = directory.length
+      request.relativeFile = join(directory, request.filename)
+      request.error = undefined
+      request.focus = 'export'
+      this.scheduleRender()
+      return true
+    } catch (error) {
+      request.error = error instanceof Error ? error.message : String(error)
+      request.focus = 'directory'
+      this.scheduleRender()
+      return false
+    }
+  }
+
+  async applyExportConfirm(confirm) {
+    const request = this.exportConfirm
+    if (!request || !confirm) {
+      this.exportConfirm = undefined
+      if (request) this.log('ok', 'Export cancelled.', '/export')
+      this.scheduleRender()
+      return
+    }
+    try {
+      const requestedDirectory = this.resolveExportDirectoryInput(request.directoryInput)
+      if (this.syncExportDirectoryKind(request)) await mkdir(requestedDirectory, { recursive: true, mode: 0o700 })
+      const directory = await this.validateExportDirectory(requestedDirectory)
+      const file = join(directory, request.filename)
+      const events = this.agent?.session?.events ?? []
       const lines = [`# DSH TUI session export`, '']
       for (const event of events) {
         if (event.type === 'user/message' && event.data.source?.kind === 'user') {
@@ -3378,11 +3476,12 @@ export class TuiApp {
           lines.push(`\`\`\`\n> ${event.data.name} ${shorten(event.data.arguments, 200)}\n\`\`\`\n`)
         }
       }
-      const file = join(process.cwd(), `dsh-session-${this.agent.session.id.slice(-4)}.md`)
-      await writeFile(file, `${lines.join('\n').trimEnd()}\n`)
+      await writeFile(file, `${lines.join('\n').trimEnd()}\n`, { flag: 'wx', mode: 0o600 })
+      this.exportConfirm = undefined
       this.log('ok', `exported · ${file}`, '/export')
     } catch (error) {
-      this.log('error', error instanceof Error ? error.message : String(error), '/export')
+      request.error = error instanceof Error ? error.message : String(error)
+      request.focus = 'directory'
     }
     this.scheduleRender()
   }
@@ -6350,6 +6449,93 @@ export class TuiApp {
       return
     }
 
+    if (this.exportConfirm) {
+      const request = this.exportConfirm
+      const focusOrder = ['directory', 'export', 'cancel']
+      const moveFocus = (direction) => {
+        const index = Math.max(0, focusOrder.indexOf(request.focus))
+        request.focus = focusOrder[(index + direction + focusOrder.length) % focusOrder.length]
+        this.scheduleRender()
+      }
+      if (value === '\x1b' || value === '\x03') {
+        void this.applyExportConfirm(false)
+        return
+      }
+      if (request.focus === 'directory') {
+        if (value === '\r') {
+          void this.verifyExportDirectory()
+          return
+        }
+        if (value === '\t' || value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[B' || value === '\x1bOB') {
+          moveFocus(value === '\x1b[A' || value === '\x1bOA' ? -1 : 1)
+          return
+        }
+        if (value === '\x1b[D' || value === '\x1bOD') {
+          request.directorySelected = false
+          request.directoryCursor = alignCodePoint(request.directoryInput, Math.max(0, request.directoryCursor - 1), -1)
+          this.scheduleRender()
+          return
+        }
+        if (value === '\x1b[C' || value === '\x1bOC') {
+          request.directorySelected = false
+          request.directoryCursor = alignCodePoint(request.directoryInput, Math.min(request.directoryInput.length, request.directoryCursor + 1), 1)
+          this.scheduleRender()
+          return
+        }
+        if (value === '\x1b[H' || value === '\x1bOH' || value === '\x01') {
+          request.directorySelected = false
+          request.directoryCursor = 0
+          this.scheduleRender()
+          return
+        }
+        if (value === '\x1b[F' || value === '\x1bOF' || value === '\x05') {
+          request.directorySelected = false
+          request.directoryCursor = request.directoryInput.length
+          this.scheduleRender()
+          return
+        }
+        if (value === '\x7f' || value === '\x08') {
+          if (request.directorySelected) {
+            request.directoryInput = ''
+            request.directoryCursor = 0
+            request.directorySelected = false
+          } else if (request.directoryCursor > 0) {
+            const end = alignCodePoint(request.directoryInput, request.directoryCursor, -1)
+            const start = alignCodePoint(request.directoryInput, Math.max(0, end - 1), -1)
+            request.directoryInput = `${request.directoryInput.slice(0, start)}${request.directoryInput.slice(end)}`
+            request.directoryCursor = start
+          }
+          this.syncExportDirectoryKind(request)
+          request.error = undefined
+          this.scheduleRender()
+          return
+        }
+        if (/^[\x20-\x7e\u00a0-\uffff]+$/u.test(value)) {
+          const cursor = alignCodePoint(request.directoryInput, request.directoryCursor, -1)
+          request.directoryInput = request.directorySelected
+            ? value
+            : `${request.directoryInput.slice(0, cursor)}${value}${request.directoryInput.slice(cursor)}`
+          request.directoryCursor = request.directorySelected ? value.length : cursor + value.length
+          request.directorySelected = false
+          this.syncExportDirectoryKind(request)
+          request.error = undefined
+          this.scheduleRender()
+          return
+        }
+        return
+      }
+      if (value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[D' || value === '\x1bOD') { moveFocus(-1); return }
+      if (value === '\x1b[B' || value === '\x1bOB' || value === '\x1b[C' || value === '\x1bOC' || value === '\t') { moveFocus(1); return }
+      if (value === '\r' || value === ' ') {
+        void this.applyExportConfirm(request.focus === 'export')
+        return
+      }
+      const answer = value.trim().toLowerCase()
+      if (answer === 'e' || answer === 'y' || answer === '1') { void this.applyExportConfirm(true); return }
+      if (answer === 'c' || answer === 'n' || answer === '2') { void this.applyExportConfirm(false); return }
+      return
+    }
+
     if (this.skillsPanel) {
       if (value === '\x1b' || value === '\x03' || value === 'q') {
         this.skillsPanel = undefined
@@ -7369,7 +7555,7 @@ export class TuiApp {
 
     let cursorMove = ''
     const hasTypingOverlay = Boolean(this.commandPalette || this.filePicker)
-    const hasModalOverlay = (this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.skillsPanel) && !hasTypingOverlay
+    const hasModalOverlay = (this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.exportConfirm || this.skillsPanel) && !hasTypingOverlay
     const overlayCaret = this.overlayCaretRow !== undefined
     if (overlayCaret || (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasModalOverlay)) {
       const rowInFooter = overlayCaret
@@ -7534,6 +7720,7 @@ export class TuiApp {
     if (this.questionPanel) return renderQuestionPanel(this.questionPanel, this.currentQuestion(), columns, rows, ANSI)
     if (this.presetConfirm) return renderPresetConfirm(this.presetConfirm, ANSI)
     if (this.exitConfirm) return renderExitConfirm(this.exitConfirm, columns, ANSI)
+    if (this.exportConfirm) return renderExportConfirm(this.exportConfirm, columns, ANSI)
     if (this.skillsPanel) return renderSkillsPanel(this.skillsPanel, this.skills ?? [], capacity, columns, ANSI)
     if (this.presetPicker) return renderPresetPicker(this.presetPicker, this.presetName, capacity, columns, ANSI)
     if (this.jobPanel) {
@@ -7605,7 +7792,7 @@ export class TuiApp {
     visibleRows = this.selectionController.applySelectionHighlight(visibleRows, this.viewport, ANSI)
 
     const hasTypingOverlay = Boolean(this.commandPalette || this.filePicker)
-    const hasModalOverlay = (this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.skillsPanel) && !hasTypingOverlay
+    const hasModalOverlay = (this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.exportConfirm || this.skillsPanel) && !hasTypingOverlay
     const overlayCaret = this.overlayCaretRow !== undefined
     let cursorRow = 0
     let cursorCol = 0

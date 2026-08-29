@@ -196,10 +196,12 @@ npx --yes @deepseek-ai/dsh@0.1.1-rc.2 --profile tui
 | `/resume` | 恢复当前工作目录下的历史会话 |
 | `/rename <标题>` | 重命名当前会话 |
 | `/mcp` / `/hooks` | 查看已挂载的 MCP 与 Hook 状态 |
-| `/export` | 将当前会话导出为 Markdown |
+| `/export` | 在导出面板中选择目录并确认导出 Markdown |
 | `/exit` | 安全退出终端（有活跃后台任务时弹出确认） |
 
 其他命令和快捷键可以在 TUI 中通过 `?`、`/help` 或 `Ctrl+P` 查看。
+
+`/export` 打开导出面板，默认填入 `$DSH_HOME/exports/<项目名>/`；未设置 `DSH_HOME` 时即为 `~/.dsh/exports/<项目名>/`。首次按 Enter 校验时会创建该默认目录，避免会话导出文件混入 Git 工作区。可直接在面板的 `Directory` 输入框中编辑相对或绝对目录；自定义目录不会自动创建，按 Enter 会校验目录存在、类型与可写性，再确认导出；校验失败会在面板内显示原因且不会写入。导出目录和 Markdown 文件分别以仅当前用户可访问的权限创建。导出包含用户消息、助手回复与工具调用参数，分享前请自行检查敏感信息；文件名带会话尾号和 UTC 时间戳，不会覆盖此前导出结果。
 
 ### Reasoning effort
 

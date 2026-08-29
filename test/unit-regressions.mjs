@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TuiApp, registerTuiSkillOverrides, registerBundledSkills, repeatedActionIntent, withTimeout, resolveModelVisionSupport } from '../src/index.js'
@@ -12,6 +12,7 @@ import { renderMarkdownRows } from '../src/renderer/markdown.js'
 import { renderStatusRows } from '../src/renderer/statusline.js'
 import { renderJobPanel } from '../src/panels/jobs-panel.js'
 import { renderExitConfirm } from '../src/panels/exit-confirm.js'
+import { renderExportConfirm } from '../src/panels/export-confirm.js'
 import { renderModelPicker, filterModelEntries } from '../src/panels/model-picker.js'
 import { renderQuestionPanel } from '../src/panels/question-panel.js'
 import { renderSkillsPanel } from '../src/panels/skills-panel.js'
@@ -2059,6 +2060,18 @@ assert.match(exitConfirmText, /EXIT WITH RUNNING JOBS/)
 assert.match(exitConfirmText, /npm run dev/)
 assert.match(exitConfirmText, /Stop all jobs and exit/)
 
+const exportConfirmRows = renderExportConfirm(
+  { directoryInput: '/workspace', directoryCursor: 10, directorySelected: true, relativeFile: 'dsh-session-abcd-20260829T120000Z.md', focus: 'directory', eventCount: 3 },
+  100,
+  ANSI
+)
+const exportConfirmText = visibleOf(exportConfirmRows.join('\n'))
+assert.match(exportConfirmText, /EXPORT SESSION/)
+assert.match(exportConfirmText, /Includes messages and tool-call arguments/)
+assert.match(exportConfirmText, /Directory/)
+assert.match(exportConfirmText, /\/workspace/)
+assert.match(exportConfirmText, /dsh-session-abcd-20260829T120000Z\.md/)
+
 const exitRequestApp = {
   exitConfirm: undefined,
   runningExitJobs() {
@@ -2091,6 +2104,77 @@ const stopExitApp = {
 }
 TuiApp.prototype.applyExitConfirm.call(stopExitApp, 'stop')
 assert.deepEqual(stopExitApp.quitArgs, [0])
+
+const exportDir = await mkdtemp(join(tmpdir(), 'dsh-omc-export-'))
+try {
+  const defaultExportDir = join(exportDir, 'default')
+  const customExportDir = join(exportDir, 'custom')
+  await mkdir(customExportDir)
+  const exportApp = {
+    agent: {
+      session: {
+        id: 'session-abcd',
+        header: { cwd: exportDir },
+        events: [
+          { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'private prompt' }] } },
+          { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'assistant reply' }] } } },
+          { type: 'tool/call', data: { name: 'shell', arguments: 'echo secret' } }
+        ]
+      }
+    },
+    exportConfirm: undefined,
+    exportDirectory() { return defaultExportDir },
+    scheduleRender() { this.rendered = true },
+    log(kind, text, command) { this.logged = { kind, text, command } }
+  }
+  Object.setPrototypeOf(exportApp, TuiApp.prototype)
+  exportApp.exportSession()
+  assert.equal(exportApp.exportConfirm.directoryInput, defaultExportDir)
+  assert.match(exportApp.exportConfirm.filename, /^dsh-session-abcd-\d{8}T\d{9}Z\.md$/)
+  assert.equal(exportApp.exportConfirm.eventCount, 3)
+  await exportApp.verifyExportDirectory()
+  assert.equal(exportApp.exportConfirm.focus, 'export')
+  assert.equal((await stat(defaultExportDir)).mode & 0o077, 0, 'default export directory must not grant group or other access')
+  exportApp.exportConfirm.focus = 'directory'
+  TuiApp.prototype.handleToken.call(exportApp, '\x1b[D')
+  assert.equal(exportApp.exportConfirm.isDefaultDirectory, true, 'moving the cursor must not turn the default directory into a custom path')
+  exportApp.exportConfirm.focus = 'directory'
+  exportApp.exportConfirm.directoryInput = customExportDir
+  exportApp.exportConfirm.isDefaultDirectory = false
+  await exportApp.verifyExportDirectory()
+  assert.equal(exportApp.exportConfirm.focus, 'export')
+  const exportFile = join(customExportDir, exportApp.exportConfirm.filename)
+  await exportApp.applyExportConfirm(true)
+  assert.match(await readFile(exportFile, 'utf8'), /private prompt/)
+  assert.match(await readFile(exportFile, 'utf8'), /assistant reply/)
+  assert.equal(exportApp.logged.kind, 'ok')
+  assert.equal((await stat(exportFile)).mode & 0o077, 0, 'exported transcripts must not grant group or other access')
+
+  exportApp.exportSession()
+  exportApp.exportConfirm.directoryInput = join(exportDir, 'missing')
+  exportApp.exportConfirm.isDefaultDirectory = false
+  await exportApp.verifyExportDirectory()
+  assert.match(exportApp.exportConfirm.error, /export directory does not exist/)
+  assert.equal(exportApp.exportConfirm.focus, 'directory')
+
+  exportApp.exportConfirm = { directoryInput: exportDir, filename: 'cancelled.md' }
+  await exportApp.applyExportConfirm(false)
+  assert.equal(exportApp.logged.text, 'Export cancelled.')
+} finally {
+  await rm(exportDir, { recursive: true, force: true })
+}
+
+const originalDshHome = process.env.DSH_HOME
+try {
+  process.env.DSH_HOME = '/private/tmp/dsh-custom-home'
+  assert.equal(
+    TuiApp.prototype.exportDirectory.call({ agent: { session: { header: { cwd: '/workspace/project-a' } } } }),
+    '/private/tmp/dsh-custom-home/exports/project-a'
+  )
+} finally {
+  if (originalDshHome === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = originalDshHome
+}
 
 const failedStopApp = {
   activeBash: undefined,
