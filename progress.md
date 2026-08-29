@@ -124,6 +124,8 @@
 - 已确认官方 npm registry 中 `@deepseek-ai/dsh` 的 `latest` / `next` 为 `0.1.1-rc.2`；发布目标保持该兼容基线。
 - 发布预检通过：`npm test`、`npm run verify`、`git diff --check` 和隔离 cache 下的 `npm pack --dry-run --json` 均成功；预检包共 61 个文件、压缩 359,289 bytes、解包 950,427 bytes。
 - npm 官方 registry 查询 `dsh-omc-tui@0.2.8` 返回 404，确认该版本号尚未占用。
+- 已创建 release commit `ba09e1a`、注释标签 `v0.2.8` 并推送 main 与标签。
+- npm 官方 registry 已接受 `dsh-omc-tui@0.2.8`；短暂索引延迟后复核 `latest=0.2.8`。GitHub 正式 Release 已创建。
 
 ### 阶段 18：v0.2.7 发布
 - **状态：** complete

@@ -15,6 +15,7 @@
 - 发布内容为 reasoning effort 默认选择持久化、模型能力校验和设置写入失败时的投影一致性修复，以及配套 README、Harness 兼容性契约和 CHANGELOG 说明。
 - 上游 npm 基线已通过官方 registry 核实：`@deepseek-ai/dsh` 的 `latest` 与 `next` 均为 `0.1.1-rc.2`。
 - 发布前应继续使用 npm 官方 registry 与隔离 cache；默认 registry 指向镜像站，不能用于此账号 token 的发布认证。
+- 发布结果：release commit `ba09e1a` 与注释标签 `v0.2.8` 已推送；npm 官方 registry 已发布 `dsh-omc-tui@0.2.8` 且 `latest=0.2.8`；GitHub 正式 Release 已创建。
 
 ## 审查信息
 - **审查日期：** 2026-08-26
