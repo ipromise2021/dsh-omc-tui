@@ -3607,13 +3607,13 @@ export class TuiApp {
     this.message = 'switching model…'
     this.scheduleRender()
     try {
-      await this.ctx.agentDefaultModel.saveSelection({ provider: entry.provider, model: entry.model })
-      this.activeModel = { provider: entry.provider, model: entry.model }
-      this.log('ok', `${entry.provider}/${entry.model} (active now · new sessions default)`, '/model')
       const metadata = await this.reasoningMetadata(entry.provider, entry.model)
       const variants = metadata.entries
       if (variants.length === 0) {
+        await this.ctx.agentDefaultModel.saveSelection({ provider: entry.provider, model: entry.model })
+        this.activeModel = { provider: entry.provider, model: entry.model }
         this.reasoningEffort = undefined
+        this.log('ok', `${entry.provider}/${entry.model} (active now · new sessions default)`, '/model')
         this.message = ''
         this.scheduleRender()
         return
@@ -3621,7 +3621,14 @@ export class TuiApp {
       const requestedEffort = this.reasoningEffort
       const supported = requestedEffort && variants.some((variant) => variant.id.toLowerCase() === requestedEffort.toLowerCase())
       const effectiveEffort = supported ? requestedEffort : metadata.defaultEffort ?? variants[0]?.id
+      await this.ctx.agentDefaultModel.saveSelection({
+        provider: entry.provider,
+        model: entry.model,
+        ...(effectiveEffort ? { reasoningEffort: effectiveEffort } : {})
+      })
+      this.activeModel = { provider: entry.provider, model: entry.model }
       if (effectiveEffort) this.reasoningEffort = effectiveEffort
+      this.log('ok', `${entry.provider}/${entry.model} (active now · new sessions default)`, '/model')
       let sel = variants.findIndex((v) => v.id.toLowerCase() === (effectiveEffort ?? 'high').toLowerCase())
       if (sel === -1) sel = 0
       this.variantPicker = {
@@ -3642,16 +3649,48 @@ export class TuiApp {
     const picker = this.variantPicker
     if (!picker) return
     const chosen = picker.entries[picker.selected]?.id ?? 'default'
-    this.variantPicker = undefined
-    this.reasoningEffort = chosen
-    this.log('ok', `effort: ${chosen.toUpperCase()}`, '/effort')
+    try {
+      await this.ctx.agentDefaultModel.saveSelection({
+        provider: picker.provider,
+        model: picker.model,
+        reasoningEffort: chosen
+      })
+      this.variantPicker = undefined
+      this.activeModel = { provider: picker.provider, model: picker.model }
+      this.reasoningEffort = chosen
+      this.log('ok', `effort: ${chosen.toUpperCase()} (new sessions default)`, '/effort')
+    } catch (error) {
+      this.log('error', error instanceof Error ? error.message : String(error), '/effort')
+    }
     this.scheduleRender()
   }
 
-  chooseEffort(effort) {
-    this.reasoningEffort = effort
-    this.effortPicker = undefined
-    this.log('ok', `${this.reasoningEffort}`, '/effort')
+  async chooseEffort(effort) {
+    const selection = this.activeModel ?? this.ctx.agentDefaultModel.currentSelection()
+    try {
+      const metadata = await this.reasoningMetadata(selection.provider, selection.model)
+      const chosen = metadata.entries.find((entry) => entry.id.toLowerCase() === String(effort).toLowerCase())?.id
+      if (!chosen) {
+        const identity = `${selection.provider}/${selection.model}`
+        if (metadata.capability === 'unavailable') {
+          throw new Error(`unable to resolve reasoning efforts for ${identity}: ${metadata.error}`)
+        }
+        if (metadata.capability === 'undeclared') {
+          throw new Error(`${identity} does not declare models[].reasoningEfforts; using the provider default`)
+        }
+        throw new Error(`${effort} is not supported by ${identity}; available: ${metadata.entries.map((entry) => entry.id).join(', ')}`)
+      }
+      await this.ctx.agentDefaultModel.saveSelection({
+        provider: selection.provider,
+        model: selection.model,
+        reasoningEffort: chosen
+      })
+      this.effortPicker = undefined
+      this.reasoningEffort = chosen
+      this.log('ok', `${this.reasoningEffort} (new sessions default)`, '/effort')
+    } catch (error) {
+      this.log('error', error instanceof Error ? error.message : String(error), '/effort')
+    }
     this.scheduleRender()
   }
 

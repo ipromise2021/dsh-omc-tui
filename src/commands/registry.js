@@ -170,7 +170,7 @@ export function handleLocalCommand(app, commandName, line = '') {
       break
     case 'effort': {
       const requested = line.trim().split(/\s+/)[1]?.toLowerCase()
-      if (requested) app.chooseEffort(requested)
+      if (requested) void app.chooseEffort(requested)
       else void app.openEffortPicker()
       break
     }

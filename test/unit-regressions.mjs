@@ -1425,10 +1425,11 @@ assert.equal(TuiApp.prototype.currentEffort.call({
   ctx: { agentDefaultModel: { currentSelection: () => ({ reasoningEffort: 'DEFAULT' }) } }
 }), 'provider')
 
+const modelSelectionWrites = []
 const modelSwitchApp = {
   modelPicker: { entries: [{ provider: 'deepseek', model: 'vision', name: 'vision' }], selected: 0 },
   reasoningEffort: 'medium',
-  ctx: { agentDefaultModel: { saveSelection: async () => {}, currentSelection: () => ({ provider: 'deepseek', model: 'vision' }) } },
+  ctx: { agentDefaultModel: { saveSelection: async (selection) => { modelSelectionWrites.push(selection) }, currentSelection: () => ({ provider: 'deepseek', model: 'vision' }) } },
   llmService: { resolveModelInfo: async () => ({ reasoning: { defaultEffort: 'off', efforts: [{ id: 'off', name: 'off' }] } }) },
   reasoningMetadata: TuiApp.prototype.reasoningMetadata,
   log: noop,
@@ -1437,6 +1438,55 @@ const modelSwitchApp = {
 }
 await TuiApp.prototype.chooseModel.call(modelSwitchApp)
 assert.equal(modelSwitchApp.reasoningEffort, 'off')
+assert.deepEqual(modelSelectionWrites, [{ provider: 'deepseek', model: 'vision', reasoningEffort: 'off' }])
+
+const effortSelectionWrites = []
+const effortSelectionApp = {
+  activeModel: { provider: 'local-cpa', model: 'gemini-3.7-flash' },
+  reasoningEffort: undefined,
+  effortPicker: { efforts: ['low', 'medium', 'high'], selected: 2 },
+  ctx: { agentDefaultModel: { saveSelection: async (selection) => { effortSelectionWrites.push(selection) } } },
+  llmService: { resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'low' }, { id: 'medium' }, { id: 'high' }] } }) },
+  reasoningMetadata: TuiApp.prototype.reasoningMetadata,
+  log: noop,
+  scheduleRender: noop
+}
+await TuiApp.prototype.chooseEffort.call(effortSelectionApp, 'high')
+assert.equal(effortSelectionApp.reasoningEffort, 'high')
+assert.deepEqual(effortSelectionWrites, [{ provider: 'local-cpa', model: 'gemini-3.7-flash', reasoningEffort: 'high' }])
+
+await TuiApp.prototype.chooseEffort.call(effortSelectionApp, 'ultracode')
+assert.equal(effortSelectionApp.reasoningEffort, 'high')
+assert.equal(effortSelectionWrites.length, 1)
+
+const variantSelectionWrites = []
+const variantSelectionApp = {
+  variantPicker: {
+    provider: 'local-cpa',
+    model: 'gemini-3.7-flash',
+    entries: [{ id: 'low' }, { id: 'medium' }, { id: 'high' }],
+    selected: 2
+  },
+  reasoningEffort: undefined,
+  ctx: { agentDefaultModel: { saveSelection: async (selection) => { variantSelectionWrites.push(selection) } } },
+  log: noop,
+  scheduleRender: noop
+}
+await TuiApp.prototype.chooseVariant.call(variantSelectionApp)
+assert.equal(variantSelectionApp.reasoningEffort, 'high')
+assert.equal(variantSelectionApp.variantPicker, undefined)
+assert.deepEqual(variantSelectionWrites, [{ provider: 'local-cpa', model: 'gemini-3.7-flash', reasoningEffort: 'high' }])
+
+const failedModelSwitchApp = {
+  ...modelSwitchApp,
+  modelPicker: { entries: [{ provider: 'deepseek', model: 'broken', name: 'broken' }], selected: 0 },
+  activeModel: { provider: 'deepseek', model: 'working' },
+  reasoningEffort: 'off',
+  ctx: { agentDefaultModel: { saveSelection: async () => { throw new Error('settings unavailable') } } },
+  message: ''
+}
+await TuiApp.prototype.chooseModel.call(failedModelSwitchApp)
+assert.deepEqual(failedModelSwitchApp.activeModel, { provider: 'deepseek', model: 'working' })
 
 const narrowModelRows = renderModelPicker({
   entries: [{
