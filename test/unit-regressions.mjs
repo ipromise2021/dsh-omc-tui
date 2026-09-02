@@ -1368,6 +1368,51 @@ TuiApp.prototype.submit.call(bashImageApp)
 assert.equal(bashCommand, 'pwd')
 assert.deepEqual(bashImageApp.pendingImages, [bashImage])
 
+let slashPathPrompt
+let slashPathCommand
+const slashPathApp = {
+  agent: { session: { id: 'session-1' }, status: 'idle' },
+  input: '/rawMaterialVehicle/track 请说明这个接口的参数',
+  cursor: 38,
+  pendingImages: [],
+  history: [],
+  historyIndex: -1,
+  appendHistory: noop,
+  touchMru: noop,
+  ctx: { commands: { find: () => undefined } },
+  skills: [],
+  trackQueuedSubmission: TuiApp.prototype.trackQueuedSubmission,
+  submitUserMessage(prompt) { slashPathPrompt = prompt },
+  runCommand(line) { slashPathCommand = line },
+  scheduleRender: noop,
+  pasteFolded: undefined,
+  help: false,
+  menu: undefined
+}
+TuiApp.prototype.submit.call(slashPathApp)
+assert.equal(slashPathPrompt, '/rawMaterialVehicle/track 请说明这个接口的参数')
+assert.equal(slashPathCommand, undefined)
+
+let singleSlashPrompt
+const singleSlashApp = {
+  ...slashPathApp,
+  input: '/rawMaterialVehicle 请说明这个接口的参数',
+  history: [],
+  submitUserMessage(prompt) { singleSlashPrompt = prompt }
+}
+TuiApp.prototype.submit.call(singleSlashApp)
+assert.equal(singleSlashPrompt, '/rawMaterialVehicle 请说明这个接口的参数')
+
+let localCommandLine
+const localCommandApp = {
+  ...slashPathApp,
+  input: '/help',
+  history: [],
+  runCommand(line) { localCommandLine = line }
+}
+TuiApp.prototype.submit.call(localCommandApp)
+assert.equal(localCommandLine, '/help')
+
 const effortVariants = await TuiApp.prototype.reasoningVariants.call({
   llmService: { resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'low', name: 'low', description: 'fast' }] } }) },
   reasoningMetadata: TuiApp.prototype.reasoningMetadata

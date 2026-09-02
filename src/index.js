@@ -2753,13 +2753,21 @@ export class TuiApp {
     }
     if (prompt.startsWith('/') && !prompt.startsWith('//')) {
       const firstLine = prompt.split('\n')[0].trim()
-      const name = firstLine.split(/\s+/)[0].slice(1).toLowerCase()
+      const firstWord = firstLine.split(/\s+/)[0]
+      const name = firstWord.slice(1).toLowerCase()
       const isCommand = Boolean(
         LOCAL_COMMANDS.some((entry) => entry.name === name) ||
         this.ctx.commands?.find(this.agent, name)
       )
       const isSkill = this.skills.some((skill) => skill.name === name && skill.enabled !== false)
       if (isSkill && !isCommand) {
+        const queuedSubmission = this.trackQueuedSubmission(raw, images)
+        this.message = 'queued'
+        this.scheduleRender()
+        void this.submitUserMessage(prompt, [], images, queuedSubmission)
+        return
+      }
+      if (!isCommand) {
         const queuedSubmission = this.trackQueuedSubmission(raw, images)
         this.message = 'queued'
         this.scheduleRender()
