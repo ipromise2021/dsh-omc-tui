@@ -3698,7 +3698,17 @@ export class TuiApp {
       const configured = this.preferences?.visionProvider && this.preferences?.visionModel
         ? `${this.preferences.visionProvider}/${this.preferences.visionModel}`
         : 'not configured'
-      const body = VISION_ROUTE_OPTIONS.map((model) => `  /vision ${model}`).join('\n')
+      const options = new Set(VISION_ROUTE_OPTIONS)
+      if (configured !== 'not configured') options.add(configured)
+      try {
+        const catalog = await this.getModelCatalog(true)
+        const selection = this.activeModel ?? this.ctx.agentDefaultModel?.currentSelection?.()
+        const selected = catalog.find((model) => model.provider === selection?.provider && model.model === selection?.model)
+        if (selected && Array.isArray(selected.inputModalities) && selected.inputModalities.includes('image')) {
+          options.add(`${selected.provider}/${selected.model}`)
+        }
+      } catch {}
+      const body = [...options].map((model) => `  /vision ${model}`).join('\n')
       this.log('ok', `vision route · ${configured}\nVision route options:\n${body}`, '/vision')
     } catch (error) {
       this.log('error', error instanceof Error ? error.message : String(error), '/vision')

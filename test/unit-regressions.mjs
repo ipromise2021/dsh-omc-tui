@@ -1846,8 +1846,13 @@ assert.equal(skillRefreshes, 1)
 let visionModelsLog
 const visionModelsApp = {
   preferences: { visionProvider: 'deepseek-official', visionModel: 'deepseek-v4-flash-vision-exp' },
-  llmService: {
-    listProviders() { throw new Error('vision options must not enumerate providers') }
+  ctx: { agentDefaultModel: { currentSelection: () => ({ provider: 'local-cpa', model: 'gemini-3.7-flash' }) } },
+  async getModelCatalog() {
+    return [
+      { provider: 'local-cpa', model: 'gemini-3.7-flash', inputModalities: ['text', 'image'] },
+      { provider: 'other-vision', model: 'vision-model', inputModalities: ['text', 'image'] },
+      { provider: 'text-only', model: 'plain', inputModalities: ['text'] }
+    ]
   },
   log(_kind, text) { visionModelsLog = text },
   scheduleRender: noop
@@ -1857,6 +1862,9 @@ assert.match(visionModelsLog, /\/vision deepseek-official\/deepseek-v4-flash-vis
 assert.match(visionModelsLog, /\/vision openai\/gpt-5\.6-luna/)
 assert.match(visionModelsLog, /\/vision opencode-go\/qwen3\.7-plus/)
 assert.match(visionModelsLog, /\/vision opencode-go\/deepseek-v4-flash-vision-exp/)
+assert.match(visionModelsLog, /\/vision local-cpa\/gemini-3\.7-flash/)
+assert.doesNotMatch(visionModelsLog, /\/vision other-vision\/vision-model/)
+assert.doesNotMatch(visionModelsLog, /\/vision text-only\/plain/)
 
 // Settings panel rendering assertion
 const settingsRows = renderSettingsPicker({ selected: 0 }, { theme: 'claude', statusline: 'detailed', hudGit: true, hudSpeed: true, persistHistory: true })
