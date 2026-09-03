@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { currentPermissionPreset } from './core/session-events.js'
 
 const CHROME_TOOL_PREFIX = 'mcp__chrome_devtools__'
 const MANAGED_BROWSER_MARKER = '.dsh-omc-tui-browser.json'
@@ -232,7 +233,7 @@ export function registerBrowserLease(ctx, options = {}) {
     }
     let workspaceWrite = false
     try {
-      workspaceWrite = ctx.permissionPresets?.current?.(exec.agent?.session?.events) === 'workspace-write'
+      workspaceWrite = currentPermissionPreset(ctx.permissionPresets, exec.agent?.session) === 'workspace-write'
     } catch {}
     const connectionNeeded = !lease.connectionApproved
     const actionNeeded = chromeToolRisk(exec.name) !== 'read' && !workspaceWrite

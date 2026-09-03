@@ -4,7 +4,7 @@
 完成 `v0.2.7` 的版本固化、验证、Git/npm/GitHub 发布，并保留历史审查与 rc.2 兼容验证记录。
 
 ## 当前阶段
-阶段 25（Jobs/Shell 竞态与跨平台日志整改，已完成）
+阶段 26（DSH v0.1.2-rc.1 上游兼容适配，进行中）
 
 ## 各阶段
 
@@ -205,6 +205,15 @@
 - [x] 补充针对性回归测试并运行完整验证
 - **状态：** complete
 
+### 阶段 26：DSH v0.1.2-rc.1 上游兼容适配
+- [x] 核对官方 release、标签与 `v0.1.1-rc.2...v0.1.2-rc.1` 代码差异
+- [x] 建立本地 TUI 对 Harness API、durable events、配置与 Jobs 的调用映射
+- [x] 识别已修复问题、新能力、破坏性风险与可利用优化
+- [x] 以回归测试驱动完成必要的最小兼容改造
+- [x] 运行单元、模块导入、空白及可用的集成验证
+- [x] 新建独立中文适配报告，记录来源、结论、改动和后续验证矩阵
+- **状态：** complete
+
 ## 建议实现顺序
 1. CR-001 权限状态投影
 2. CR-002 无取消能力时的退出保护
@@ -236,6 +245,15 @@
 | 第三次同步阶段 14 记录时多文件 patch hunk 格式错误 | 1 | 后续固定使用单文件独立 patch |
 | 阶段 25 首次测试仍按旧的 7 行列表输出预算断言 `log 1` | 1 | 按新容量契约更新为 5 行预算，验证首行 `log 3` 且末行 `log 7` |
 | 阶段 25 取消排序测试桩缺少 `orderJobEntries` | 1 | 为测试对象绑定真实实例方法后重跑 |
+| 临时 partial clone 未包含目标 tag，读取对象时触发受限网络失败 | 1 | 显式 fetch rc.2、rc.1 与 `origin/master` 后再比较，不重复依赖 lazy fetch |
+| zsh 循环变量 `path` 覆盖特殊数组 `$path`，导致 `rg` 不可见 | 1 | 改用非保留变量名 `pkg_dir`；后续避免 shell 特殊变量名 |
+| partial clone 补取 rc.2 blob 时 GitHub TLS 中断 | 2 | 不再重复 Git promisor fetch；切换 GitHub Contents API |
+| `gh api -f ref=...` 默认变为 POST，Contents API 返回 404 | 1 | 改用带查询参数的 GET URL |
+| 新增 session 适配层的首个多文件 patch 假定 `src/core/index.js` 导出 danger-guard | 1 | 读取实际文件后收窄上下文，只追加现有导出 |
+| 首轮单测在 preset 切换断言失败：`commitSessionState` 参数 `sessionEvents` 遮蔽同名 helper | 1 | 保持外部对象键不变，在解构时别名为 `restoredEvents` |
+| rc.1 Profile 首次真实启动时 standard preset 缺少 `subagentModelSelection` Host 服务 | 1 | 按官方 Web host 组合方式挂载 `@deepseek-ai/dsh-tool-subagent/model-selection-settings`，并增加对应 peer |
+| package + Cordis patch 的首次联合补丁未匹配删除行 | 1 | 分文件应用精确补丁并复核实际上下文 |
+| 最终补取 GitHub Release body 时网络连接临时失败 | 1 | 不重试受限网络；使用本轮已保存的官方 Release/API、tag 与源码核对结果完成文档 |
 
 ## 备注
 - 每完成一项修复，同步更新 `findings.md` 的状态与验证证据。

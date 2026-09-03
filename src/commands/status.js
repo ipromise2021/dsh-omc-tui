@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module'
 import { formatTokens } from '../renderer/ansi.js'
+import { currentPermissionPreset, sessionEvents } from '../core/session-events.js'
 
 const require = createRequire(import.meta.url)
 const { name: packageName, version: packageVersion } = require('../../package.json')
@@ -15,9 +16,9 @@ export function handleStatus(app) {
   const cwd = app.agent?.session?.header?.cwd ?? process.cwd()
   const sessionId = app.agent?.session?.id?.slice?.(-8) ?? 'new'
   const sessionTitle = app.agent?.session?.title?.title || 'new session'
-  const events = app.agent?.session?.events ?? []
+  const events = sessionEvents(app.agent?.session)
   const turns = events.filter((e) => e.type === 'turn/start').length
-  const perm = app.permissionName ?? app.ctx.permissionPresets?.current?.(events) ?? 'workspace-write'
+  const perm = app.permissionName ?? currentPermissionPreset(app.ctx.permissionPresets, app.agent?.session) ?? 'workspace-write'
 
   const usage = app.usage ?? {}
   const cw = usage.contextWindow || 200000

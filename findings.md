@@ -878,3 +878,43 @@
 - **现象：** 取消结果没有 snapshot 时直接赋值 `jobSnapshots()`，绕过统一排序，也未重新定位选中 ID。
 - **影响：** 任务状态变化后列表可能跳序，数字选中位置可能指向另一个 Job。
 - **关闭验证：** 取消结果统一经过 `orderJobEntries()`，随后按原 Job ID 重定位选择；多任务回归测试通过。
+
+## DSH v0.1.2-rc.1 兼容适配调研（2026-09-03）
+
+### 本地基线
+
+- TUI 当前版本为 `0.2.8`，Git 基线为 `06df472`，`main` 与 `origin/main` 对齐，开始调研时工作区无产品代码改动。
+- `package.json` 的 18 个 DSH peer dependency 当前统一为 `^0.1.1-rc.2`；README 与 `HARNESS_COMPATIBILITY.md` 也仍将 rc.2 作为已验证安装基线。
+- 主要 Harness 契约面包括 `agents.create/resume`、`agent.followup`、durable `session/event`、附件 `saveImages`、Jobs `list/read/kill/onJobsChanged`、权限预设、plan mode、settings/provider、模型能力与 reasoning effort。
+
+### 外部渠道初查
+
+- 官方 release 页面和 `dsh-v0.1.2-rc.1` 直达页需要继续通过 Git/GitHub API 获取精确内容；网页抓取暂未返回正文，不能据此推断发布说明为空。
+- 搜索结果仍混有此前 `v0.1.2-alpha.1` 的非官方讨论，这些仅作为历史线索，不作为 rc.1 的事实依据。最终报告只以官方 Release、官方 tag/compare 和仓库源码为准。
+
+### 官方 rc.1 发布事实
+
+- 官方 Git tag `dsh-v0.1.2-rc.1` 为提交 `a66e4702047846cdaa10c66c9d3df3951f5ea70d`，提交时间 2026-09-03 02:27:19 +0800；GitHub Release 发布于 2026-09-03 06:06:07Z，标记为 prerelease、无附加资产。
+- rc.2→rc.1 在 Git 拓扑上包含 1735 个提交；rc.1 标签之后，当前 `origin/master`（`76fda729…`）另有 99 个提交，因此“最新代码”与“最新发布 rc.1”需要分开评估。
+- 官方 Release 的 TUI 直接相关变化：`Session.events` 被 `seq`、`eventAt()`、`snapshotEvents()` 按需读取 API 取代；子代理可指定 provider/model/reasoning effort/max output 并改用双向 `send_message`；运行中草稿改为排队发送；图片后台压缩上传且计入 compact；Profile preset 目录与不可加载 preset 诊断修复；npm peer 依赖被裁剪；会话日志截断尾部自动修复并警告。
+- 官方 Release 的 Web UI 专属变化（正文宽度拖拽、字号、回合导航、连接状态、设置焦点等）不应直接移植到终端 TUI；仅提取其底层会话/事件/附件契约影响。
+- 官方已移除可选 SQLite Session 持久化后端、将 Code Mode 更名为 PTC、让 Headless 进度走 stderr/最终结果走 stdout；当前 TUI 不直接依赖这些实现，但安装/兼容文档应提示。
+
+### 源码级契约结论
+
+- **确定性破坏 1：Session 事件读取。** rc.2 的 `Session.events` getter 已在 rc.1 移除；rc.1 提供同步 `snapshotEvents(from?, toExclusive?)`、`eventAt(seq)` 与 `seq`。TUI 目前约 30 处直接读取 `.session.events`，会在 rc.1 得到 `undefined` 并导致初始化、投影、usage、权限、resume、recap、Jobs 活动等路径失败或静默空白。
+- **确定性破坏 2：权限读取签名。** rc.2 的 `permissionPresets.current(events)` 在 rc.1 改为 `current(session)`，其实现从 `sessionProjections` 读取状态。TUI 所有 current 调用仍传事件数组；必须按 Session 能力区分新旧签名，写入 `set(session, name)` 保持不变。
+- **保持兼容：** `agents.create/resume`、`agent.followup/steer/cancel`、`AgentOptions.provider/model/reasoningEffort/maxTokens`、Jobs `list/read/kill/onJobsChanged`、附件 `validateImage/saveImages/saveImage/readImage`、命令 `list/find/execute(agent,line,images,signal)` 的 TUI 使用签名仍存在。
+- **依赖发布：** npm 官方 registry 已存在 `@deepseek-ai/dsh@0.1.2-rc.1`，`next=0.1.2-rc.1`、`latest=0.1.1-rc.2`、`alpha=0.1.2-alpha.5`。因此 rc.1 是可安装的 next 预发布，不应把普通 `npx @deepseek-ai/dsh` 文档改成未经限定的 latest。
+- **最新 master：** rc.1 后 99 个提交主要涉及代理/网络策略、LLM 模型发现、Python 单文件 runtime、Agent Team mailbox、`read_image` Web 卡片，以及新的 session-persistence handle seam。TUI 不直接持有 persistence service，也不使用 Web Remote/React 卡片；当前应记录但不追随未发布 master API。
+- **实现方向：** 新增一个同步的 Session 事件读取薄层：优先 `snapshotEvents()`，回退 rc.2 的 `.events`；新增权限读取薄层：存在 `snapshotEvents` 时传 Session，否则传事件数组。这样可同时支持 rc.1 与现有 rc.2，而不复制 Harness 投影状态。
+
+### 实施与真实 Profile 验证
+
+- 已新增 `src/core/session-events.js` 并替换全部生产 `.session.events` 读取；`rg` 只剩兼容层内的旧 getter 回退。权限读取同样集中处理新旧签名。
+- 仅提升 peer 仍无法启动：rc.1 standard preset 的 `modelSelectionSettings: true` 要求 Host scope 提供 `@deepseek-ai/dsh-tool-subagent/model-selection-settings`。按官方 Web host 组合补挂后，真实 TTY 可正常进入欢迎页。
+- rc.1 已移除 `tool-subagent-report` entry；保留旧 disable patch 会在 `--dump-config` 输出 warning。删除后配置展开无警告。
+- 19 个 DSH peer 已统一为 `^0.1.2-rc.1`。不声明双 Profile 兼容范围，避免“代码层事件回退”被误解为“旧 preset/patch/依赖组合已经完整复测”。
+- 真实隔离验证通过：rc.1 安装、插件链接、`--dump-config`、standard preset 启动、`/status`、workspace-write → danger-full-access → read-only → workspace-write 权限轮换、空闲退出与恢复提示。
+- 自动验证通过：`npm test`、`npm run verify`、`git diff --check`、npm pack dry-run；新报告文件已进入包内容。
+- 扩展验证仍保留：真实 Provider 对话/工具循环、图片与 compact E2E、Windows PTY。它们不影响已复现的启动、Session 快照和权限契约修复结论。

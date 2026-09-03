@@ -279,3 +279,16 @@
 - 第二次验证发现取消排序测试桩未绑定真实实例已有的 `orderJobEntries`；已补齐测试契约。
 - 完成 CR-069～CR-079 修复，并补齐读取/取消竞态、长日志游标、双写隔离、本地暂停、强制终止、控制字符和 6～16 行容量矩阵测试。
 - 最终验证通过：`npm test`、`npm run verify`、`git diff --check`。
+
+### 阶段 26：DSH v0.1.2-rc.1 上游兼容适配
+- **状态：** complete
+- 官方基线已确认：rc.1 tag `a66e4702…`、GitHub prerelease 发布于 2026-09-03，npm 官方 registry 的 `next` 已指向 `0.1.2-rc.1`，`latest` 仍为 rc.2。
+- 已完成本地调用面扫描与官方源码契约核对，确认两项实际破坏：`Session.events` 移除、`permissionPresets.current(events)` 改为 `current(session)`。
+- 新增 `src/core/session-events.js`，优先使用 rc.1 的 `snapshotEvents()` 并回退 rc.2 的 `events`；权限读取按 Session 能力选择新旧签名。
+- 已替换初始化、恢复、渲染、usage、权限、recap、compact、Jobs 活动、导出与 Browser lease 等生产读取点；新增两代 Session/权限契约回归测试。
+- 19 个 DSH peer dependency 已对齐 `^0.1.2-rc.1`，包含 preset 新依赖的 `dsh-tool-subagent`；npm 官方 registry 和真实隔离安装均确认 rc.1 包可用。代码保留 rc.2 Session 读取回退，但发布依赖只承诺完成整体验证的 rc.1 Profile 组合。
+- 首轮单测因 `commitSessionState` 的对象参数名遮蔽新 helper 失败；解构别名后 `npm test` 全量通过。
+- 真实 rc.1 standard preset 首次启动暴露缺少 subagent model-selection Host 服务；已按官方组合补挂服务，并删除不存在的 `tool-subagent-report` patch。复测欢迎页、`/status`、三档权限轮换和退出恢复提示均通过。
+- 已新建 `DSH_V0.1.2_RC1_ADAPTATION.md`，同步 README、Harness 兼容契约、CHANGELOG 与 npm 文件白名单。
+- 最终验证通过：`npm test`、`npm run verify`、`git diff --check`、npm pack dry-run，以及真实 `@deepseek-ai/dsh@0.1.2-rc.1` 隔离 Profile smoke test。
+- 创建/修改的核心文件：`src/core/session-events.js`、`src/core/index.js`、`src/index.js`、`src/commands/{recap,status,compact}.js`、`src/browser-lease.js`、`test/unit-regressions.mjs`、`cordis.patch.yml`、`package.json` 与适配文档。

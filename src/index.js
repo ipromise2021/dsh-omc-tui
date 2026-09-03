@@ -9,6 +9,7 @@ import { ImageParser, formatImageBytes, pngDimensions, jpegDimensions, imageDime
 import { registerVisionRouter } from './vision-router.js'
 import { registerBrowserLease } from './browser-lease.js'
 import { createDangerGuard } from './core/danger-guard.js'
+import { currentPermissionPreset, sessionEvents } from './core/session-events.js'
 import {
   THEMES,
   defaultTheme,
@@ -654,18 +655,19 @@ export class TuiApp {
       this.reasoningEffort = selection.reasoningEffort
       this.attachRequestOverride(agent)
       this.dangerGuardDispose = await this.createDangerGuardDisposer(agent)
-      this.permissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
-      this.usage = foldUsage(agent.session.events)
+      const initialEvents = sessionEvents(agent.session)
+      this.permissionName = permissionFromEvents(initialEvents, currentPermissionPreset(this.ctx.permissionPresets, agent.session))
+      this.usage = foldUsage(initialEvents)
       this.refreshContextTokens?.()
       this.viewClearedSeq = isResumed ? 0 : agent.session.seq
       if (isResumed) {
-        this.restoreImageAttachments(agent.session.events)
-        this.reasoningBlocks = this.extractReasoningBlocks(agent.session.events)
+        this.restoreImageAttachments(initialEvents)
+        this.reasoningBlocks = this.extractReasoningBlocks(initialEvents)
         this.streaming = { text: '', reasoning: '', tool: undefined }
         this.reasoningAt = undefined
         this.message = ''
         this.touchMru(resumeRecord.header.id)
-        this.initResumeRecap(agent.session.events)
+        this.initResumeRecap(initialEvents)
       }
 
       this.disposers.push(this.ctx.on('session/event', (session, event) => this.onSessionEvent(session, event)))
@@ -697,9 +699,9 @@ export class TuiApp {
       }
 
       if (isResumed) {
-        this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
+        this.lastCommittedSeq = initialEvents[initialEvents.length - 1]?.seq ?? 0
       } else {
-        this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? 0
+        this.lastCommittedSeq = initialEvents[initialEvents.length - 1]?.seq ?? 0
       }
 
     } finally {
@@ -1026,7 +1028,7 @@ export class TuiApp {
   scheduleAutoRecapTimer() {
     this.clearAutoRecapTimer()
     if (this.preferences?.autoRecap === false || !this.agent || this.active) return
-    const events = this.agent.session?.events ?? []
+    const events = sessionEvents(this.agent.session)
     if (events.length === 0) return
     // 15-minute idle threshold (900s)
     this.autoRecapTimer = setTimeout(() => {
@@ -1044,7 +1046,7 @@ export class TuiApp {
 
   triggerIdleAutoRecap() {
     if (this.preferences?.autoRecap === false || !this.agent || this.active || (this.input && this.input.trim() !== '')) return
-    const events = this.agent.session?.events ?? []
+    const events = sessionEvents(this.agent.session)
     const lastTurnEnd = events.findLast?.((e) => e.type === 'turn/end') ?? events.filter((e) => e.type === 'turn/end').pop()
     const lastSeq = lastTurnEnd?.seq ?? events[events.length - 1]?.seq ?? 0
     if (this.lastRecappedSeq !== undefined && this.lastRecappedSeq === lastSeq) return
@@ -1188,7 +1190,7 @@ export class TuiApp {
     const footerHeight = this.lastFooterHeight || 4
     const viewportHeight = Math.max(1, rows - footerHeight)
 
-    const visibleEvents = this.agent?.session?.events?.filter((e) => e.seq >= this.viewClearedSeq) ?? []
+    const visibleEvents = sessionEvents(this.agent?.session).filter((e) => e.seq >= this.viewClearedSeq)
     const logEvents = this.localLog
       .filter((e) => e.seq >= (this.viewClearedSeq ?? 0) && e.command !== '!' && !/^exit /.test(e.command ?? ''))
       .map((entry) => ({
@@ -1269,7 +1271,7 @@ export class TuiApp {
 
   commitUnprintedEvents() {
     if (!this.agent) return
-    const allEvents = this.agent?.session?.events ?? []
+    const allEvents = sessionEvents(this.agent?.session)
     const unprinted = allEvents.filter((e) => e.seq > (this.lastCommittedSeq ?? 0) && e.seq >= this.viewClearedSeq)
     if (unprinted.length === 0) return
     this.lastCommittedSeq = allEvents[allEvents.length - 1]?.seq ?? this.lastCommittedSeq
@@ -1306,8 +1308,9 @@ export class TuiApp {
     if (!this.terminalOpen) return
     if (clearScreen) this.clearScreenRequested = true
     this.reprojectDocument()
-    if (this.agent?.session?.events?.length) {
-      this.lastCommittedSeq = this.agent.session.events[this.agent.session.events.length - 1]?.seq ?? this.lastCommittedSeq
+    const events = sessionEvents(this.agent?.session)
+    if (events.length) {
+      this.lastCommittedSeq = events[events.length - 1]?.seq ?? this.lastCommittedSeq
     }
     this.lastFooterHeight = 0
     this.lastCursorRowInFooter = 0
@@ -1537,7 +1540,7 @@ export class TuiApp {
         this.streamLoopStopped = false
         this.reasoningAt = undefined
         this.message = ''
-        if (event.data.usage) this.usage = foldUsage(this.agent.session.events)
+        if (event.data.usage) this.usage = foldUsage(sessionEvents(this.agent.session))
         break
       }
       case 'tool/call':
@@ -1553,7 +1556,7 @@ export class TuiApp {
           const resultCallId = event.data?.callId ?? event.data?.id
           let toolName = event.data?.name
           if (!toolName && resultCallId !== undefined) {
-            const toolCall = [...(session.events ?? [])].reverse().find((entry) => {
+            const toolCall = [...sessionEvents(session)].reverse().find((entry) => {
               if (entry.type !== 'tool/call') return false
               const callId = entry.data?.callId ?? entry.data?.id
               return callId === resultCallId
@@ -1695,7 +1698,7 @@ export class TuiApp {
   }
 
   suggestionContext() {
-    const events = this.agent?.session?.events ?? []
+    const events = sessionEvents(this.agent?.session)
     const recent = events
       .filter((event) => event.type === 'user/message' || event.type === 'assistant/message')
       .slice(-4)
@@ -1823,7 +1826,7 @@ export class TuiApp {
     // Official approval requests do not inline arguments: find the already
     // presented tool call by callId on the session log.
     const callId = request.callId ?? request.id
-    const events = this.agent?.session?.events ?? []
+    const events = sessionEvents(this.agent?.session)
     for (const event of events) {
       if (event.type !== 'tool/call') continue
       const eventCallId = event.data?.callId ?? event.data?.id
@@ -2675,12 +2678,13 @@ export class TuiApp {
     try {
       const names = service?.names ?? []
       if (names.length === 0) return
-      const current = this.permissionName ?? service.current(this.agent.session.events)
+      const current = this.permissionName ?? currentPermissionPreset(service, this.agent.session)
       const index = Math.max(0, names.indexOf(current))
       const next = names[(index + 1) % names.length]
       if (typeof service.set !== 'function') throw new Error('permission presets service unavailable')
       service.set(this.agent.session, next)
-      this.permissionName = permissionFromEvents(this.agent.session.events, service.current?.(this.agent.session.events))
+      const events = sessionEvents(this.agent.session)
+      this.permissionName = permissionFromEvents(events, currentPermissionPreset(service, this.agent.session))
       this.log('ok', `permission mode · ${this.permissionName}`, 'Shift+Tab')
     } catch (error) {
       this.log('error', `failed to set permission mode: ${error instanceof Error ? error.message : String(error)}`, 'Shift+Tab')
@@ -3436,7 +3440,7 @@ export class TuiApp {
       isDefaultDirectory: true,
       relativeFile: join(directory, filename),
       focus: 'directory',
-      eventCount: this.agent.session?.events?.length ?? 0,
+      eventCount: sessionEvents(this.agent.session).length,
       error: undefined
     }
     this.scheduleRender()
@@ -3477,7 +3481,7 @@ export class TuiApp {
       if (this.syncExportDirectoryKind(request)) await mkdir(requestedDirectory, { recursive: true, mode: 0o700 })
       const directory = await this.validateExportDirectory(requestedDirectory)
       const file = join(directory, request.filename)
-      const events = this.agent?.session?.events ?? []
+      const events = sessionEvents(this.agent?.session)
       const lines = [`# DSH TUI session export`, '']
       for (const event of events) {
         if (event.type === 'user/message' && event.data.source?.kind === 'user') {
@@ -4494,7 +4498,7 @@ export class TuiApp {
   }
 
   sessionHasProduced() {
-    return (this.agent?.session?.events ?? []).some((event) => ['turn/start', 'user/message', 'assistant/message', 'tool/call'].includes(event.type))
+    return sessionEvents(this.agent?.session).some((event) => ['turn/start', 'user/message', 'assistant/message', 'tool/call'].includes(event.type))
   }
 
   async choosePreset(id) {
@@ -4597,7 +4601,7 @@ export class TuiApp {
     permissionName,
     reasoningBlocks = [],
     isResumed = false,
-    sessionEvents = null
+    sessionEvents: restoredEvents = null
   }) {
     this.handle = handle
     this.agent = handle.agent
@@ -4610,7 +4614,8 @@ export class TuiApp {
     this.usage = usage
     this.permissionName = permissionName
     this.viewClearedSeq = 0
-    this.lastCommittedSeq = handle.agent.session.events[handle.agent.session.events.length - 1]?.seq ?? 0
+    const events = sessionEvents(handle.agent.session)
+    this.lastCommittedSeq = events[events.length - 1]?.seq ?? 0
 
     this.reasoningBlocks = reasoningBlocks
     this.streaming = { text: '', reasoning: '', tool: undefined }
@@ -4644,12 +4649,12 @@ export class TuiApp {
     this.jobOutputCache?.clear?.()
     this.jobPanel = undefined
 
-    if (isResumed && sessionEvents) {
-      this.restoreImageAttachments?.(sessionEvents)
+    if (isResumed && restoredEvents) {
+      this.restoreImageAttachments?.(restoredEvents)
       if (typeof this.initResumeRecap === 'function') {
-        this.initResumeRecap(sessionEvents)
+        this.initResumeRecap(restoredEvents)
       } else {
-        TuiApp.prototype.initResumeRecap.call(this, sessionEvents)
+        TuiApp.prototype.initResumeRecap.call(this, restoredEvents)
       }
     } else {
       this.imageAttachments?.clear()
@@ -4721,8 +4726,9 @@ export class TuiApp {
         this.ctx.permissionPresets.set(agent.session, permissionName)
       }
       const candidatePresetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? id
-      const candidatePermissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
-      const candidateUsage = foldUsage(agent.session.events)
+      const candidateEvents = sessionEvents(agent.session)
+      const candidatePermissionName = permissionFromEvents(candidateEvents, currentPermissionPreset(this.ctx.permissionPresets, agent.session))
+      const candidateUsage = foldUsage(candidateEvents)
       candidateRequestOverrideDispose = this.createRequestOverride(agent)
       candidateDangerGuardDispose = await this.createDangerGuardDisposer(agent)
 
@@ -4872,7 +4878,7 @@ export class TuiApp {
   }
 
   taskActivitySnapshots() {
-    const events = this.agent?.session?.events ?? []
+    const events = sessionEvents(this.agent?.session)
     const start = Math.max(0, events.length - 240)
     const activities = groupActivitySpans(events.slice(start))
       .filter((item) => item.kind === 'activity' && item.span?.calls?.length > 0)
@@ -5326,7 +5332,7 @@ export class TuiApp {
   }
 
   recentUsage() {
-    const events = this.agent?.session?.events ?? []
+    const events = sessionEvents(this.agent?.session)
     let start = -1
     for (let index = events.length - 1; index >= 0; index -= 1) {
       if (events[index].type === 'turn/start') {
@@ -5600,9 +5606,10 @@ export class TuiApp {
       candidateSkillOverrides = skillOverrideDisposers ?? new Map()
       const candidatePresetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? requestedPreset
       const candidateReasoningEffort = agent.session.requestHeader()?.config.reasoningEffort ?? selection.reasoningEffort
-      const candidateUsage = foldUsage(agent.session.events)
-      const candidatePermissionName = permissionFromEvents(agent.session.events, this.ctx.permissionPresets.current(agent.session.events))
-      const candidateReasoningBlocks = this.extractReasoningBlocks(agent.session.events)
+      const candidateEvents = sessionEvents(agent.session)
+      const candidateUsage = foldUsage(candidateEvents)
+      const candidatePermissionName = permissionFromEvents(candidateEvents, currentPermissionPreset(this.ctx.permissionPresets, agent.session))
+      const candidateReasoningBlocks = this.extractReasoningBlocks(candidateEvents)
       candidateRequestOverrideDispose = this.createRequestOverride(agent)
       candidateDangerGuardDispose = await this.createDangerGuardDisposer(agent)
 
@@ -5623,7 +5630,7 @@ export class TuiApp {
         permissionName: candidatePermissionName,
         reasoningBlocks: candidateReasoningBlocks,
         isResumed: true,
-        sessionEvents: agent.session.events
+        sessionEvents: candidateEvents
       })
 
       await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers, previousDangerGuardDispose)
@@ -6556,9 +6563,10 @@ export class TuiApp {
         }
         try {
           this.ctx.permissionPresets.set(this.agent.session, 'workspace-write')
+          const events = sessionEvents(this.agent.session)
           this.permissionName = permissionFromEvents(
-            this.agent.session.events,
-            this.ctx.permissionPresets.current?.(this.agent.session.events) ?? 'workspace-write'
+            events,
+            currentPermissionPreset(this.ctx.permissionPresets, this.agent.session) ?? 'workspace-write'
           )
           this.pendingApproval.settle('allowed-once')
           this.approvalChoice = 0
@@ -7345,7 +7353,7 @@ export class TuiApp {
       reasoningBlocks: this.reasoningBlocks,
       activeModel: this.activeModel,
       defaultModel: this.agent?.options?.model ?? '',
-      allSessionEvents: this.agent?.session?.events ?? events,
+      allSessionEvents: this.agent?.session ? sessionEvents(this.agent.session) : events,
       ANSI
     })
   }
@@ -7485,7 +7493,7 @@ export class TuiApp {
       permissionName: this.permissionName,
       liveModel,
       cwdName,
-      sessionEvents: this.agent.session.events,
+      sessionEvents: sessionEvents(this.agent.session),
       skills: this.skills.filter((skill) => skill.enabled !== false),
       mcpCount: this.mcpCount,
       hookCount: this.hookCount,

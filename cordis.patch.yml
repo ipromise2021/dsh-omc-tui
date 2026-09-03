@@ -45,8 +45,6 @@
   disabled: true
 - id: tool-subagent-fork
   disabled: true
-- id: tool-subagent-report
-  disabled: true
 - id: workflow-worker-thread
   disabled: true
 - id: tool-workflow
@@ -61,12 +59,16 @@
   disabled: true
 
 - insert:
+    # Shipped rc.1 presets opt into the Host-owned subagent model-selection policy.
+    - id: subagent-model-selection-settings
+      name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
+
     - id: agent-presets
       name: '@deepseek-ai/dsh-agent-presets'
       config:
         default: standard
 
-    # Code Mode is a core execution capability, also used by the headless bundle.
+    # PTC mode is a core execution capability, also used by the headless bundle.
     - id: code-runtime
       name: '@deepseek-ai/dsh-code-runtime-worker-thread'
 

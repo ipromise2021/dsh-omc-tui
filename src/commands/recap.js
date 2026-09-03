@@ -1,5 +1,6 @@
 import { shorten, textOf, wrap, formatTime, safe, widthOf } from '../renderer/ansi.js'
 import { ANSI } from '../renderer/themes.js'
+import { sessionEvents } from '../core/session-events.js'
 
 export function buildSessionRecapSummary(events = [], viewClearedSeq = 0) {
   const visible = (events || []).filter((event) => event.seq >= viewClearedSeq)
@@ -83,7 +84,7 @@ export function nextLocalEventSeq(app) {
 
 export function handleRecap(app, text = '/recap') {
   if (!app.agent) return
-  const rawEvents = app.agent?.session?.events ?? []
+  const rawEvents = sessionEvents(app.agent?.session)
   const summary = buildSessionRecapSummary(rawEvents, app.viewClearedSeq)
   if (!summary) {
     app.log('error', 'no session history to recap', '/recap')
@@ -172,7 +173,7 @@ export function handleRecap(app, text = '/recap') {
   }
 
   // Update lastRecappedSeq so 15m idle timer won't produce duplicate recap for this turn
-  const events = app.agent?.session?.events ?? []
+  const events = sessionEvents(app.agent?.session)
   const lastTurnEnd = events.findLast?.((e) => e.type === 'turn/end') ?? events.filter((e) => e.type === 'turn/end').pop()
   const lastSeq = lastTurnEnd?.seq ?? events[events.length - 1]?.seq ?? 0
   if (lastSeq) {

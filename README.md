@@ -4,14 +4,14 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-ipromise2021%2Fdsh--omc--tui-181717?style=flat-square&logo=github)](https://github.com/ipromise2021/dsh-omc-tui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![DeepSeek Harness](https://img.shields.io/badge/Harness-0.1.1--rc.2-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/Harness-0.1.2--rc.1-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-green?style=flat-square)](package.json)
 
 **DeepSeek Harness 的终端原生 TUI**
 
 保留终端 Scrollback，提供自主决策视觉 Subagent、多模态图片直贴、行内审批、Plan/Jobs、模型选择和上下文状态栏。
 
-[架构与全功能实现](ARCHITECTURE.md) · [界面与设计说明](PRODUCT_SHOWCASE.md) · [兼容性记录](HARNESS_COMPATIBILITY.md) · [变更日志](CHANGELOG.md)
+[架构与全功能实现](ARCHITECTURE.md) · [界面与设计说明](PRODUCT_SHOWCASE.md) · [rc.1 适配报告](DSH_V0.1.2_RC1_ADAPTATION.md) · [兼容性契约](HARNESS_COMPATIBILITY.md) · [变更日志](CHANGELOG.md)
 
 </div>
 
@@ -24,26 +24,24 @@
 个人比较喜欢 Claude Code 终端的交互方式，项目参考了它的交互习惯，在终端中运行 DSH 的同时，完整保留了原生滚轮回看、文本划选与自由复制等功能特性。
 
 > 📌 **项目说明与动态**：
-> - **版本基准与适配**：插件依赖基线为 DSH `v0.1.1-rc.2`。截至 2026-08-29，官方 npm 包 [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) 的 `latest` 与 `next` 均为 `0.1.1-rc.2`。附件保存、会话事件与子代理创建的源码契约已完成比对；图片、视觉 Sidecar 与 PTY 的真实 Profile 回归仍会持续补充。
-> - **后续版本跟进**：截至 2026-08-29，DSH `v0.1.2-alpha.1` 尚未发布到 npm registry，因此本插件暂不将其声明为可安装依赖或正式兼容基线。待上游 npm 包发布后，将继续验证 API、durable event、模型能力与真实 Profile，并按验证结果持续适配和保持向后兼容。
+> - **版本基准与适配**：插件依赖基线已提升至 DSH `v0.1.2-rc.1`。截至 2026-09-03，该版本已发布到 npm 的 `next` dist-tag；默认 `latest` 仍是 `0.1.1-rc.2`，因此安装命令必须显式指定 rc.1。
+> - **验证状态**：已完成 rc.1 源码契约核对、真实隔离 Profile 启动、`/status`、权限切换、单元测试和模块导入验证。真实 Provider 对话、图片/压缩链路与 Windows PTY 仍列为发布前扩展验证项。
 > - **持续维护**：功能会按需扩展，Bug 也会持续修复。欢迎使用、点 Star 和反馈问题。
 
-## DSH `v0.1.1-rc.2` 适配记录
+## DSH `v0.1.2-rc.1` 适配记录
 
-`v0.1.1-rc.2` 的发布重点是 DeepSeek 图片处理：适配器优先使用 Files API 上传并复用图片文件，且会按模型要求自动缩放、转换图片格式。[查看官方发布说明](https://github.com/deepseek-ai/deepseek-harness/releases#release-dsh-v0.1.1-rc.2)
+`v0.1.2-rc.1` 是一次大规模预发布更新，覆盖 Session 按需事件读取、子代理双向通信与模型选择、图片后台压缩/上传、preset 健康诊断、会话日志尾部修复、PTC 命名以及 Web/Headless 体验优化。[查看官方发布说明](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.2-rc.1)
 
-当前发布版插件以 npm 可获取的 `v0.1.1-rc.2` 为安装和兼容基线；可在官方 npm 页面查看 [`@deepseek-ai/dsh` 的版本与 dist-tag](https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions)。GitHub 上游虽已提供 `v0.1.2-alpha.1` 预览版本，但对应 npm 包尚未正式发布；待官方正式发布后，本插件将统一开展升级适配与兼容回归验证。
+本次修复了两个会直接影响 TUI 的契约变化：`Session.events` 被 `snapshotEvents()` / `eventAt()` / `seq` 取代，`permissionPresets.current(events)` 改为 `current(session)`。同时按 rc.1 官方 host 组合挂载 subagent 模型选择服务，并移除已不存在的 `tool-subagent-report` patch 项。
 
-TUI 的 `saveImages/saveImage`、附件引用元数据、`agents.create({ agentOptions })` 与 `session/event` 使用方式均已与 rc.2 源码比对。因图片处理由 Harness 负责，TUI 保留本地 2048px 安全保护，真实图片回归确认前不移除它。
+完整上游差异、问题矩阵、代码映射、验证证据和后续风险见 [DSH v0.1.2-rc.1 适配与兼容性报告](DSH_V0.1.2_RC1_ADAPTATION.md)。
 
-| 阶段 | 适配内容 | 验收结果 |
+| 范围 | 结果 | 验收 |
 | :--- | :--- | :--- |
-| 范围 | 结果 | 后续验证 |
-| :--- | :--- | :--- |
-| 依赖与服务契约 | 所有 DSH peer 依赖已提升到 rc.2；附件、Agent 创建和 durable event 源码接口保持兼容。 | 在实际 rc.2 Profile 中执行启动、创建和恢复会话。 |
-| 图片附件 | `saveImages/saveImage` 与可复用 `attachmentId` 引用仍可用。 | 验证 PNG、JPEG、重复图片、超大图与格式转换。 |
-| 原生与旁路视觉 | 原生 image content block 和 `analyze_image` Sidecar 的调用契约未变。 | 验证多图、取消和恢复会话后的附件读取。 |
-| 回归 | 本项目单元与模块验证通过。 | 补跑带 Harness fixture 的 PTY/交互测试。 |
+| Session 与权限 | 新旧事件读取集中到兼容薄层，权限读取使用 rc.1 Session 签名 | 双代契约单测、真实 `/status` 与权限轮换通过 |
+| Profile 与 preset | 补挂 subagent model-selection Host 服务，删除过期 patch 条目 | rc.1 `--dump-config` 无警告，standard preset 启动通过 |
+| 依赖 | 19 个 DSH peer dependency 对齐 `^0.1.2-rc.1` | rc.1 隔离安装和插件链接成功 |
+| 既有能力 | Agent、Jobs、附件、命令与模型能力调用签名保持兼容 | 源码级比对通过；真实 Provider/图片 E2E 待补 |
 
 适配期间不会为了同步上游而复制其 UI 功能，也不会提前移除本地安全保护；只处理 Harness API 与 durable event 契约产生的实际兼容问题。
 
@@ -101,7 +99,7 @@ deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片�
 ## 环境要求
 
 - Node.js 20 或更高版本
-- DeepSeek Harness [`@deepseek-ai/dsh@0.1.1-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)（截至 2026-08-29 为 npm `latest` / `next`）
+- DeepSeek Harness [`@deepseek-ai/dsh@0.1.2-rc.1`](https://www.npmjs.com/package/@deepseek-ai/dsh)（截至 2026-09-03 为 npm `next`；需显式指定版本）
 - 支持 ANSI 256 色的终端
 - 图片显示建议使用 iTerm2 或支持 Kitty Graphics 的终端
 
@@ -112,19 +110,19 @@ deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片�
 从 npm 安装到 `tui` profile（推荐，直接分发构建产物，无需 Git 依赖构建授权）：
 
 ```sh
-npx --yes @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile tui add dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile tui add dsh-omc-tui
 ```
 
 也可以从 GitHub 安装（会拉取源码，首次需按 pnpm 提示授权 `prepare` 构建脚本）：
 
 ```sh
-npx --yes @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile tui add github:ipromise2021/dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile tui add github:ipromise2021/dsh-omc-tui
 ```
 
 启动：
 
 ```sh
-npx --yes @deepseek-ai/dsh@0.1.1-rc.2 --profile tui
+npx --yes @deepseek-ai/dsh@0.1.2-rc.1 --profile tui
 ```
 
 如果已经全局安装 DSH，也可以直接运行：
@@ -157,8 +155,8 @@ omc
 
 ```sh
 export DSH_HOME=/private/tmp/dsh-tui-dev
-npx --yes @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile tui add /absolute/path/to/dsh-omc-tui
-npx --yes @deepseek-ai/dsh@0.1.1-rc.2 --profile tui
+npx --yes @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile tui add /absolute/path/to/dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.1.2-rc.1 --profile tui
 ```
 
 ## 常用快捷键

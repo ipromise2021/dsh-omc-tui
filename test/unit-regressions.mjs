@@ -24,8 +24,24 @@ import { ScreenRenderer } from '../src/renderer/screen.js'
 import { loadShellHistoryFile, loadSystemShellHistory } from '../src/input/history.js'
 import { listDir } from '../src/input/autocomplete.js'
 import { createDangerGuard, checkDangerCommand, compileDangerRules, DEFAULT_DANGER_RULES } from '../src/core/danger-guard.js'
+import { currentPermissionPreset, sessionEvents } from '../src/core/session-events.js'
 
 const noop = () => {}
+
+const legacySessionEvents = [{ type: 'turn/start', seq: 0, data: { turn: 1 } }]
+const legacySession = { events: legacySessionEvents }
+assert.equal(sessionEvents(legacySession), legacySessionEvents)
+assert.equal(currentPermissionPreset({ current: (events) => events === legacySessionEvents ? 'legacy' : 'wrong' }, legacySession), 'legacy')
+
+const snapshotSessionEvents = [{ type: 'turn/end', seq: 1, data: { turn: 1 } }]
+const snapshotSession = {
+  snapshotEvents: () => snapshotSessionEvents,
+  get events() { throw new Error('legacy events getter must not be read') }
+}
+assert.equal(sessionEvents(snapshotSession), snapshotSessionEvents)
+assert.equal(currentPermissionPreset({ current: (session) => session === snapshotSession ? 'snapshot' : 'wrong' }, snapshotSession), 'snapshot')
+assert.deepEqual(sessionEvents(undefined), [])
+assert.equal(currentPermissionPreset(undefined, snapshotSession), undefined)
 
 let tuiSkillOverride
 registerTuiSkillOverrides({
@@ -4349,7 +4365,7 @@ inertDispose()
   })
   const { handleStatus } = await import('../src/commands/status.js')
   handleStatus(testStatusApp)
-  assert.match(statusLogOutput, /TUI:\s+dsh-omc-tui v0\.2\.8/)
+  assert.match(statusLogOutput, /TUI:\s+dsh-omc-tui v0\.2\.9/)
   assert.ok(statusLogOutput.includes('0 / 100.0k tokens (0%)') || statusLogOutput.includes('0 / 100k tokens (0%)') || statusLogOutput.includes('0 tokens (0%)'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
 }
 
