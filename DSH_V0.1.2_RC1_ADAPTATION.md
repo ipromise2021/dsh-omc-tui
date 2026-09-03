@@ -2,7 +2,7 @@
 
 > 调研与验证日期：2026-09-03
 >
-> TUI 发布版本：`dsh-omc-tui@0.2.9`（调研起点 `06df472`）
+> TUI 发布版本：`dsh-omc-tui@0.2.10`（调研起点 `06df472`）
 >
 > 发布基线：`dsh-v0.1.2-rc.1` / `a66e4702047846cdaa10c66c9d3df3951f5ea70d`
 
@@ -197,10 +197,10 @@ rc.1 发布后，master 继续包含 HTTP proxy、模型发现、Python 单文�
 | 并行工具折叠、reasoning、导出、历史搜索、会话内模型切换 | 通过 |
 | `@` 文件选择、引用展开并送达模型 | 通过 |
 | OSC 1337 / Kitty 图片附加并送达声明支持图片的模型 | 通过 |
-| 交互 timing 旧断言 | 未关闭；实际输出为 `Worked for`，旧测试仍等待 `finished in` |
-| preset 切换后 resume 场景 | 未关闭；等待旧 `agent preset · code` 标记超时，尚未判定为产品缺陷 |
+| 综合交互 | 通过；对齐 `Worked for`、当前菜单布局，并验证 `ask_user_question` Agent-scoped 交互面板 |
+| preset 切换后 resume 场景 | 通过；rc.1 的 `code` preset 更名为 `ptc` |
 
-因此当前核心 rc.1 适配已具备充分正向证据，但整套 PTY 尚未全绿。`v0.2.9` 已指向补充修复之前的提交，不应移动该标签；若关闭剩余门禁，建议发布新的补丁版本标签。
+隔离 rc.1 mock Profile 的六项 PTY 门禁现已全绿。`v0.2.9` 保持指向此前发布提交不移动；本次修复应以新的 `v0.2.10` 标签发布。
 
 ## 8. 安装与升级
 

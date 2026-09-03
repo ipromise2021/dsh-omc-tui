@@ -305,3 +305,7 @@
 - rc.1 审批期间会插入 `session/title`，旧活动投影因此拆开并行工具组；产品代码已将标题元数据设为透明事件并补回归单测。
 - 发布门禁已单项通过：`pty-e2e`、`pty-features`、`pty-file`、`pty-image`。测试夹具已补齐 rc.1 adapter、图片能力和文件引用边界标记契约。
 - 未继续陷入旧 PTY 文案逐项修补：`pty-interaction` 仍等待旧 `finished in`（实际为 `Worked for`）；`pty-resume` 等待 preset 切换标记超时，需后续独立确认。当前不宣称整套 PTY 全绿。
+- 阶段 27 续验：已将 interaction 的 timing 断言对齐当前稳定文案 `Worked for`。resume 测试已增加 picker 快照、按键 drain 和失败日志落盘，接下来据真实 preset 选择结果判断是顺序变更还是重组异常。
+- 续验确认 rc.1 的 `userQuestions` 改为 Agent-scoped `user-questions/request` waterfall；TUI 已优先在 `agent.ctx` 订阅该事件、保留旧 `registerProvider()` 后备，PTY 问答面板已进入选择流程。模块导入与 `node test/unit-regressions.mjs` 通过；interaction 余下菜单断言仍在按 rc.1 布局收口，尚未创建 `v0.2.10` 标签。
+- 发布复审修复：`userQuestions` 现优先保留旧 `registerProvider()`，仅在其缺失时订阅 rc.1 Agent-scoped waterfall；mock adapter 对文件/图片改为从最近携带对应内容块的消息读取，兼容 rc.1 context injection。全新复制 fixture 的六项 PTY 全部 `exit code: 0`；待最终测试、提交并创建 `v0.2.10`。
+- `v0.2.10` 发布预检通过：`npm test`、`npm run verify`、`git diff --check`、隔离 fixture 六项 PTY 及 `npm pack --dry-run` 均成功；包内版本和 `/status` 回归断言已同步为 `0.2.10`。npm 发布尚未执行。

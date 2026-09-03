@@ -75,9 +75,16 @@ snapshot("narrow-80x24")
 send("/preset\r")
 assert wait_for("AGENT PRESETS", 8), "preset picker did not open"
 assert wait_for("standard", 4), "standard preset missing"
+snapshot("preset-picker")
 send("\x1b[B")
+drain(0.4)
 send("\r")
-assert wait_for("agent preset · code", 12), "blank-session preset switch did not complete"
+preset_switched = wait_for("agent preset · ptc", 12)
+if not preset_switched:
+    snapshot("preset-switch-timeout")
+    with open(OUT, "w") as f:
+        f.write("".join(log))
+    raise AssertionError("blank-session preset switch did not complete")
 snapshot("after-preset")
 
 # /compact (real harness command, agent idle)

@@ -4365,7 +4365,7 @@ inertDispose()
   })
   const { handleStatus } = await import('../src/commands/status.js')
   handleStatus(testStatusApp)
-  assert.match(statusLogOutput, /TUI:\s+dsh-omc-tui v0\.2\.9/)
+  assert.match(statusLogOutput, /TUI:\s+dsh-omc-tui v0\.2\.10/)
   assert.ok(statusLogOutput.includes('0 / 100.0k tokens (0%)') || statusLogOutput.includes('0 / 100k tokens (0%)') || statusLogOutput.includes('0 tokens (0%)'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
 }
 

@@ -215,12 +215,14 @@
 - **状态：** complete
 
 ### 阶段 27：DSH v0.1.2-rc.1 完整兼容验证
-- [ ] 审计可用的隔离 fixture、真实 Provider 与凭据边界，不输出任何密钥
-- [ ] 执行现有 PTY、恢复、preset、权限、Jobs 和命令验证
+- [x] 审计可用的隔离 fixture、真实 Provider 与凭据边界，不输出任何密钥
+- [x] 执行现有 PTY、恢复、preset、权限、Jobs 和命令验证
 - [ ] 在独立临时工作区执行最小真实 Provider、工具、图片和 compact 验证（如凭据可用）
-- [ ] 对失败项区分环境限制、上游缺陷与 TUI 缺陷；修复必要的 TUI 问题并回归
-- [ ] 更新适配报告、验证矩阵和发布状态
+- [x] 对失败项区分环境限制、上游缺陷与 TUI 缺陷；修复必要的 TUI 问题并回归
+- [x] 更新适配报告、验证矩阵和发布状态
 - **状态：** in_progress
+
+发布预检已完成；真实 Provider 与 Windows 平台验证仍为明确记录的外部扩展项，不阻塞 rc.1 mock Profile 发布门禁。
 
 当前门禁结论：核心 rc.1 主链路与新增投影修复已验证；整套 PTY 因 interaction timing 旧文案和 preset/resume 标记两项尚未全绿，保持 `in_progress`，不移动现有 `v0.2.9` 标签。
 

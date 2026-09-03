@@ -68,15 +68,19 @@ class MockAdapter {
 
   async *stream(options) {
     const { messages, signal } = options
-    const last = messages[messages.length - 1]
-    const hasToolResult = last?.content?.some((block) => block.type === 'tool-result')
     const wantsTools = (options.tools?.length ?? 0) > 0
-    const imageBlocks = messages.flatMap((message) => message.content ?? []).filter((block) => block.type === 'image')
-    const textBlocks = messages.flatMap((message) => message.content ?? []).filter((block) => block.type === 'text')
+    const imageBlocks = (messages.findLast((message) =>
+      message.content?.some((block) => block.type === 'image')
+    )?.content ?? []).filter((block) => block.type === 'image')
+    const textBlocks = (messages.findLast((message) =>
+      message.content?.some((block) => block.type === 'text' && /@[^\s@]+:\n(?:<!-- dsh:file_ref_start:[^\n]+ -->\n)?```/.test(block.text ?? ''))
+    )?.content ?? []).filter((block) => block.type === 'text')
     const hasFileRef = textBlocks.some((block) => /@[^\s@]+:\n(?:<!-- dsh:file_ref_start:[^\n]+ -->\n)?```/.test(block.text ?? ''))
-    const asksQuestion = textBlocks.some((block) => /question-panel/.test(block.text ?? ''))
+    const asksQuestion = messages
+      .flatMap((message) => message.content ?? [])
+      .some((block) => block.type === 'text' && /question-panel/.test(block.text ?? ''))
 
-    if (hasFileRef && !hasToolResult) {
+    if (hasFileRef && !this.awaitingToolResult) {
       const joined = textBlocks.map((block) => block.text ?? '').join('\n')
       const refLine = joined.match(/@([^\s@]+):\n(?:<!-- dsh:file_ref_start:[^\n]+ -->\n)?```(\w*)\n/)?.[1]
       const text = `File reference received: ${refLine ?? 'unknown'}`
@@ -93,7 +97,7 @@ class MockAdapter {
       return
     }
 
-    if (imageBlocks.length > 0 && !hasToolResult) {
+    if (imageBlocks.length > 0 && !this.awaitingToolResult) {
       // A pasted-image turn: skip the tool-call round trip and echo the
       // attachment metadata so PTY tests can assert images reached the model.
       const refs = imageBlocks.map((block) => block.attachment ?? {})
@@ -114,7 +118,8 @@ class MockAdapter {
       return
     }
 
-    if (wantsTools && asksQuestion && !hasToolResult) {
+    if (wantsTools && asksQuestion && !this.questionRequested && !this.awaitingToolResult) {
+      this.questionRequested = true
       const args = JSON.stringify({
         questions: [
           {
@@ -149,11 +154,12 @@ class MockAdapter {
         block: { type: 'tool-call', id: 'question-call-1', name: 'ask_user_question', arguments: args }
       }
       yield { type: 'usage', usage: { inputTokens: 180, outputTokens: 24, cacheReadTokens: 20, cacheWriteTokens: 4 } }
+      this.awaitingToolResult = true
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
       return
     }
 
-    if (wantsTools && !hasToolResult) {
+    if (wantsTools && !this.awaitingToolResult) {
       // First request: emit two parallel tool calls — one approval-gated
       // (mock_tool) and one direct (mock_read) — so the TUI renders the
       // collapsible parallel-tool group.
@@ -183,11 +189,13 @@ class MockAdapter {
         type: 'usage',
         usage: { inputTokens: 220, outputTokens: 12, cacheReadTokens: 40, cacheWriteTokens: 60 }
       }
+      this.awaitingToolResult = true
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
       return
     }
 
     // Second request: stream reasoning, then a text reply, usage and stop.
+    this.awaitingToolResult = false
     const reasoning = 'thinking about the mock answer carefully before replying'
     for (const piece of reasoning.match(/.{1,7}/g) ?? []) {
       await pause(8, signal)

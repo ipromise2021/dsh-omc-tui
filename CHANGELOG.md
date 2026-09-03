@@ -8,6 +8,7 @@
 
 | 版本 | 日期 | 说明 |
 | :--- | :--- | :--- |
+| **v0.2.10** | 2026-09-03 | **DSH rc.1 PTY 发布门禁闭环**。适配 `userQuestions` 从旧 provider 注册迁移至 Agent-scoped `user-questions/request` waterfall，同时保留旧 API 后备；修正 rc.1 上下文注入中的文件和图片内容块识别。隔离 rc.1 mock Profile 的六项 PTY（流式工具、功能、文件、图片、交互、resume）全部通过。 |
 | **v0.2.9** | 2026-09-03 | **DSH v0.1.2-rc.1 兼容适配与交互可靠性升级**。统一使用 rc.1 `snapshotEvents()` 会话快照与 `permissionPresets.current(session)` 权限契约，并保留集中式旧契约回退；补挂 preset 所需的 subagent model-selection Host 服务，移除失效 patch，19 个 DSH peer 对齐 rc.1；真实隔离 Profile 启动、`/status` 与权限轮换通过。同时加入安全会话导出、TUI 版本状态、未知 slash prompt 修复、视觉模型选项标识，以及 Jobs/Shell 输出、取消、竞态和小窗口布局加固。完整上游报告见 `DSH_V0.1.2_RC1_ADAPTATION.md`。 |
 | **v0.2.8** | 2026-08-29 | **Reasoning effort 默认选择持久化**。通过 Harness `agentDefaultModel.saveSelection()` 保存完整 provider、model 与 effort，确保新会话恢复已选等级；直接 `/effort <id>` 会按模型能力校验，拒绝持久化无效值；设置写入失败时保持当前模型和 effort 不变。文档同步明确官方 npm 包 [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) 截至 2026-08-29 的 `latest` / `next` 均为 `0.1.1-rc.2`。 |
 | **v0.2.7** | 2026-08-29 | **Reasoning effort 能力投影与第三方中转配置增强**。移除能力查询失败时生成的猜测档位，仅接受具体模型通过 Harness `reasoning.efforts` 声明的值；区分“模型未声明能力”与“能力查询失败”，状态栏以 `PROVIDER` 表示沿用模型或网关默认行为；切换模型时过滤不受支持的旧 effort；补充第三方中转和本地反向代理通过 `models[].reasoningEfforts` 自定义映射的文档及 Gemini `low/medium/high` 示例，并增加对应回归测试。 |

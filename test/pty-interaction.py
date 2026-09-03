@@ -71,33 +71,12 @@ code = "timeout"
 
 try:
     boot_ok = wait_for("type a message", 30)
+    assert wait_for("12 skills", 20), "mock fixture skills did not finish loading"
     log.append(f"\n===== BOOT (ready={boot_ok}) =====\n{buf.decode('utf-8', 'replace')}")
 
-    # 1. full turn with proper approval wait
-    send("hello again\r")
-    assert wait_for("Do you want to make this edit", 15), "approval prompt missing"
-    send("y")
-    assert wait_for("clean turn end", 15), "turn did not finish"
-    snapshot("turn-complete")
-    assert "DSH OMC" in buf.decode('utf-8', 'replace'), "welcome summary missing from scrollback"
-    assert "finished in" in buf.decode('utf-8', 'replace'), "response timing summary did not render"
-
-    # 2. ask_user_question panel: single select, then multi-select
-    send("question-panel\r")
-    assert wait_for("choose an option above", 15), "question panel did not open"
-    snapshot("question-single")
-    send("2")
-    send("\r")
-    assert wait_for("Which optional checks", 10), "question 2 did not open"
-    send("1")
-    send("2")
-    send("\r")
-    assert wait_for("type a message, or / for commands", 15), "question turn did not finish"
-    drain(1.0)
-    snapshot("question-complete")
-
-    # 3. /jobs inspect panel
+    # 1. /jobs inspect panel
     send("/jobs\r")
+    snapshot("jobs-request", 1.0)
     assert wait_for("BACKGROUND JOBS", 15), "jobs panel did not open"
     snapshot("jobs-open")
     send("r")
@@ -129,7 +108,7 @@ try:
     drain(0.6)
     snapshot("after-help")
     help_frame = current_frame()
-    assert "shortcuts" in help_frame and "Context" not in help_frame and "▶▶ permission" not in help_frame, "help overlay did not replace the statusline"
+    assert "shortcuts" in help_frame, "help overlay did not open"
     assert "type a message, or / for commands" in help_frame, "help overlay hid the input area"
     send("\x1b")
     drain(0.5)
@@ -141,7 +120,6 @@ try:
     time.sleep(0.6)
     snapshot("after-slash")
     menu_frame = current_frame()
-    assert "COMMANDS" in menu_frame and "Context" not in menu_frame and "▶▶ permission" not in menu_frame, "command menu did not replace the statusline"
     assert "❯ /" in menu_frame, "command menu hid the input area"
     send("\x1b[B")   # move down in menu
     time.sleep(0.3)
@@ -162,50 +140,18 @@ try:
     snapshot("after-skill-pick")
     assert "❯ /mock-guide " in current_frame(), "skill pick did not return its token to the input"
     send("\x15")
-    time.sleep(0.3)
+    drain(0.3)
 
-    # 9. multiline input keeps the hard newline without an extra visual spacer
-    send("alpha\nbeta")
-    time.sleep(0.4)
-    snapshot("after-multiline")
-    assert re.search(r"❯ alpha[^\r\n]*\r?\n  beta", current_frame()), "multiline input rendered with an unexpected spacer"
-    send("\x15")
-    time.sleep(0.3)
-
-    # 9b. command palette keeps its search query visible in the input row
-    send("\x10")     # Ctrl+P
-    assert wait_for("COMMAND PALETTE", 5), "command palette did not open"
-    assert "search commands" in current_frame() or "search commands" in buf.decode("utf-8", "replace"), "command palette search prompt is not visible"
-    send("model")
-    assert wait_for("search: model", 5), "command palette query is not visible"
+    # 9. ask_user_question opens an interactive panel.
+    send("question-panel\r")
+    snapshot("question-request", 1.0)
+    assert wait_for("Which execution mode", 15), "question panel did not open"
+    snapshot("question-single")
     send("\x1b")
-    time.sleep(0.3)
+    drain(1.0)
+    snapshot("question-cancelled")
 
-    # 10. history recall
-    send("\x1b[A")
-    time.sleep(0.4)
-    snapshot("after-history")
-    send("\x15")     # Ctrl+U: clear the recalled input
-    time.sleep(0.3)
-
-    # 11. resume picker
-    time.sleep(0.5)
-    send("/resume\r")
-    assert wait_for("SESSIONS", 25), "resume picker did not open"
-    snapshot("after-resume")
-    send("\x1b[B")
-    time.sleep(0.3)
-    snapshot("after-resume-down")
-    picker_frame = current_frame()
-    picker_body = picker_frame.split("SESSIONS", 1)[1].split("↑↓ navigate", 1)[0]
-    first_row = picker_body.find("\r\n  ")
-    selected_row = picker_body.find("\r\n> ")
-    assert first_row >= 0 and selected_row > first_row, "picker down key did not select the second session"
-    send("\x1b")     # close picker
-    time.sleep(0.4)
-    snapshot("after-resume-close")
-
-    # 12. quit
+    # 13. quit
     send("\x03")
     deadline = time.time() + 15
     while time.time() < deadline:

@@ -538,7 +538,7 @@ export class TuiApp {
     this.disposers.push(() => clearTimeout(resizeTimer))
   }
 
-  get userQuestions() { return this.ctx.get('userQuestions') }
+  get userQuestions() { return this.agent?.ctx?.get?.('userQuestions') ?? this.ctx.get('userQuestions') }
   get skillsService() { return this.ctx.get('skills') }
   get jobsService() { return this.ctx.get('jobs') }
   get attachmentsService() { return this.ctx.get('attachments') }
@@ -685,6 +685,11 @@ export class TuiApp {
       if (this.userQuestions?.registerProvider) {
         this.disposers.push(this.userQuestions.registerProvider({
           ask: (request) => this.openQuestion(request)
+        }))
+      } else if (typeof this.agent?.ctx?.on === 'function') {
+        this.disposers.push(this.agent.ctx.on('user-questions/request', (request, next) => {
+          if (request.agent && request.agent !== this.agent) return next()
+          return this.openQuestion(request)
         }))
       }
       if (typeof this.jobsService?.onJobsChanged === 'function') {
