@@ -1615,6 +1615,7 @@ const readJobApp = {
   },
   agent: {},
   localBackgroundJobs: [],
+  jobOutputCache: new Map(),
   jobsService: {
     read: async () => ({ text: 'worker output', snapshot: { id: 'subagent-1', kind: 'subagent', label: 'worker', status: 'completed', detail: 'done' } })
   },
@@ -1626,11 +1627,61 @@ const readJobApp = {
 await TuiApp.prototype.readSelectedJob.call(readJobApp)
 assert.equal(readJobApp.jobPanel.output, 'worker output')
 assert.equal(readJobApp.jobPanel.entries[0].status, 'completed')
+await TuiApp.prototype.readSelectedJob.call(readJobApp)
+assert.equal(readJobApp.jobPanel.output, 'worker output', 're-reading completed non-shell jobs must not duplicate final output')
 
-const killJobApp = {
+const failedReadJobApp = {
   jobPanel: {
-    entries: [{ id: 'subagent-2', kind: 'subagent', label: 'worker', status: 'completed' }],
+    entries: [{ id: 'shell-1', kind: 'bash', label: 'npm run dev', status: 'running' }],
     selected: 0,
+    outputJobId: 'shell-1',
+    output: 'previous log line',
+    outputBusy: false,
+    outputError: undefined
+  },
+  agent: {},
+  localBackgroundJobs: [],
+  jobOutputCache: new Map([['shell-1', 'previous log line']]),
+  jobsService: { read: async () => { throw new Error('connection lost') } },
+  selectedJob: TuiApp.prototype.selectedJob,
+  jobOutputText: TuiApp.prototype.jobOutputText,
+  normalizeJobSnapshot: TuiApp.prototype.normalizeJobSnapshot,
+  scheduleRender: noop
+}
+await TuiApp.prototype.readSelectedJob.call(failedReadJobApp)
+assert.equal(failedReadJobApp.jobPanel.output, 'previous log line', 'a read failure must preserve visible output')
+assert.equal(failedReadJobApp.jobPanel.outputError, 'connection lost')
+
+const pausedLocalReadApp = {
+  jobPanel: {
+    entries: [{ id: 'local-paused', kind: 'bash', status: 'running' }],
+    selected: 0,
+    outputJobId: 'local-paused',
+    output: 'old local output',
+    outputBusy: false,
+    outputFollow: false,
+    outputNewLines: 2,
+    outputScroll: 3
+  },
+  localBackgroundJobs: [{ id: 'local-paused', output: 'latest local output' }],
+  jobOutputCache: new Map([['local-paused', 'old local output']]),
+  selectedJob: TuiApp.prototype.selectedJob,
+  scheduleRender: noop
+}
+await TuiApp.prototype.readSelectedJob.call(pausedLocalReadApp)
+assert.equal(pausedLocalReadApp.jobPanel.outputFollow, false)
+assert.equal(pausedLocalReadApp.jobPanel.outputScroll, 3)
+assert.equal(pausedLocalReadApp.jobPanel.outputNewLines, 2)
+
+let resolveStaleJobRead
+const staleJobReadApp = {
+  jobPanel: {
+    entries: [
+      { id: 'subagent-old', kind: 'subagent', label: 'old worker', status: 'running' },
+      { id: 'subagent-new', kind: 'subagent', label: 'new worker', status: 'completed' }
+    ],
+    selected: 0,
+    selectedJobId: 'subagent-old',
     outputJobId: undefined,
     output: undefined,
     outputBusy: false,
@@ -1638,17 +1689,172 @@ const killJobApp = {
   },
   agent: {},
   localBackgroundJobs: [],
+  jobOutputCache: new Map([['subagent-new', 'new worker output']]),
+  jobsService: {
+    read: () => new Promise((resolve) => { resolveStaleJobRead = resolve })
+  },
+  selectedJob: TuiApp.prototype.selectedJob,
+  jobOutputText: TuiApp.prototype.jobOutputText,
+  normalizeJobSnapshot: TuiApp.prototype.normalizeJobSnapshot,
+  scheduleRender: noop
+}
+const staleReadPromise = TuiApp.prototype.readSelectedJob.call(staleJobReadApp)
+TuiApp.prototype.selectJob.call(staleJobReadApp, 1)
+resolveStaleJobRead({
+  text: 'old worker output',
+  snapshot: { id: 'subagent-old', kind: 'subagent', label: 'old worker', status: 'completed' }
+})
+await staleReadPromise
+assert.equal(staleJobReadApp.jobPanel.outputJobId, 'subagent-new')
+assert.equal(staleJobReadApp.jobPanel.output, 'new worker output', 'a stale read must not overwrite the newly selected job')
+assert.equal(staleJobReadApp.jobOutputCache.get('subagent-old'), 'old worker output', 'consumed stale output must remain cached for its owning job')
+
+const cappedOutput = `${'x'.repeat(65531)}old\n`
+const cappedPausedReadApp = {
+  jobPanel: {
+    entries: [{ id: 'shell-capped', kind: 'bash', label: 'tail build.log', status: 'running' }],
+    selected: 0,
+    outputJobId: 'shell-capped',
+    output: cappedOutput,
+    outputBusy: false,
+    outputError: undefined,
+    outputFollow: false,
+    outputNewLines: 0,
+    outputScroll: 0
+  },
+  agent: {},
+  localBackgroundJobs: [],
+  jobOutputCache: new Map([['shell-capped', cappedOutput]]),
+  jobsService: {
+    read: async () => ({ text: 'new\n', snapshot: { id: 'shell-capped', kind: 'bash', label: 'tail build.log', status: 'running' } })
+  },
+  selectedJob: TuiApp.prototype.selectedJob,
+  jobOutputText: TuiApp.prototype.jobOutputText,
+  normalizeJobSnapshot: TuiApp.prototype.normalizeJobSnapshot,
+  appendJobOutput: TuiApp.prototype.appendJobOutput,
+  scheduleRender: noop
+}
+await TuiApp.prototype.readSelectedJob.call(cappedPausedReadApp)
+assert.equal(cappedPausedReadApp.jobOutputCache.get('shell-capped').length, 65536)
+assert.equal(cappedPausedReadApp.jobPanel.outputNewLines, 1, 'paused output must report new lines after the cache reaches its cap')
+
+const killJobApp = {
+  jobPanel: {
+    entries: [{ id: 'subagent-2', kind: 'subagent', label: 'worker', status: 'completed' }],
+    selected: 0,
+    outputJobId: 'subagent-2',
+    output: 'worker output',
+    outputBusy: false,
+    outputError: undefined
+  },
+  agent: {},
+  localBackgroundJobs: [],
+  jobOutputCache: new Map([['subagent-2', 'worker output']]),
+  log(level, message) { this.logged = { level, message } },
   jobsService: {
     kill: async () => 'already-finished',
-    list: () => [{ id: 'subagent-2', kind: 'subagent', label: 'worker', status: 'completed' }]
+    list: () => [
+      { id: 'subagent-2', kind: 'subagent', label: 'worker', status: 'completed' },
+      { id: 'shell-running', kind: 'bash', label: 'server', status: 'running' }
+    ]
   },
   selectedJob: TuiApp.prototype.selectedJob,
   jobSnapshots: TuiApp.prototype.jobSnapshots,
+  orderJobEntries: TuiApp.prototype.orderJobEntries,
   normalizeJobSnapshot: TuiApp.prototype.normalizeJobSnapshot,
   scheduleRender: noop
 }
 await TuiApp.prototype.killSelectedJob.call(killJobApp)
-assert.equal(killJobApp.jobPanel.output, 'already finished · subagent-2')
+assert.equal(killJobApp.jobPanel.output, 'worker output', 'cancelling a job must preserve its output')
+assert.deepEqual(killJobApp.logged, { level: 'ok', message: 'already finished · subagent-2' })
+assert.equal(killJobApp.jobPanel.entries[0].id, 'shell-running', 'cancel refresh must preserve status ordering')
+assert.equal(killJobApp.jobPanel.entries[killJobApp.jobPanel.selected].id, 'subagent-2', 'cancel refresh must preserve selection by id')
+
+let localStopCalls = 0
+const stoppingLocalJob = { id: 'local-stopping', kind: 'bash', status: 'stopping', child: { killed: true } }
+const localKillApp = {
+  jobPanel: { entries: [stoppingLocalJob], selected: 0 },
+  localBackgroundJobs: [stoppingLocalJob],
+  selectedJob: TuiApp.prototype.selectedJob,
+  stopLocalJob: async () => { localStopCalls += 1 },
+  orderJobEntries: TuiApp.prototype.orderJobEntries,
+  jobSnapshots: () => [stoppingLocalJob],
+  refreshJobsPanel: async () => {},
+  log: noop,
+  scheduleRender: noop
+}
+await TuiApp.prototype.killSelectedJob.call(localKillApp)
+await Promise.resolve()
+assert.equal(localStopCalls, 1, 'stopping local jobs must remain cancellable even when child.killed is true')
+
+let resolveStaleKill
+const staleKillApp = {
+  jobPanel: {
+    entries: [
+      { id: 'shell-old', kind: 'bash', status: 'running' },
+      { id: 'shell-new', kind: 'bash', status: 'running' }
+    ],
+    selected: 0,
+    selectedJobId: 'shell-old',
+    outputJobId: 'shell-old',
+    output: 'old output',
+    outputBusy: false
+  },
+  agent: {},
+  localBackgroundJobs: [],
+  jobOutputCache: new Map([['shell-old', 'old output'], ['shell-new', 'new output']]),
+  jobsService: { kill: () => new Promise((resolve) => { resolveStaleKill = resolve }) },
+  selectedJob: TuiApp.prototype.selectedJob,
+  normalizeJobSnapshot: TuiApp.prototype.normalizeJobSnapshot,
+  jobSnapshots: () => [],
+  log() { this.logged = true },
+  scheduleRender: noop
+}
+const staleKillPromise = TuiApp.prototype.killSelectedJob.call(staleKillApp)
+TuiApp.prototype.selectJob.call(staleKillApp, 1)
+resolveStaleKill('requested')
+await staleKillPromise
+assert.equal(staleKillApp.jobPanel.outputJobId, 'shell-new')
+assert.equal(staleKillApp.jobPanel.output, 'new output')
+assert.equal(staleKillApp.logged, undefined, 'a stale cancellation result must not attach to the new selection')
+
+const failedKillApp = {
+  jobPanel: {
+    entries: [{ id: 'shell-failed-kill', kind: 'bash', status: 'running' }],
+    selected: 0,
+    outputJobId: 'shell-failed-kill',
+    output: 'shell output before cancel',
+    outputBusy: false
+  },
+  agent: {},
+  localBackgroundJobs: [],
+  jobOutputCache: new Map([['shell-failed-kill', 'shell output before cancel']]),
+  jobsService: { kill: async () => { throw new Error('cancel failed') } },
+  selectedJob: TuiApp.prototype.selectedJob,
+  scheduleRender: noop
+}
+await TuiApp.prototype.killSelectedJob.call(failedKillApp)
+assert.equal(failedKillApp.jobPanel.output, 'shell output before cancel')
+assert.equal(failedKillApp.jobPanel.outputError, 'cancel failed')
+
+const bashBufferApp = {
+  appendLocalBashOutput: TuiApp.prototype.appendLocalBashOutput,
+  updateLocalJobOutput: TuiApp.prototype.updateLocalJobOutput,
+  jobPanel: { outputJobId: 'bash-buffer', outputFollow: false, outputNewLines: 0 },
+  jobOutputCache: new Map(),
+  scheduleRender: noop
+}
+const bashBufferJob = { id: 'bash-buffer', output: '', outputBaseOffset: 0, readOffset: 0, jobsManaged: true }
+TuiApp.prototype.captureLocalBashOutput.call(bashBufferApp, bashBufferJob, 'x'.repeat(32000))
+assert.equal(TuiApp.prototype.readLocalBashOutput.call({}, bashBufferJob), 'x'.repeat(32000))
+TuiApp.prototype.captureLocalBashOutput.call(bashBufferApp, bashBufferJob, 'tail\n')
+assert.equal(TuiApp.prototype.readLocalBashOutput.call({}, bashBufferJob), 'tail\n', 'sliding the shell buffer must not invalidate its absolute read cursor')
+assert.equal(bashBufferApp.jobOutputCache.has('bash-buffer'), false, 'DSH-managed shell output must only reach the panel through Jobs reads')
+
+const fallbackBufferJob = { id: 'bash-buffer', output: '', outputBaseOffset: 0, readOffset: 0, jobsManaged: false }
+TuiApp.prototype.captureLocalBashOutput.call(bashBufferApp, fallbackBufferJob, 'fallback\n')
+assert.equal(bashBufferApp.jobOutputCache.get('bash-buffer'), 'fallback\n')
+assert.equal(bashBufferApp.jobPanel.outputNewLines, 1)
 
 const turnLifecycleApp = {
   active: false,
@@ -2058,6 +2264,7 @@ const jobDurationStatus = renderStatusRows({
   recent: { toolDetails: [], jobs: [{ id: 'job-1', status: 'running', startedAt: Date.now() - 2200 }] }
 })
 assert.match(visibleOf(jobDurationStatus.rows.join('\n')), /jobs 1 active · 2\.[0-9]s/)
+assert.match(visibleOf(jobDurationStatus.rows.join('\n')), /jobs 1 active.*↓/)
 
 const duplicateJob = { id: 'job-1', status: 'running', startedAt: Date.now() - 2200 }
 const dedupedJobStatus = renderStatusRows({
@@ -2077,6 +2284,68 @@ const jobPanelRows = renderJobPanel(
   ANSI
 )
 assert.match(visibleOf(jobPanelRows.join('\n')), /npm test.*2\.0s/)
+assert.match(visibleOf(jobPanelRows.join('\n')), /BACKGROUND JOBS/)
+
+const listTrailingNewlineRows = renderJobPanel(
+  {
+    entries: [{ id: 'shell-list', status: 'running', kind: 'bash', detail: 'npm run dev' }],
+    selected: 0,
+    outputJobId: 'shell-list',
+    output: `${Array.from({ length: 8 }, (_, index) => `log ${index}`).join('\n')}\n`,
+    outputFollow: true
+  },
+  { id: 'shell-list', status: 'running', kind: 'bash', detail: 'npm run dev' },
+  16,
+  100,
+  ANSI
+)
+const listTrailingNewlineText = visibleOf(listTrailingNewlineRows.join('\n'))
+assert.match(listTrailingNewlineText, /log 3/, 'a terminal newline must not consume a list preview row')
+assert.match(listTrailingNewlineText, /log 7/)
+
+const listReadErrorText = visibleOf(renderJobPanel(
+  {
+    entries: [{ id: 'job-error', status: 'completed', kind: 'subagent', detail: 'worker' }],
+    selected: 0,
+    outputJobId: 'job-error',
+    output: 'last successful output',
+    outputError: 'connection lost',
+    outputFollow: true
+  },
+  undefined,
+  12,
+  100,
+  ANSI
+).join('\n'))
+assert.match(listReadErrorText, /connection lost/)
+assert.match(listReadErrorText, /last successful output/, 'list read errors must not hide existing output')
+
+for (let capacity = 6; capacity <= 16; capacity += 1) {
+  for (const outputState of ['none', 'output', 'busy', 'error']) {
+    const panel = {
+      entries: Array.from({ length: 8 }, (_, index) => ({
+        id: `capacity-${index}`,
+        status: index % 3 === 0 ? 'running' : index % 3 === 1 ? 'failed' : 'completed',
+        kind: index % 2 === 0 ? 'bash' : 'subagent',
+        detail: `capacity task ${index}`
+      })),
+      activities: Array.from({ length: 4 }, (_, index) => ({ id: `activity-${index}`, status: 'completed', detail: `activity ${index}` })),
+      selected: 4,
+      outputFollow: true
+    }
+    if (outputState !== 'none') {
+      panel.outputJobId = 'capacity-4'
+      panel.output = Array.from({ length: 12 }, (_, index) => `output ${index}`).join('\n')
+    }
+    if (outputState === 'busy') panel.outputBusy = true
+    if (outputState === 'error') panel.outputError = 'read failed'
+    const rows = renderJobPanel(panel, panel.entries[4], capacity, 80, ANSI)
+    const text = visibleOf(rows.join('\n'))
+    assert.ok(rows.length <= capacity, `Jobs panel must fit capacity ${capacity} in ${outputState} state`)
+    assert.match(text, /capacity task 4/, 'the selected job must remain visible')
+    assert.match(text, /Enter inspect\/read/, 'the action footer must remain visible')
+  }
+}
 
 const groupedJobPanelRows = renderJobPanel(
   {
@@ -2102,6 +2371,177 @@ assert.match(groupedJobPanelText, /NEEDS ATTENTION/)
 assert.match(groupedJobPanelText, /line-0/)
 assert.equal(groupedJobPanelText.includes('line-9'), false)
 assert.ok(groupedJobPanelRows.length <= 16)
+
+const taskActivityRows = renderJobPanel(
+  {
+    activities: [{ id: 'activity-1', status: 'completed', detail: 'Read 3 files', durationMs: 1300 }],
+    activitiesTruncated: true,
+    entries: [{ id: 'job-1', status: 'running', detail: 'npm run dev' }],
+    selected: 0
+  },
+  undefined,
+  10,
+  100,
+  ANSI
+)
+const taskActivityText = visibleOf(taskActivityRows.join('\n'))
+assert.match(taskActivityText, /TASK ACTIVITY/)
+assert.match(taskActivityText, /Read 3 files/)
+assert.match(taskActivityText, /BACKGROUND JOBS/)
+assert.match(taskActivityText, /earlier activity omitted/)
+
+const taskActivityApp = {
+  agent: {
+    session: {
+      events: [
+        { seq: 1, time: 1000, type: 'tool/call', data: { callId: 'call-1', name: 'bash', arguments: JSON.stringify({ command: 'npm test' }) } },
+        { seq: 2, time: 2500, type: 'tool/result', data: { callId: 'call-1' } },
+        { seq: 3, time: 2600, type: 'assistant/message', data: {} }
+      ]
+    }
+  }
+}
+const projectedActivities = TuiApp.prototype.taskActivitySnapshots.call(taskActivityApp)
+assert.equal(projectedActivities.activities.length, 1)
+assert.equal(projectedActivities.activities[0].status, 'completed')
+assert.match(projectedActivities.activities[0].detail, /Bash\(npm test\)/)
+assert.equal(projectedActivities.truncated, false)
+
+const boundedActivityApp = {
+  agent: {
+    session: {
+      events: [
+        ...Array.from({ length: 241 }, (_, index) => ({ seq: index + 1, time: index + 1, type: 'assistant/message', data: {} })),
+        { seq: 242, time: 242, type: 'tool/call', data: { callId: 'call-tail', name: 'bash', arguments: JSON.stringify({ command: 'npm test' }) } },
+        { seq: 243, time: 243, type: 'tool/result', data: { callId: 'call-tail' } },
+        { seq: 244, time: 244, type: 'assistant/message', data: {} }
+      ]
+    }
+  }
+}
+const boundedActivities = TuiApp.prototype.taskActivitySnapshots.call(boundedActivityApp)
+assert.equal(boundedActivities.truncated, true)
+assert.equal(boundedActivities.activities.length, 1)
+
+const shellDetailRows = renderJobPanel(
+  {
+    view: 'shell',
+    entries: [{ id: 'shell-1', status: 'running', kind: 'bash', detail: 'npm run start:prod', startedAt: Date.now() - 196000 }],
+    outputJobId: 'shell-1',
+    output: Array.from({ length: 12 }, (_, index) => `webpack output ${index}`).join('\n'),
+    outputFollow: true,
+    outputScroll: 0
+  },
+  { id: 'shell-1', status: 'running', kind: 'bash', detail: 'npm run start:prod', startedAt: Date.now() - 196000 },
+  16,
+  100,
+  ANSI
+)
+const shellDetailText = visibleOf(shellDetailRows.join('\n'))
+assert.match(shellDetailText, /SHELL DETAILS/)
+assert.match(shellDetailText, /Status:.*running/)
+assert.match(shellDetailText, /Runtime:.*196\.0s/)
+assert.match(shellDetailText, /Command:.*npm run start:prod/)
+assert.match(shellDetailText, /live · showing 6 of 12 lines/)
+assert.match(shellDetailText, /Showing 6 lines of/)
+assert.equal(shellDetailText.includes('webpack output 0'), false)
+assert.match(shellDetailText, /webpack output 11/)
+assert.ok(shellDetailRows.every((row) => widthOf(visibleOf(row)) <= 98))
+
+const shellTrailingNewlineRows = renderJobPanel(
+  {
+    view: 'shell',
+    entries: [{ id: 'shell-tail', status: 'running', detail: 'tail -f build.log' }],
+    outputJobId: 'shell-tail',
+    output: `${Array.from({ length: 7 }, (_, index) => `line-${index}`).join('\n')}\n`,
+    outputFollow: true
+  },
+  undefined,
+  16,
+  100,
+  ANSI
+)
+const shellTrailingNewlineText = visibleOf(shellTrailingNewlineRows.join('\n'))
+assert.equal(shellTrailingNewlineText.includes('line-0'), false)
+assert.match(shellTrailingNewlineText, /line-1/)
+assert.match(shellTrailingNewlineText, /line-6/)
+
+const shellCrlfRows = renderJobPanel(
+  {
+    view: 'shell',
+    entries: [{ id: 'shell-crlf', status: 'running', kind: 'bash', detail: 'pwsh build.ps1' }],
+    outputJobId: 'shell-crlf',
+    output: 'first\r\nsecond\r\n',
+    outputFollow: true
+  },
+  undefined,
+  16,
+  100,
+  ANSI
+)
+assert.equal(shellCrlfRows.join('\n').includes('\r'), false, 'CRLF output must not leak carriage returns into terminal rows')
+assert.match(visibleOf(shellCrlfRows.join('\n')), /first/)
+assert.match(visibleOf(shellCrlfRows.join('\n')), /second/)
+
+const shellTabRows = renderJobPanel(
+  {
+    view: 'shell',
+    entries: [{ id: 'shell-tab', status: 'running', kind: 'bash', detail: 'printf tabs' }],
+    outputJobId: 'shell-tab',
+    output: 'name\tvalue',
+    outputFollow: true
+  },
+  undefined,
+  16,
+  100,
+  ANSI
+)
+assert.equal(shellTabRows.join('\n').includes('\t'), false, 'tabs must be expanded before terminal layout')
+assert.match(visibleOf(shellTabRows.join('\n')), /name    value/)
+
+const shellRefreshingRows = renderJobPanel(
+  {
+    view: 'shell',
+    entries: [{ id: 'shell-refresh', status: 'running', detail: 'npm run dev' }],
+    outputJobId: 'shell-refresh',
+    output: 'last known line',
+    outputBusy: true,
+    outputFollow: true
+  },
+  undefined,
+  16,
+  100,
+  ANSI
+)
+const shellRefreshingText = visibleOf(shellRefreshingRows.join('\n'))
+assert.match(shellRefreshingText, /reading latest output/)
+assert.match(shellRefreshingText, /last known line/)
+
+const shellEmptyText = visibleOf(renderJobPanel(
+  { view: 'shell', entries: [{ id: 'shell-empty', status: 'running', detail: 'npm run dev' }], outputJobId: 'shell-empty', outputFollow: true },
+  undefined,
+  16,
+  100,
+  ANSI
+).join('\n'))
+assert.match(shellEmptyText, /Press r to read available output/)
+
+const shellWhitespaceRows = renderJobPanel(
+  {
+    view: 'shell',
+    entries: [{ id: 'shell-space', status: 'running', detail: 'printf table' }],
+    outputJobId: 'shell-space',
+    output: 'col1    col2\n    indented',
+    outputFollow: true
+  },
+  undefined,
+  16,
+  100,
+  ANSI
+)
+const shellWhitespaceText = visibleOf(shellWhitespaceRows.join('\n'))
+assert.match(shellWhitespaceText, /col1    col2/)
+assert.match(shellWhitespaceText, /    indented/)
 
 const exitConfirmRows = renderExitConfirm(
   { selected: 1, runningJobs: [{ id: 'job-dev', detail: 'npm run dev' }] },
@@ -2263,14 +2703,174 @@ const jobOutputPagingApp = {
     outputScroll: 0,
     outputNewLines: 2
   },
+  jobOutputLines: TuiApp.prototype.jobOutputLines,
+  jobOutputPageSize: () => 6,
+  scrollJobOutput: TuiApp.prototype.scrollJobOutput,
   scheduleRender() {}
 }
+const crlfOutputLines = TuiApp.prototype.jobOutputLines.call({
+  jobPanel: { view: 'shell', outputJobId: 'shell-crlf', output: 'first\r\nsecond\r\n' }
+})
+assert.deepEqual(crlfOutputLines, ['first', 'second'])
+const tabOutputLines = TuiApp.prototype.jobOutputLines.call({
+  jobPanel: { view: 'shell', outputJobId: 'shell-tab', output: 'name\tvalue' }
+})
+assert.deepEqual(tabOutputLines, ['name    value'])
 TuiApp.prototype.onEscapeSequence.call(jobOutputPagingApp, '\x1b[5~')
 assert.equal(jobOutputPagingApp.jobPanel.outputFollow, false)
 assert.equal(jobOutputPagingApp.jobPanel.outputScroll, 0)
 TuiApp.prototype.onEscapeSequence.call(jobOutputPagingApp, '\x1b[6~')
 assert.equal(jobOutputPagingApp.jobPanel.outputFollow, true)
-assert.equal(jobOutputPagingApp.jobPanel.outputScroll, 5)
+assert.equal(jobOutputPagingApp.jobPanel.outputScroll, 4)
+
+const shellArrowScrollApp = {
+  providerPanel: undefined,
+  questionPanel: undefined,
+  jobPanel: {
+    view: 'shell',
+    outputJobId: 'job-running',
+    output: Array.from({ length: 12 }, (_, index) => `line-${index}`).join('\n'),
+    outputFollow: true,
+    outputScroll: 0,
+    outputNewLines: 2
+  },
+  jobOutputLines: TuiApp.prototype.jobOutputLines,
+  jobOutputPageSize: () => 6,
+  scrollJobOutput: TuiApp.prototype.scrollJobOutput,
+  scheduleRender() {}
+}
+TuiApp.prototype.onEscapeSequence.call(shellArrowScrollApp, '\x1b[A')
+assert.equal(shellArrowScrollApp.jobPanel.outputFollow, false)
+assert.equal(shellArrowScrollApp.jobPanel.outputScroll, 1)
+TuiApp.prototype.onEscapeSequence.call(shellArrowScrollApp, '\x1b[B')
+assert.equal(shellArrowScrollApp.jobPanel.outputFollow, true)
+assert.equal(shellArrowScrollApp.jobPanel.outputScroll, 6)
+
+const pageKeyShellApp = {
+  terminalOpen: true,
+  jobPanel: {
+    outputJobId: 'job-running',
+    output: Array.from({ length: 12 }, (_, index) => `line-${index}`).join('\n'),
+    outputFollow: true,
+    outputScroll: 0
+  },
+  jobOutputLines: TuiApp.prototype.jobOutputLines,
+  jobOutputPageSize: () => 6,
+  scrollJobOutput: TuiApp.prototype.scrollJobOutput,
+  viewport: { pageUp() { throw new Error('shell details should consume page-up') }, pageDown() { throw new Error('shell details should consume page-down') } },
+  scheduleRender() {}
+}
+TuiApp.prototype.onPageUp.call(pageKeyShellApp)
+assert.equal(pageKeyShellApp.jobPanel.outputScroll, 1)
+TuiApp.prototype.onPageDown.call(pageKeyShellApp)
+assert.equal(pageKeyShellApp.jobPanel.outputFollow, true)
+assert.equal(pageKeyShellApp.jobPanel.outputScroll, 6)
+
+const shellPollApp = {
+  jobPanel: { view: 'shell', outputFollow: true, outputBusy: false },
+  selectedJob() { return { id: 'shell-1', kind: 'bash', status: 'running' } },
+  isTuiShellJob() { return true },
+  readSelectedJob() { this.reads = (this.reads ?? 0) + 1 }
+}
+TuiApp.prototype.pollOpenShellOutput.call(shellPollApp)
+assert.equal(shellPollApp.reads, 1)
+
+const remoteShellPollApp = {
+  jobPanel: { view: 'shell', outputFollow: true, outputBusy: false },
+  selectedJob() { return { id: 'shell-remote', kind: 'bash', status: 'running' } },
+  isTuiShellJob() { return false },
+  readSelectedJob() { this.reads = (this.reads ?? 0) + 1 }
+}
+TuiApp.prototype.pollOpenShellOutput.call(remoteShellPollApp)
+assert.equal(remoteShellPollApp.reads, undefined)
+
+const fallbackShellPollApp = {
+  jobPanel: { view: 'shell', outputFollow: true, outputBusy: false },
+  localBackgroundJobs: [{ id: 'shell-local' }],
+  selectedJob() { return { id: 'shell-local', kind: 'bash', status: 'running' } },
+  isTuiShellJob() { return true },
+  readSelectedJob() { this.reads = (this.reads ?? 0) + 1 }
+}
+TuiApp.prototype.pollOpenShellOutput.call(fallbackShellPollApp)
+assert.equal(fallbackShellPollApp.reads, undefined, 'push-driven fallback shells must not be polled')
+
+const settledShellPollApp = {
+  jobPanel: { view: 'shell', outputFollow: true, outputBusy: false },
+  selectedJob() { return { id: 'shell-1', kind: 'bash', status: 'completed' } },
+  isTuiShellJob() { return true },
+  readSelectedJob() { this.reads = (this.reads ?? 0) + 1 }
+}
+TuiApp.prototype.pollOpenShellOutput.call(settledShellPollApp)
+assert.equal(settledShellPollApp.reads, undefined)
+TuiApp.prototype.pollOpenShellOutput.call(settledShellPollApp, true)
+assert.equal(settledShellPollApp.reads, 1)
+
+const inspectShellApp = {
+  jobPanel: { view: 'list', entries: [{ id: 'shell-1', kind: 'bash', status: 'running' }], selected: 0, outputFollow: false, outputNewLines: 3, outputScroll: 4 },
+  selectedJob: TuiApp.prototype.selectedJob,
+  isTuiShellJob() { return true },
+  readSelectedJob() { this.readCalled = true },
+  scheduleRender() { this.rendered = true }
+}
+TuiApp.prototype.inspectSelectedJob.call(inspectShellApp)
+assert.equal(inspectShellApp.jobPanel.view, 'shell')
+assert.equal(inspectShellApp.jobPanel.outputFollow, true)
+assert.equal(inspectShellApp.jobPanel.outputNewLines, 0)
+assert.equal(inspectShellApp.jobPanel.outputScroll, 0)
+assert.equal(inspectShellApp.readCalled, true)
+
+const inspectRemoteShellApp = {
+  jobPanel: { view: 'list', entries: [{ id: 'shell-remote', kind: 'bash', status: 'running' }], selected: 0 },
+  selectedJob: TuiApp.prototype.selectedJob,
+  isTuiShellJob() { return false },
+  readSelectedJob() { this.readCalled = true },
+  scheduleRender() {}
+}
+TuiApp.prototype.inspectSelectedJob.call(inspectRemoteShellApp)
+assert.equal(inspectRemoteShellApp.jobPanel.view, 'shell')
+assert.equal(inspectRemoteShellApp.readCalled, undefined)
+
+const inspectRemoteJobApp = {
+  jobPanel: { view: 'list', entries: [{ id: 'subagent-remote', kind: 'subagent', status: 'running' }], selected: 0 },
+  selectedJob: TuiApp.prototype.selectedJob,
+  isTuiShellJob() { return false },
+  readSelectedJob() { this.readCalled = true },
+  scheduleRender() {}
+}
+TuiApp.prototype.inspectSelectedJob.call(inspectRemoteJobApp)
+assert.equal(inspectRemoteJobApp.readCalled, true)
+
+const shellBackApp = {
+  providerPanel: undefined,
+  jobPanel: { view: 'shell' },
+  scheduleRender() { this.rendered = true }
+}
+TuiApp.prototype.onEscapeSequence.call(shellBackApp, '\x1b[D')
+assert.equal(shellBackApp.jobPanel.view, 'list')
+assert.equal(shellBackApp.rendered, true)
+
+const statusJobShortcutApp = {
+  providerPanel: undefined,
+  jobPanel: undefined,
+  questionPanel: undefined,
+  effortPicker: undefined,
+  picker: undefined,
+  filePicker: undefined,
+  historySearch: undefined,
+  commandPalette: undefined,
+  modelPicker: undefined,
+  variantPicker: undefined,
+  presetPicker: undefined,
+  mcpPanel: undefined,
+  skillsPanel: undefined,
+  settingsPicker: undefined,
+  menu: undefined,
+  input: '',
+  jobSnapshots: () => [{ id: 'shell-1', status: 'running' }],
+  openJobsPanel() { this.opened = true }
+}
+TuiApp.prototype.onEscapeSequence.call(statusJobShortcutApp, '\x1b[B')
+assert.equal(statusJobShortcutApp.opened, true)
 
 for (const columns of [40, 60, 80, 100, 120]) {
   const longJobPanelRows = renderJobPanel(
@@ -2640,6 +3240,9 @@ sessionIsolationApp.pendingImages = [{ name: 'stale.png' }]
 sessionIsolationApp.focusedBlockKey = 'reason-1'
 sessionIsolationApp.active = true
 sessionIsolationApp.activeModel = { provider: 'test', model: 'test' }
+sessionIsolationApp.tuiShellJobIds.add('bash-old')
+sessionIsolationApp.jobOutputCache.set('bash-old', 'stale shell output')
+sessionIsolationApp.jobPanel = { entries: [{ id: 'bash-old' }], selected: 0 }
 
 const candidateSessionEvents = [
   { seq: 1, type: 'user/message', time: 2000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Resumed user message' }] } },
@@ -2675,6 +3278,9 @@ assert.equal(sessionIsolationApp.pendingImages.length, 0, 'pendingImages must be
 assert.equal(sessionIsolationApp.focusedBlockKey, null, 'focusedBlockKey must be reset')
 assert.equal(sessionIsolationApp.active, false, 'active must be false')
 assert.equal(sessionIsolationApp.activeModel, undefined, 'activeModel must be reset')
+assert.equal(sessionIsolationApp.tuiShellJobIds.size, 0, 'TUI shell ids must not cross session boundaries')
+assert.equal(sessionIsolationApp.jobOutputCache.size, 0, 'Job output must not cross session boundaries')
+assert.equal(sessionIsolationApp.jobPanel, undefined, 'Jobs panel must close when switching sessions')
 assert.equal(sessionIsolationApp.reasoningBlocks.length, 1, 'Reasoning block extracted for resumed session')
 assert.equal(sessionIsolationApp.reasoningBlocks[0].text, 'Resumed thinking')
 

@@ -78,6 +78,10 @@ function isRunningJob(job) {
   return job?.status === 'running' || job?.status === 'stopping'
 }
 
+function isShellJob(job) {
+  return /^(?:bash|shell|sh|zsh|fish|pwsh|powershell)$/i.test(String(job?.kind ?? ''))
+}
+
 export async function withTimeout(promise, ms, { fallback, rejectOnTimeout = false, errorMessage } = {}) {
   let timer
   try {
@@ -374,6 +378,7 @@ export class TuiApp {
     this.exportConfirm = undefined // { directoryInput, directoryCursor, directorySelected, isDefaultDirectory, filename, relativeFile, focus, error, eventCount }
     this.localBackgroundJobs = []
     this.localJobsCount = 0
+    this.tuiShellJobIds = new Set()
     this.jobOutputCache = new Map()
     this.statuslineJobTimer = undefined
     this.jobPanel = undefined // { entries, selected, selectedJobId, outputJobId, output, outputBusy, outputError, outputFollow, outputNewLines, outputScroll }
@@ -682,7 +687,9 @@ export class TuiApp {
       }
       if (typeof this.jobsService?.onJobsChanged === 'function') {
         this.disposers.push(this.jobsService.onJobsChanged(() => {
-          if (this.jobPanel) void this.refreshJobsPanel()
+          if (this.jobPanel) {
+            void this.refreshJobsPanel().then(() => this.pollOpenShellOutput(true))
+          }
           else this.scheduleRender()
           this.ensureJobStatusTimer()
         }))
@@ -1588,6 +1595,7 @@ export class TuiApp {
     if (['user/message', 'assistant/message', 'tool/call', 'tool/result', 'approval/asked', 'approval/decided', 'hook/invoked', 'hook/result', 'turn/end', 'compaction/summary', 'compaction/prune'].includes(event.type)) {
       this.commitUnprintedEvents?.()
       this.refreshContextTokens?.()
+      if (this.jobPanel) void this.refreshJobsPanel()
     }
     this.scheduleRender()
   }
@@ -4632,6 +4640,9 @@ export class TuiApp {
     this.statusRowsCache = undefined
     this.pastedTexts?.clear?.()
     this.pastedTextCounter = 0
+    this.tuiShellJobIds?.clear?.()
+    this.jobOutputCache?.clear?.()
+    this.jobPanel = undefined
 
     if (isResumed && sessionEvents) {
       this.restoreImageAttachments?.(sessionEvents)
@@ -4764,18 +4775,26 @@ export class TuiApp {
   async refreshJobsPanel() {
     if (!this.jobPanel) return
     try {
-      const selectedId = this.jobPanel.selectedJobId ?? this.jobPanel.entries[this.jobPanel.selected]?.id
+      const selectedId = this.jobPanel.view === 'shell'
+        ? this.jobPanel.outputJobId
+        : this.jobPanel.selectedJobId ?? this.jobPanel.entries[this.jobPanel.selected]?.id
       const entries = this.orderJobEntries(this.jobSnapshots())
       this.jobPanel.entries = entries
+      const activity = this.taskActivitySnapshots()
+      this.jobPanel.activities = activity.activities
+      this.jobPanel.activitiesTruncated = activity.truncated
       const selectedIndex = selectedId ? entries.findIndex((entry) => entry.id === selectedId) : -1
       this.jobPanel.selected = selectedIndex >= 0
         ? selectedIndex
         : Math.min(this.jobPanel.selected, Math.max(0, entries.length - 1))
       this.jobPanel.selectedJobId = entries[this.jobPanel.selected]?.id
       if (this.jobPanel.outputJobId && !entries.some((entry) => entry.id === this.jobPanel.outputJobId)) {
+        this.jobPanel.readRequestId = (this.jobPanel.readRequestId ?? 0) + 1
+        this.jobPanel.outputBusy = false
         this.jobPanel.outputJobId = undefined
         this.jobPanel.output = undefined
         this.jobPanel.outputError = undefined
+        this.jobPanel.view = 'list'
       }
       if (this.jobPanel.outputJobId) {
         this.jobPanel.output = this.jobOutputCache.get(this.jobPanel.outputJobId) ?? this.jobPanel.output
@@ -4789,8 +4808,12 @@ export class TuiApp {
 
   openJobsPanel() {
     const snapshots = this.orderJobEntries(this.jobSnapshots())
+    const activity = this.taskActivitySnapshots()
     this.jobPanel = {
+      view: 'list',
       entries: snapshots,
+      activities: activity.activities,
+      activitiesTruncated: activity.truncated,
       selected: 0,
       selectedJobId: snapshots[0]?.id,
       outputJobId: undefined,
@@ -4846,6 +4869,24 @@ export class TuiApp {
       local: true
     }))
     return [...normalizedRemote, ...local]
+  }
+
+  taskActivitySnapshots() {
+    const events = this.agent?.session?.events ?? []
+    const start = Math.max(0, events.length - 240)
+    const activities = groupActivitySpans(events.slice(start))
+      .filter((item) => item.kind === 'activity' && item.span?.calls?.length > 0)
+      .slice(-12)
+      .map(({ span }) => ({
+        id: span.key,
+        kind: 'activity',
+        status: span.state === 'live' ? 'running' : span.summary?.errorCount > 0 ? 'failed' : 'completed',
+        detail: span.summary?.summaryText ?? 'tool activity',
+        startedAt: span.startTime,
+        finishedAt: span.state === 'live' ? undefined : span.endTime,
+        durationMs: span.summary?.durationMs
+      }))
+    return { activities, truncated: start > 0 }
   }
 
   runningExitJobs() {
@@ -4913,6 +4954,7 @@ export class TuiApp {
         this.statuslineJobTimer = undefined
         return
       }
+      this.pollOpenShellOutput()
       this.scheduleRender()
     }, 1000)
   }
@@ -4993,8 +5035,11 @@ export class TuiApp {
 
   selectJob(index) {
     if (!this.jobPanel) return
+    if (this.jobPanel.view === 'shell') return
     const next = Math.max(0, Math.min(index, Math.max(0, this.jobPanel.entries.length - 1)))
     if (next !== this.jobPanel.selected) {
+      this.jobPanel.readRequestId = (this.jobPanel.readRequestId ?? 0) + 1
+      this.jobPanel.outputBusy = false
       this.jobPanel.selected = next
       this.jobPanel.selectedJobId = this.jobPanel.entries[next]?.id
       const outputJobId = this.jobPanel.selectedJobId
@@ -5010,6 +5055,77 @@ export class TuiApp {
   selectedJob() {
     if (!this.jobPanel) return undefined
     return this.jobPanel.entries[this.jobPanel.selected]
+  }
+
+  inspectSelectedJob() {
+    const panel = this.jobPanel
+    const entry = this.selectedJob()
+    if (!panel || !entry) return
+    if (isShellJob(entry)) {
+      panel.view = 'shell'
+      panel.outputJobId = entry.id
+      panel.outputFollow = true
+      panel.outputNewLines = 0
+      panel.outputScroll = 0
+      this.scheduleRender()
+      return this.isTuiShellJob(entry) ? this.readSelectedJob() : undefined
+    }
+    return this.readSelectedJob()
+  }
+
+  isTuiShellJob(entry) {
+    if (!entry) return false
+    return this.tuiShellJobIds?.has(String(entry.id)) || (this.localBackgroundJobs ?? []).some((job) => job.id === entry.id)
+  }
+
+  pollOpenShellOutput(includeTerminal = false) {
+    const panel = this.jobPanel
+    const entry = this.selectedJob()
+    if (!panel || panel.view !== 'shell' || !panel.outputFollow || panel.outputBusy || !isShellJob(entry) || !this.isTuiShellJob(entry)) return
+    if ((this.localBackgroundJobs ?? []).some((job) => job.id === entry.id)) return
+    if (!includeTerminal && !isRunningJob(entry)) return
+    void this.readSelectedJob()
+  }
+
+  jobOutputLines() {
+    const panel = this.jobPanel
+    if (!panel?.outputJobId) return []
+    const columns = Math.max(24, process.stdout.columns || 80)
+    const width = panel.view === 'shell'
+      ? Math.max(12, columns - 6)
+      : Math.max(24, columns - 4)
+    const output = safe(panel.output ?? '').replace(/\t/g, '    ')
+    if (!output) return []
+    const lines = output.split(/\r?\n/)
+    if (output.endsWith('\n')) lines.pop()
+    return lines.flatMap((line) => wrap(line, width))
+  }
+
+  jobOutputPageSize() {
+    const rows = process.stdout.rows || 24
+    const capacity = Math.max(6, Math.min(16, rows - 7))
+    return capacity < 10
+      ? Math.max(1, capacity - 5)
+      : Math.min(6, Math.max(1, capacity - 9))
+  }
+
+  scrollJobOutput(direction) {
+    const panel = this.jobPanel
+    if (!panel?.outputJobId) return false
+    const lineCount = this.jobOutputLines().length
+    const pageSize = this.jobOutputPageSize()
+    const page = Math.max(1, pageSize - 1)
+    const maxStart = Math.max(0, lineCount - pageSize)
+    const scroll = Number(panel.outputScroll)
+    const current = panel.outputFollow === false
+      ? Math.min(maxStart, Number.isFinite(scroll) ? Math.max(0, scroll) : maxStart)
+      : maxStart
+    const next = direction < 0 ? Math.max(0, current - page) : Math.min(maxStart, current + page)
+    panel.outputScroll = next
+    panel.outputFollow = next >= maxStart
+    panel.outputNewLines = 0
+    this.scheduleRender()
+    return true
   }
 
   jobOutputText(result) {
@@ -5034,16 +5150,37 @@ export class TuiApp {
     return capped
   }
 
-  updateLocalJobOutput(job) {
+  appendLocalBashOutput(job, text) {
+    const limit = 32000
+    const combined = `${job.output ?? ''}${String(text ?? '')}`
+    const dropped = Math.max(0, combined.length - limit)
+    job.output = dropped > 0 ? combined.slice(dropped) : combined
+    job.outputBaseOffset = (job.outputBaseOffset ?? 0) + dropped
+  }
+
+  readLocalBashOutput(job) {
+    const output = String(job?.output ?? '')
+    const base = Number.isFinite(job?.outputBaseOffset) ? job.outputBaseOffset : 0
+    const end = base + output.length
+    const requested = Number.isFinite(job?.readOffset) ? job.readOffset : base
+    const cursor = Math.max(base, Math.min(requested, end))
+    job.readOffset = end
+    return output.slice(cursor - base)
+  }
+
+  captureLocalBashOutput(job, text) {
+    this.appendLocalBashOutput(job, text)
+    if (!job.jobsManaged) this.updateLocalJobOutput(job, text)
+  }
+
+  updateLocalJobOutput(job, delta = '') {
     if (!this.jobPanel || this.jobPanel.outputJobId !== job.id) return
-    const previous = this.jobOutputCache.get(job.id) ?? ''
     const next = job.output ?? ''
     this.jobOutputCache.set(job.id, next.length > 65536 ? next.slice(-65536) : next)
+    this.jobPanel.output = this.jobOutputCache.get(job.id)
     if (this.jobPanel.outputFollow === false) {
-      const added = Math.max(0, next.length - previous.length)
-      if (added > 0) this.jobPanel.outputNewLines = (this.jobPanel.outputNewLines ?? 0) + next.slice(previous.length).split(/\r?\n/).length - 1
-    } else {
-      this.jobPanel.output = this.jobOutputCache.get(job.id)
+      const addedLines = String(delta).split(/\r?\n/).length - 1
+      if (addedLines > 0) this.jobPanel.outputNewLines = (this.jobPanel.outputNewLines ?? 0) + addedLines
     }
     this.scheduleRender()
   }
@@ -5063,43 +5200,62 @@ export class TuiApp {
       panel.output = this.jobOutputCache.get(local.id) || '(no output yet)'
       panel.outputBusy = false
       panel.outputError = undefined
-      panel.outputFollow = true
-      panel.outputNewLines = 0
-      panel.outputScroll = 0
+      if (panel.outputFollow !== false) {
+        panel.outputNewLines = 0
+        panel.outputScroll = 0
+      }
       this.scheduleRender()
       return
     }
     if (typeof this.jobsService?.read !== 'function') {
+      const sameOutput = panel.outputJobId === entry.id
       panel.outputJobId = entry.id
       panel.outputError = 'job output reading is not available in this profile'
-      panel.output = undefined
+      if (!sameOutput) panel.output = this.jobOutputCache?.get(entry.id)
       this.scheduleRender()
       return
     }
+    const sameOutput = panel.outputJobId === entry.id
     panel.outputJobId = entry.id
     panel.outputBusy = true
     panel.outputError = undefined
-    panel.output = undefined
+    if (!sameOutput) panel.output = undefined
     this.scheduleRender()
     try {
       const result = await this.jobsService.read(entry.id, this.agent)
-      if (this.jobPanel !== panel || panel.readRequestId !== requestId) return
       const outputText = this.jobOutputText(result)
-      panel.output = (typeof this.appendJobOutput === 'function'
-        ? this.appendJobOutput(entry.id, outputText)
-        : outputText) || '(no output yet)'
-      panel.outputFollow = true
-      panel.outputNewLines = 0
-      panel.outputScroll = 0
+      const previousOutput = this.jobOutputCache?.get(entry.id) ?? ''
       const snapshot = result?.snapshot ?? result?.job
-      if (snapshot) {
-        const job = this.normalizeJobSnapshot(snapshot)
-        if (job) panel.entries = panel.entries.map((item) => item.id === job.id ? job : item)
+      const job = snapshot ? this.normalizeJobSnapshot(snapshot) : undefined
+      // Shell reads are cursor-based deltas; completed non-shell jobs return
+      // their full final output on every read, so replace it instead of appending.
+      const replaceOutput = job && !isShellJob(entry) && !isRunningJob(job)
+      let nextOutput
+      if (replaceOutput && outputText) {
+        if (!this.jobOutputCache) this.jobOutputCache = new Map()
+        this.jobOutputCache.set(entry.id, outputText.length > 65536 ? outputText.slice(-65536) : outputText)
+        nextOutput = this.jobOutputCache.get(entry.id)
+      } else {
+        nextOutput = (typeof this.appendJobOutput === 'function'
+          ? this.appendJobOutput(entry.id, outputText)
+          : outputText) || previousOutput
       }
+      nextOutput ||= '(no output yet)'
+      if (this.jobPanel !== panel || panel.readRequestId !== requestId || panel.outputJobId !== entry.id) return
+      panel.output = nextOutput
+      if (panel.outputFollow === false) {
+        const receivedDelta = outputText !== '' && outputText !== '(no new output)'
+        const changed = replaceOutput ? nextOutput !== previousOutput : receivedDelta
+        const addedLines = outputText.split(/\r?\n/).length - 1
+        if (changed && addedLines > 0) panel.outputNewLines = (panel.outputNewLines ?? 0) + addedLines
+      } else {
+        panel.outputNewLines = 0
+        panel.outputScroll = 0
+      }
+      if (job) panel.entries = panel.entries.map((item) => item.id === job.id ? job : item)
     } catch (error) {
       if (this.jobPanel !== panel || panel.readRequestId !== requestId) return
       panel.outputError = error instanceof Error ? error.message : String(error)
-      panel.output = undefined
     } finally {
       if (this.jobPanel === panel && panel.readRequestId === requestId) {
         panel.outputBusy = false
@@ -5114,10 +5270,10 @@ export class TuiApp {
     if (!panel || !entry) return
     const local = (this.localBackgroundJobs ?? []).find((j) => j.id === entry.id)
     if (local) {
-      if (local.child && !local.child.killed && local.status === 'running') {
-        local.stopRequested = true
-        local.status = 'stopping'
-        this.signalLocalJob(local, 'SIGTERM')
+      if (local.child && isRunningJob(local)) {
+        void this.stopLocalJob(local)
+          .then(() => { if (this.jobPanel === panel) void this.refreshJobsPanel() })
+          .catch(() => {})
         panel.entries = this.orderJobEntries(this.jobSnapshots())
         this.log('ok', `Stopping job ${local.id}`, 'k')
       } else {
@@ -5127,36 +5283,45 @@ export class TuiApp {
       return
     }
     if (typeof this.jobsService?.kill !== 'function') {
+      const sameOutput = panel.outputJobId === entry.id
       panel.outputJobId = entry.id
       panel.outputError = 'job cancellation is not available in this profile'
-      panel.output = undefined
+      if (!sameOutput) panel.output = this.jobOutputCache?.get(entry.id)
       this.scheduleRender()
       return
     }
+    const requestId = (panel.readRequestId ?? 0) + 1
+    panel.readRequestId = requestId
+    const sameOutput = panel.outputJobId === entry.id
     panel.outputJobId = entry.id
     panel.outputBusy = true
     panel.outputError = undefined
-    panel.output = undefined
+    if (!sameOutput) panel.output = this.jobOutputCache?.get(entry.id)
     this.scheduleRender()
     try {
       const result = await this.jobsService.kill(entry.id, this.agent, 'cancelled from TUI')
+      if (this.jobPanel !== panel || panel.readRequestId !== requestId || panel.outputJobId !== entry.id) return
       const outcome = result === 'already-finished' || result?.outcome === 'already-finished'
         ? 'already finished'
         : 'cancellation requested'
-      panel.output = `${outcome} · ${entry.id}`
+      this.log('ok', `${outcome} · ${entry.id}`, 'job')
       const snapshot = result?.snapshot ?? result?.job
-      if (snapshot) {
-        const job = this.normalizeJobSnapshot(snapshot)
-        if (job) panel.entries = panel.entries.map((item) => item.id === job.id ? job : item)
-      } else {
-        panel.entries = this.jobSnapshots()
-      }
+      const job = snapshot ? this.normalizeJobSnapshot(snapshot) : undefined
+      const entries = job
+        ? panel.entries.map((item) => item.id === job.id ? job : item)
+        : this.jobSnapshots()
+      panel.entries = this.orderJobEntries(entries)
+      const selectedIndex = panel.entries.findIndex((item) => item.id === entry.id)
+      panel.selected = selectedIndex >= 0 ? selectedIndex : Math.min(panel.selected, Math.max(0, panel.entries.length - 1))
+      panel.selectedJobId = panel.entries[panel.selected]?.id
     } catch (error) {
+      if (this.jobPanel !== panel || panel.readRequestId !== requestId || panel.outputJobId !== entry.id) return
       panel.outputError = error instanceof Error ? error.message : String(error)
-      panel.output = undefined
     } finally {
-      panel.outputBusy = false
-      this.scheduleRender()
+      if (this.jobPanel === panel && panel.readRequestId === requestId) {
+        panel.outputBusy = false
+        this.scheduleRender()
+      }
     }
   }
 
@@ -6062,11 +6227,13 @@ export class TuiApp {
       child,
       status: 'running',
       output: '',
+      outputBaseOffset: 0,
       startedAt: Date.now(),
       readOffset: 0,
       done: new Promise((resolve) => { settleDone = resolve }),
       settleDone,
       stopRequested: false,
+      jobsManaged: false,
       timeout: undefined
     }
     this.activeBash = active
@@ -6076,21 +6243,18 @@ export class TuiApp {
       if (!ended) {
         active.stopRequested = true
         this.signalLocalJob(active, 'SIGKILL')
-        active.output += '\n… (timed out after 60s)'
+        const text = '\n… (timed out after 60s)'
+        this.captureLocalBashOutput(active, text)
       }
     }, 60_000)
     active.timeout = timer
     child.stdout.on('data', (chunk) => {
       const text = chunk.toString('utf8')
-      active.output += text
-      if (active.output.length > 32000) active.output = active.output.slice(-32000)
-      this.updateLocalJobOutput(active)
+      this.captureLocalBashOutput(active, text)
     })
     child.stderr.on('data', (chunk) => {
       const text = chunk.toString('utf8')
-      active.output += text
-      if (active.output.length > 32000) active.output = active.output.slice(-32000)
-      this.updateLocalJobOutput(active)
+      this.captureLocalBashOutput(active, text)
     })
     const finish = ({ code, error } = {}) => {
       if (ended) return
@@ -6241,12 +6405,14 @@ export class TuiApp {
 
   onPageUp() {
     if (!this.terminalOpen) return
+    if (this.scrollJobOutput?.(-1)) return
     this.viewport.pageUp()
     this.scheduleRender(true)
   }
 
   onPageDown() {
     if (!this.terminalOpen) return
+    if (this.scrollJobOutput?.(1)) return
     this.viewport.pageDown()
     this.scheduleRender(true)
   }
@@ -6695,25 +6861,32 @@ export class TuiApp {
 
     if (this.jobPanel) {
       if (value === '\x1b' || value === '\x03') {
+        if (this.jobPanel.view === 'shell') {
+          this.jobPanel.view = 'list'
+          this.scheduleRender()
+          return
+        }
         this.jobPanel = undefined
         this.scheduleRender()
-      } else if (value === '\r') {
-        void this.readSelectedJob()
-      } else if (value === '\t') {
-        void this.readSelectedJob()
-      } else if (value === 'k' || value === 'K') {
+      } else if (this.jobPanel.view === 'shell' && (value === '\r' || value === ' ')) {
+        this.jobPanel.view = 'list'
+        this.scheduleRender()
+      } else if (value === '\r' || value === '\t') {
+        void this.inspectSelectedJob()
+      } else if (value === 'k' || value === 'K' || value === 'x' || value === 'X') {
         void this.killSelectedJob()
       } else if (value === 'f' || value === 'F') {
         this.jobPanel.outputFollow = this.jobPanel.outputFollow === false
         this.jobPanel.outputNewLines = 0
         if (this.jobPanel.outputFollow) this.jobPanel.outputScroll = 0
         else {
-          const lineCount = String(this.jobPanel.output ?? '').split(/\r?\n/).length
-          this.jobPanel.outputScroll = Math.max(0, lineCount - 5)
+          const lineCount = this.jobOutputLines().length
+          this.jobPanel.outputScroll = Math.max(0, lineCount - this.jobOutputPageSize())
         }
         this.scheduleRender()
       } else if (value === 'r' || value === 'R') {
-        void this.refreshJobsPanel()
+        if (this.jobPanel.view === 'shell') void this.readSelectedJob()
+        else void this.refreshJobsPanel()
       } else if (value.startsWith('\x1b[')) this.onEscapeSequence(value)
       return
     }
@@ -6824,19 +6997,16 @@ export class TuiApp {
             owner: this.agent,
             run: () => ({
               cancel: () => {
-                job.stopRequested = true
-                this.signalLocalJob(job, 'SIGTERM')
+                void this.stopLocalJob(job).catch(() => {})
               },
               done: job.done,
-              readOutput: () => {
-                const delta = job.output.slice(job.readOffset)
-                job.readOffset = job.output.length
-                return delta
-              }
+              readOutput: () => this.readLocalBashOutput(job)
             })
           })
           if (id !== undefined && id !== null) {
             job.id = String(id)
+            job.jobsManaged = true
+            this.tuiShellJobIds.add(job.id)
             registered = true
           }
         } catch {}
@@ -6936,20 +7106,15 @@ export class TuiApp {
 
   onEscapeSequence(value) {
     if (this.providerPanel) return this.handleProviderEscape(value)
-    if (this.jobPanel && this.jobPanel.outputJobId && (value === '\x1b[5~' || value === '\x1b[6~')) {
-      const lineCount = String(this.jobPanel.output ?? '').split(/\r?\n/).length
-      const page = 5
-      const maxStart = Math.max(0, lineCount - page)
-      const scroll = Number(this.jobPanel.outputScroll)
-      const current = this.jobPanel.outputFollow === false
-        ? Math.min(maxStart, Number.isFinite(scroll) ? Math.max(0, scroll) : maxStart)
-        : maxStart
-      const next = value === '\x1b[5~' ? Math.max(0, current - page) : Math.min(maxStart, current + page)
-      this.jobPanel.outputScroll = next
-      this.jobPanel.outputFollow = next >= maxStart
-      this.jobPanel.outputNewLines = 0
+    if (this.jobPanel?.view === 'shell' && (value === '\x1b[D' || value === '\x1bOD')) {
+      this.jobPanel.view = 'list'
       this.scheduleRender()
       return
+    }
+    if (this.jobPanel?.view === 'shell' && (value === '\x1b[A' || value === '\x1bOA')) return this.scrollJobOutput(-1)
+    if (this.jobPanel?.view === 'shell' && (value === '\x1b[B' || value === '\x1bOB')) return this.scrollJobOutput(1)
+    if (this.jobPanel && this.jobPanel.outputJobId && (value === '\x1b[5~' || value === '\x1b[6~')) {
+      return this.scrollJobOutput(value === '\x1b[5~' ? -1 : 1)
     }
     if (this.questionPanel) {
       const isVertical = value === '\x1b[A' || value === '\x1bOA' || value === '\x1b[B' || value === '\x1bOB'
@@ -7071,6 +7236,8 @@ export class TuiApp {
       } else if (this.menu) {
         this.menu.selected = (this.menu.selected + 1) % this.menu.items.length
         this.scheduleRender()
+      } else if (this.input === '' && this.jobSnapshots().some(isRunningJob)) {
+        this.openJobsPanel()
       } else if (this.input.includes('\n') && this.moveCursorLine(1)) {
         // moved within multi-line input
       } else if (this.historyNav(1, 'start')) {

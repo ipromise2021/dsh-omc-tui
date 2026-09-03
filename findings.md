@@ -1,5 +1,32 @@
 # 代码审查发现与跟踪
 
+## Jobs 与后台 Shell 体验改造（2026-09-03）
+
+- 用户希望借鉴 Claude Code 的信息层级：任务列表应有整体推进感；后台 Shell 应能查看状态、耗时、命令和尾部实时日志。
+- 当前 `/jobs` 已经是所有后台任务（含 `kind: bash`）的官方管理入口；状态栏仅输出 `jobs N active · elapsed`，按 ↓ 不会进入 Jobs。
+- DSH `jobs` 服务提供 list/read/kill/onJobsChanged，必须继续作为 Job 状态、输出和取消操作的唯一来源。会话 durable events 可用于展示任务活动，但不可在 TUI 本地伪造可恢复的计划任务状态。
+- 本轮范围：保持 `/jobs` 的多任务管理能力；增加 bash 详情视图与状态栏快捷入口；任务列表使用真实 Job 快照呈现，不加入推测的子任务进度。
+- 实现结果：面板将 durable event 投影为 `TASK ACTIVITY`，并将官方 Job 快照明确标为 `BACKGROUND JOBS`；选中 bash 后显示 `SHELL DETAILS` 的状态、运行时长、命令、带边框的日志尾部与输出体积；状态栏活跃任务附加 `↓` 提示，空输入时按 ↓ 打开列表。
+- 验证：完整单元回归、模块导入与空白检查均通过。
+
+## Jobs/Shell 审查整改（2026-09-03）
+
+- 审查确认：InputRouter 会直接把 PgUp/PgDn 分派到主视口，Shell 详情现有分页逻辑不可达；详情输出使用 `shorten()` 会压缩空白；远程 Jobs 仅在进入详情时读取一次；Shell 详情未锁定选中条目。
+- 修复原则：分页在 `onPageUp/onPageDown` 统一处理；日志只截断不折叠空白；任务活动从 durable session events 单独投影，不向 Job 快照写入伪造状态。
+- 完成结果：Shell 详情默认跟随最后 6 行；在 Mac 上按 ↑ 浏览旧日志并暂停跟随，按 ↓ 回到最新并恢复跟随，PgUp/PgDn 仍可作为兼容快捷键；进入详情后锁定 Job 选择。
+
+## Jobs/Shell 消费游标整改（2026-09-03）
+
+- DSH `jobs.read()` 是消费型单一游标：自动读取远程 Job 会抢占 Agent 的 `job_output`，并可能标记完成任务已报告，故不再用于远程自动刷新。
+- 本插件通过 `! command` 后 Ctrl+B 启动的 Shell 会被显式标记为 TUI 所有；仅此类 Shell 可安全自动跟随，并在状态变为终态时读取最后一次增量。
+- 远程 Shell 保留 `r read output` 的显式用户操作；刷新中持续显示已有日志，输出末尾换行不再挤占最后 6 行。
+
+## Jobs/Shell 审查回归整改（2026-09-03）
+
+- 普通远程 subagent/workflow Job 恢复 Enter 的显式读取入口；远程 Shell 仍必须在详情页按 `r` 读取，以免打开详情即消费输出。
+- `commitSessionState()` 会关闭旧 Jobs 面板并清空 TUI Shell Job ID 与输出缓存，避免跨会话投影泄漏。
+- 任务活动严格限制在最近 240 个事件，不再为寻找完整活动回退扫描完整会话；面板在发生截断时明确提示较早活动已省略。
+
 ## v0.2.7 发布预检（2026-08-29）
 
 - 预检时已发布版本为 `0.2.6`，`v0.2.7` Git tag、npm 包版本和 GitHub Release 均不存在，可作为下一补丁版本发布。
@@ -758,3 +785,96 @@
 - **影响：** 多步循环或流式回答过程中在中间突兀弹出并随后消失一个重复的 `DSH model · time` 标题行。
 - **建议：** 仅在接收到新的 `user/message` 时重置 `turnHeaderPrinted`；并在 `projectLiveStreamDocument` 时通过 `hasTurnHeaderInCurrentTurn(baseDoc)` 计算当前回合是否已有标题并向 live 投影透传 `suppressTurnHeader`。
 - **关闭验证：** 实现了 `hasTurnHeaderInCurrentTurn` 与 `suppressTurnHeader` 透传，并在单测中通过 `projectTranscript` + `mergeTranscriptDocuments` 真实分层合并断言验证通过。
+
+### CR-068：终态 Job 输出重复、失败清屏与列表尾部空行
+- **优先级：** P1/P2
+- **状态：** resolved
+- **位置：** `src/index.js:readSelectedJob`、`src/panels/jobs-panel.js:renderJobPanel`
+- **现象：** DSH 终态非 Shell Job 的 `read()` 会重复返回完整最终输出，原逻辑每次均按增量拼接；读取失败还会清空已有日志；Jobs 列表预览没有复用 Shell 详情的尾部换行处理。
+- **影响：** 重复 Enter 会重复显示同一份终态输出，临时读取故障会丢失可见上下文，末尾换行会挤占一行日志空间。
+- **关闭验证：** 终态非 Shell Job 改为覆盖缓存，Shell 流仍保留增量追加；失败时保留已有输出；列表复用 `outputLinesFor()`；新增三项回归断言并通过 `npm test`、`npm run verify` 与 `git diff --check`。
+
+### CR-069：任务切换未使在途输出读取失效
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:selectJob`、`src/index.js:readSelectedJob`
+- **现象：** 输出读取开始后切换任务不会推进 `readRequestId`；旧请求返回时仍可覆盖面板输出，而 `outputJobId` 已指向新任务。
+- **影响：** 新任务标题下可能显示上一任务的日志。
+- **关闭验证：** 切换选择与目标消失都会推进请求代次并清除 busy；迟到结果只写回原 Job 缓存，不更新当前面板。延迟读取回归测试通过。
+
+### CR-070：Shell 日志控制字符规范化
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/index.js:jobOutputLines`、`src/panels/jobs-panel.js:outputLinesFor`
+- **现象：** 复核确认 `safe()` 已移除 CR，因此 CRLF 不会残留回车；但 Tab 被保留并按单列计算，终端实际会扩展到制表位，仍会破坏日志框宽度和分页一致性。
+- **关闭验证：** Shell 渲染与分页统一把 Tab 展开为四个空格；CRLF 与 Tab 回归测试确认无控制字符泄漏且分页行一致。
+
+### CR-071：缓存达到上限后不再提示新日志
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/index.js:readSelectedJob`
+- **现象：** 暂停跟随时通过截断后缓存长度差计算新增量；缓存维持 64KB 时长度差为零。
+- **关闭验证：** 新日志提示改为依据本次真实增量中的换行数，而非截断后缓存长度差；64KB 上限回归测试通过。
+
+### CR-072：列表读取状态隐藏已有日志
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/panels/jobs-panel.js:renderJobPanel`
+- **现象：** `outputBusy` 或 `outputError` 分支只显示状态文本，即使 `panel.output` 已保留，列表仍暂时隐藏日志。
+- **关闭验证：** 状态提示占用输出预算中的一行，其余行继续显示已有日志；读取失败渲染回归测试通过。
+
+### CR-073：本地 Shell 缓冲截断后读取游标失效
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:runBash`
+- **现象：** `active.output` 截断到最后 32KB，但 `readOffset` 仍是旧字符串索引；读取一次到达 32000 后，后续缓冲长度始终不超过 32000，`slice(readOffset)` 将持续返回空串。
+- **影响：** TUI 启动并转入 DSH Jobs 的长时间 Shell 在约 32KB 后停止显示新日志。
+- **关闭验证：** 为滑动缓冲记录绝对起始偏移，读取游标使用绝对坐标；缓冲滑动后继续读取 `tail\n` 的回归测试通过。
+
+### CR-074：DSH 管理的 Shell 输出存在双写
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:runBash`、`src/index.js:updateLocalJobOutput`
+- **现象：** Shell 注册到 DSH Jobs 后，stdout/stderr 仍直接更新面板缓存，同时 Jobs 轮询又读取同一增量并追加缓存。
+- **影响：** Shell 详情打开时可能出现重复日志；滑动缓冲截断后还可能覆盖阅读位置。
+- **关闭验证：** `jobsManaged` 路径只积累底层缓冲并通过 Jobs cursor 输出，本地推送不再写面板缓存；双写隔离回归测试通过。
+
+### CR-075：本地回退 Shell 的轮询会取消暂停跟随
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:pollOpenShellOutput`、`src/index.js:readSelectedJob`
+- **现象：** 本地回退 Shell 已由 stdout/stderr 数据事件主动更新，但仍进入每秒轮询；本地读取分支无条件设置 `outputFollow = true`。
+- **影响：** 用户按上方向键浏览旧日志后，最多一秒就会被自动拉回最新输出。
+- **关闭验证：** 本地回退 Job 从轮询中排除并保留 paused/scroll/new-lines 状态；推送与手动读取回归测试通过。
+
+### CR-076：远程取消覆盖日志且存在异步串台
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:killSelectedJob`
+- **现象：** 取消开始、失败和成功都会清空或替换 `panel.output`；取消请求返回前切换任务也没有请求身份检查。
+- **影响：** Shell 日志会被操作提示覆盖，迟到的取消结果或错误可能显示在另一任务下。
+- **关闭验证：** 取消结果写入普通提示而不替换输出；取消请求复用代次与 Job ID 守卫。失败保留日志和切换任务竞态测试通过。
+
+### CR-077：Jobs 列表突破面板容量
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/panels/jobs-panel.js:renderJobPanel`
+- **现象：** 活动预算为 0 时 `activities.slice(-0)` 等价于 `slice(0)`，反而显示全部活动；同时最小输出预算和固定空行未按小终端容量收缩。
+- **影响：** 6～14 行可用高度下实际可返回 10～18 行，挤压输入区和正文，造成小窗口布局错位。
+- **关闭验证：** 重算紧凑/常规模式固定行与内容预算，并显式处理零活动；6～16 行、四种输出状态的容量矩阵全部通过。
+
+### CR-078：后台本地 Shell 取消缺少强制终止升级
+- **优先级：** P1
+- **状态：** resolved
+- **位置：** `src/index.js:killSelectedJob`、`src/index.js:runBash`
+- **现象：** 本地回退取消和 DSH Jobs 的 cancel hook 都只发送一次 SIGTERM；转后台后 60 秒前台超时定时器已清除。
+- **影响：** 忽略 SIGTERM 的子进程会永久运行并让 Job 停在 stopping；本地分支还错误依赖 `child.killed` 判断是否已经结束。
+- **关闭验证：** 本地回退与 DSH cancel hook 均调用已有 `stopLocalJob()`，在 1.5 秒后按状态升级 SIGKILL；`child.killed=true` 且 stopping 的回归测试仍会进入停止流程。
+
+### CR-079：取消回退刷新破坏 Jobs 排序
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/index.js:killSelectedJob`
+- **现象：** 取消结果没有 snapshot 时直接赋值 `jobSnapshots()`，绕过统一排序，也未重新定位选中 ID。
+- **影响：** 任务状态变化后列表可能跳序，数字选中位置可能指向另一个 Job。
+- **关闭验证：** 取消结果统一经过 `orderJobEntries()`，随后按原 Job ID 重定位选择；多任务回归测试通过。

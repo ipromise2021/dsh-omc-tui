@@ -225,7 +225,9 @@ export function renderStatusRows(options) {
     })
     .filter(Boolean)
     .join(',')
-  const jobBadge = totalJobs > 0 ? `${ANSI.amber}${totalJobs} active${jobAgeText ? ` · ${jobAgeText}` : ''}${ANSI.reset}` : `${ANSI.dim}0${ANSI.reset}`
+  const jobBadge = totalJobs > 0
+    ? `${ANSI.amber}${totalJobs} active${jobAgeText ? ` · ${jobAgeText}` : ''}${ANSI.reset}${ANSI.dim} · ↓${ANSI.reset}`
+    : `${ANSI.dim}0${ANSI.reset}`
   const skillBadge = skills.length > 0 ? `${ANSI.teal}${skills.length} skills${ANSI.reset}` : `${ANSI.dim}0 skills${ANSI.reset}`
   const hookBadge = hookCount > 0 ? `${ANSI.blueSoft}${hookCount} hooks${ANSI.reset}` : `${ANSI.dim}0 hooks${ANSI.reset}`
   const mcpBadge = mcpCount > 0 ? `${ANSI.teal}${mcpCount} MCPs${ANSI.reset}` : `${ANSI.dim}0 MCPs${ANSI.reset}`
