@@ -184,6 +184,24 @@ rc.1 发布后，master 继续包含 HTTP proxy、模型发现、Python 单文�
 
 这些是扩展验证项，不影响本次已复现并修复的启动、Session 快照和权限契约问题。
 
+### 7.1 v0.2.9 标签后的补充验证
+
+在真实 `@deepseek-ai/dsh@0.1.2-rc.1` 隔离 Profile 中继续执行 mock PTY 发布门禁，确认并修复了一项标签后发现的投影兼容问题：rc.1 会在审批打开期间插入 `session/title`，该不可见元数据不应拆分相邻工具活动。活动分组器现将 `session/title` 与 `session/title-llm-request` 视为透明元数据，并有回归单测覆盖。
+
+测试夹具同时按 rc.1 的 `LlmAdapter` 和媒体能力契约补齐 `prepareCall()`、`imageRequestPricing()`、`inputModalities`，并兼容带 `dsh:file_ref_*` 边界标记的文件引用。
+
+| 补充门禁 | 结果 |
+| --- | --- |
+| `npm test` / `npm run verify` | 通过 |
+| 流式工具、审批、权限轮换、中断与退出 | 通过 |
+| 并行工具折叠、reasoning、导出、历史搜索、会话内模型切换 | 通过 |
+| `@` 文件选择、引用展开并送达模型 | 通过 |
+| OSC 1337 / Kitty 图片附加并送达声明支持图片的模型 | 通过 |
+| 交互 timing 旧断言 | 未关闭；实际输出为 `Worked for`，旧测试仍等待 `finished in` |
+| preset 切换后 resume 场景 | 未关闭；等待旧 `agent preset · code` 标记超时，尚未判定为产品缺陷 |
+
+因此当前核心 rc.1 适配已具备充分正向证据，但整套 PTY 尚未全绿。`v0.2.9` 已指向补充修复之前的提交，不应移动该标签；若关闭剩余门禁，建议发布新的补丁版本标签。
+
 ## 8. 安装与升级
 
 rc.1 当前位于 npm `next` 而非默认 `latest`，请显式指定版本：

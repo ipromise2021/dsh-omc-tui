@@ -9,6 +9,10 @@ export function isToolEvent(type) {
     type === 'hook/result'
 }
 
+function isTransparentActivityEvent(type) {
+  return type === 'session/title' || type === 'session/title-llm-request'
+}
+
 export function parseToolArgs(raw) {
   if (!raw) return {}
   if (typeof raw === 'object') return raw
@@ -168,6 +172,15 @@ export function groupActivitySpans(events) {
       }
       else if (type.startsWith('approval/')) currentSpan.approvals.push(event)
       else if (type.startsWith('hook/')) currentSpan.hooks.push(event)
+      continue
+    }
+
+    // Harness v0.1.2 may persist title metadata while an approval is open.
+    // It has no transcript surface and must not split one tool activity span.
+    if (currentSpan && isTransparentActivityEvent(type)) {
+      currentSpan.events.push(event)
+      currentSpan.endSeq = event.seq
+      currentSpan.endTime = Number(event.time) || currentSpan.endTime
       continue
     }
 

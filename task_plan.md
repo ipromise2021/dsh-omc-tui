@@ -214,6 +214,16 @@
 - [x] 新建独立中文适配报告，记录来源、结论、改动和后续验证矩阵
 - **状态：** complete
 
+### 阶段 27：DSH v0.1.2-rc.1 完整兼容验证
+- [ ] 审计可用的隔离 fixture、真实 Provider 与凭据边界，不输出任何密钥
+- [ ] 执行现有 PTY、恢复、preset、权限、Jobs 和命令验证
+- [ ] 在独立临时工作区执行最小真实 Provider、工具、图片和 compact 验证（如凭据可用）
+- [ ] 对失败项区分环境限制、上游缺陷与 TUI 缺陷；修复必要的 TUI 问题并回归
+- [ ] 更新适配报告、验证矩阵和发布状态
+- **状态：** in_progress
+
+当前门禁结论：核心 rc.1 主链路与新增投影修复已验证；整套 PTY 因 interaction timing 旧文案和 preset/resume 标记两项尚未全绿，保持 `in_progress`，不移动现有 `v0.2.9` 标签。
+
 ## 建议实现顺序
 1. CR-001 权限状态投影
 2. CR-002 无取消能力时的退出保护
@@ -254,6 +264,9 @@
 | rc.1 Profile 首次真实启动时 standard preset 缺少 `subagentModelSelection` Host 服务 | 1 | 按官方 Web host 组合方式挂载 `@deepseek-ai/dsh-tool-subagent/model-selection-settings`，并增加对应 peer |
 | package + Cordis patch 的首次联合补丁未匹配删除行 | 1 | 分文件应用精确补丁并复核实际上下文 |
 | 最终补取 GitHub Release body 时网络连接临时失败 | 1 | 不重试受限网络；使用本轮已保存的官方 Release/API、tag 与源码核对结果完成文档 |
+| rc.1 mock Profile 的首组 PTY e2e 场景失败 | 1 | 先读取 `/tmp/dsh-tui-pty.log`，区分 fixture、rc.1 API 与 TUI 行为后采用针对性修复或更新 fixture |
+| 补齐 mock adapter 后首组 PTY e2e 仍失败 | 2 | 读取最新日志，检查 rc.1 stream event 协议和 TUI/fixture 的工具请求路径；不重复使用旧假设 |
+| 增加 rc.1 启动稳定窗口后首组 PTY e2e 仍失败 | 3 | 停止继续猜测；读取日志并重新审视 rc.1 与测试断言的 UI 语义差异，必要时只修复测试 fixture/断言并向用户报告未覆盖范围 |
 
 ## 备注
 - 每完成一项修复，同步更新 `findings.md` 的状态与验证证据。

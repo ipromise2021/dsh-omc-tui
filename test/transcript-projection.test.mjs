@@ -73,6 +73,21 @@ const approvalText = approvalDoc.rows.join('\n')
 assert.match(approvalText, /approval needed/)
 assert.match(approvalText, /decision: allow/)
 
+// DSH v0.1.2 can update the generated session title while approval is open.
+// Invisible title metadata must not split the surrounding tool activity.
+const titledApprovalEvents = [
+  { seq: 1, type: 'tool/call', time: 1000, data: { callId: 'c5', name: 'mock_tool', arguments: '{}' } },
+  { seq: 2, type: 'approval/asked', time: 1100, data: { toolName: 'mock_tool' } },
+  { seq: 3, type: 'session/title', time: 1150, data: { title: 'Generated title' } },
+  { seq: 4, type: 'approval/decided', time: 1200, data: { outcome: 'allowed-once' } },
+  { seq: 5, type: 'tool/result', time: 1250, data: { callId: 'c5', message: { content: 'ok' } } },
+  { seq: 6, type: 'tool/call', time: 1300, data: { callId: 'c6', name: 'mock_read', arguments: JSON.stringify({ file_path: 'src/index.js' }) } },
+  { seq: 7, type: 'tool/result', time: 1400, data: { callId: 'c6', message: { content: 'read' } } }
+]
+const titledApprovalSpans = groupActivitySpans(titledApprovalEvents).filter((item) => item.kind === 'activity')
+assert.equal(titledApprovalSpans.length, 1, 'Title metadata must not split an approval activity')
+assert.equal(titledApprovalSpans[0].span.calls.length, 2)
+
 // 5. CJK and terminal width safety
 const cjkEvents = [
   { seq: 1, type: 'user/message', time: 1000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '这是一个超长中文测试语句，用于验证宽度计算是否会溢出终端列限制，测试包含宽字符与标点符号。' }] } },

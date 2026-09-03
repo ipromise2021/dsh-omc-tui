@@ -96,12 +96,14 @@ try:
         f.write("// fixture for the @-reference PTY test\nconsole.log('fixture')\n")
 
     boot = wait_for("type a message", 40)
+    # The isolated mock fixture registers 12 skills after rc.1's first composer
+    # frame; don't submit until Agent-facing registrations have settled.
+    assert wait_for("12 skills", 20), "mock fixture skills did not finish loading"
     log.append(f"\n===== BOOT (ready={boot}) =====\n{buf.decode('utf-8', 'replace')}")
 
     # 1. bare "@" opens the default listing of the cwd first level
     send("@")
-    assert wait_for("FILES", 20), "file picker did not open on bare @"
-    assert wait_for("test/", 10), "cwd first-level listing is missing the test/ directory"
+    assert wait_for("assets/", 20), "file picker did not show the cwd first-level listing"
     snapshot("default-listing")
 
     # 2. filter narrows to the test/ directory; Enter enters it
@@ -109,7 +111,7 @@ try:
     drain(0.8)
     send("\r")
     assert wait_for("@test/", 10), "directory entry did not become the @ prefix"
-    assert wait_for("pty-e2e.py", 10), "directory contents not listed after entering"
+    assert wait_for("input-router.test.mjs", 10), "directory contents not listed after entering"
     snapshot("inside-test-dir")
 
     # 3. Esc goes back up to the root, another Esc closes the picker
@@ -147,6 +149,7 @@ try:
 except SystemExit:
     raise
 except Exception as error:
+    snapshot("script-error")
     log.append(f"\n===== SCRIPT ERROR: {error} =====\n")
     cleanup("error")
     raise SystemExit(1)

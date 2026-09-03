@@ -63,6 +63,7 @@ def snapshot(label, wait=0.4):
 
 log = []
 boot_ok = wait_for("type a message", 30)
+assert wait_for("12 skills", 20), "mock fixture skills did not finish loading"
 log.append(f"\n===== BOOT (ready={boot_ok}) =====\n{buf.decode('utf-8', 'replace')}")
 
 # resize to narrow 80x24

@@ -292,3 +292,16 @@
 - 已新建 `DSH_V0.1.2_RC1_ADAPTATION.md`，同步 README、Harness 兼容契约、CHANGELOG 与 npm 文件白名单。
 - 最终验证通过：`npm test`、`npm run verify`、`git diff --check`、npm pack dry-run，以及真实 `@deepseek-ai/dsh@0.1.2-rc.1` 隔离 Profile smoke test。
 - 创建/修改的核心文件：`src/core/session-events.js`、`src/core/index.js`、`src/index.js`、`src/commands/{recap,status,compact}.js`、`src/browser-lease.js`、`test/unit-regressions.mjs`、`cordis.patch.yml`、`package.json` 与适配文档。
+
+### 阶段 27：DSH v0.1.2-rc.1 完整兼容验证
+- **状态：** in_progress
+- 用户已授权继续完整验证。范围从此前的隔离启动 smoke test 扩展到 PTY、会话恢复、preset、真实 Provider、工具、图片与 compact；所有真实交互将使用临时工作目录和最小无副作用输入。
+- 当前发布提交为 `7da3556`，本地 annotated tag 为 `v0.2.9`，开始验证时工作区干净。
+- 已建立 rc.1 隔离 mock Profile 并确认 `mock/mock-v1`、TUI patch 和 subagent model-selection service 均已注入。首次 PTY suite 在 `pty-e2e.py` 失败，尚未运行后续脚本；待读取日志定位。
+- 定位为测试 mock adapter 漏实现 rc.1 新增的 `prepareCall(provider, model, signal)`，并未暴露为 TUI 运行错误；已按 rc.1 `LlmAdapter` 默认实现补齐 `prepareCall()` 和 `imageRequestPricing()`，待重新安装本地链接并重跑。
+- 手动 rc.1 mock 会话已确认适配后的流式工具调用和审批卡片正常。PTY 失败的另一原因是其旧 ready 条件只等待 composer 首次绘制；rc.1 此时仍在异步注册 skills/tools。五个 PTY driver 在发首个输入前增加 2 秒稳定窗口，待跑全套回归。
+- 2 秒窗口在本机仍不足；改为 mock fixture 的确定性就绪条件 `12 skills`，避免时间猜测。准备重跑全套 PTY。
+- `pty-e2e.py` 已通过。为了适配 rc.1，测试 mock adapter 补充 `prepareCall()`；PTY readiness 改等 mock skill catalog；审批断言改为稳定的编辑确认卡片；中断后退出循环持续 drain PTY 输出。验证了流式工具、审批、权限轮换、中断和退出。
+- rc.1 审批期间会插入 `session/title`，旧活动投影因此拆开并行工具组；产品代码已将标题元数据设为透明事件并补回归单测。
+- 发布门禁已单项通过：`pty-e2e`、`pty-features`、`pty-file`、`pty-image`。测试夹具已补齐 rc.1 adapter、图片能力和文件引用边界标记契约。
+- 未继续陷入旧 PTY 文案逐项修补：`pty-interaction` 仍等待旧 `finished in`（实际为 `Worked for`）；`pty-resume` 等待 preset 切换标记超时，需后续独立确认。当前不宣称整套 PTY 全绿。

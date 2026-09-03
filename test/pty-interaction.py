@@ -75,7 +75,7 @@ try:
 
     # 1. full turn with proper approval wait
     send("hello again\r")
-    assert wait_for("approval needed", 15), "approval prompt missing"
+    assert wait_for("Do you want to make this edit", 15), "approval prompt missing"
     send("y")
     assert wait_for("clean turn end", 15), "turn did not finish"
     snapshot("turn-complete")

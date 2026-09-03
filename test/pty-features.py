@@ -92,18 +92,21 @@ def cleanup(exit_code):
 
 try:
     boot = wait_for("type a message", 30)
+    # The isolated mock fixture registers 12 skills after rc.1's first composer
+    # frame; don't submit until Agent-facing registrations have settled.
+    assert wait_for("12 skills", 20), "mock fixture skills did not finish loading"
     log.append(f"\n===== BOOT (ready={boot}) =====\n{buf.decode('utf-8', 'replace')}")
 
     # 1. full turn: approval diff preview + parallel tool group + reasoning fold
     send("hello mock\r")
-    assert wait_for("approval needed", 25), "approval prompt missing"
+    assert wait_for("Do you want to make this edit", 25), "approval prompt missing"
     assert wait_for("mock-file.js", 5), "approval diff file missing"
     assert wait_for("- const old = 1", 5), "approval diff old line missing"
     snapshot("approval-diff")
     send("y")
+    assert wait_for("Thinking for", 25), "reasoning stream missing"
     assert wait_for("clean turn end", 25), "turn did not complete"
-    assert wait_for("⚙ TOOLS · 2 · mock_tool · mock_read", 10), "parallel tool group not folded"
-    assert wait_for("thinking ·", 10), "reasoning fold missing"
+    assert wait_for("⚙ 2 tools · mock_tool · Read", 10), "parallel tool group not folded"
     snapshot("folded-group-reasoning")
 
     # 2. Ctrl+O expands the nearest collapsible block (reasoning)
@@ -118,6 +121,7 @@ try:
     send("/export\r")
     assert wait_for("EXPORT SESSION", 10), "export confirmation missing"
     send("\r")  # validate default project directory and move to Export
+    drain(1.0)  # directory validation is asynchronous
     send("e")
     assert wait_for("exported ·", 10), "export notice missing"
     exports = glob.glob(os.path.join(ENV["DSH_HOME"], "exports", os.path.basename(os.getcwd()), "dsh-session-*.md"))
@@ -147,11 +151,12 @@ try:
     send("\r")
     assert wait_for("SELECT VARIANT", 5), "variant picker did not open after model selection"
     send("\r")
-    assert wait_for("⎿ mock/mock-v2", 10), "model switch log missing"
+    assert wait_for("mock/mock-v2 (active now · new sessions default)", 10), "model switch log missing"
     snapshot("model-switched")
     # 6. the switch applies to the NEXT turn in the SAME session
+    buf = b""  # repeated approval/output markers must come from this turn
     send("hello mock\r")
-    assert wait_for("approval needed", 25), "approval prompt missing"
+    assert wait_for("Do you want to make this edit", 25), "approval prompt missing"
     send("y")
     assert wait_for("[model=mock-v2]", 25), "live model switch did not apply to the current session"
     drain(2.0)  # let the turn fully close before quitting

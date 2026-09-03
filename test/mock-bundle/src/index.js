@@ -29,10 +29,14 @@ class MockAdapter {
     return undefined
   }
 
+  imageRequestPricing() {
+    return undefined
+  }
+
   listModels() {
     return Promise.resolve([
-      { provider: 'mock', id: 'mock-v1', name: 'Mock V1', description: 'local echo provider for tests' },
-      { provider: 'mock', id: 'mock-v2', name: 'Mock V2', description: 'second mock model for live-switch tests' }
+      { provider: 'mock', id: 'mock-v1', name: 'Mock V1', description: 'local echo provider for tests', inputModalities: ['text', 'image'] },
+      { provider: 'mock', id: 'mock-v2', name: 'Mock V2', description: 'second mock model for live-switch tests', inputModalities: ['text', 'image'] }
     ])
   }
 
@@ -42,6 +46,7 @@ class MockAdapter {
       id: model,
       name: model === 'mock-v2' ? 'Mock V2' : 'Mock V1',
       context: { contextWindow: CONTEXT_WINDOW },
+      inputModalities: ['text', 'image'],
       defaultMaxTokens: 8192,
       reasoning: {
         efforts: [
@@ -54,6 +59,13 @@ class MockAdapter {
     })
   }
 
+  async prepareCall(provider, model, signal) {
+    return {
+      model: await this.resolveModel(provider, model, signal),
+      stream: (options) => this.stream(options)
+    }
+  }
+
   async *stream(options) {
     const { messages, signal } = options
     const last = messages[messages.length - 1]
@@ -61,12 +73,12 @@ class MockAdapter {
     const wantsTools = (options.tools?.length ?? 0) > 0
     const imageBlocks = messages.flatMap((message) => message.content ?? []).filter((block) => block.type === 'image')
     const textBlocks = messages.flatMap((message) => message.content ?? []).filter((block) => block.type === 'text')
-    const hasFileRef = textBlocks.some((block) => /@[^\s@]+:\n```/.test(block.text ?? ''))
+    const hasFileRef = textBlocks.some((block) => /@[^\s@]+:\n(?:<!-- dsh:file_ref_start:[^\n]+ -->\n)?```/.test(block.text ?? ''))
     const asksQuestion = textBlocks.some((block) => /question-panel/.test(block.text ?? ''))
 
     if (hasFileRef && !hasToolResult) {
       const joined = textBlocks.map((block) => block.text ?? '').join('\n')
-      const refLine = joined.match(/@([^\s@]+):\n```(\w*)\n/)?.[1]
+      const refLine = joined.match(/@([^\s@]+):\n(?:<!-- dsh:file_ref_start:[^\n]+ -->\n)?```(\w*)\n/)?.[1]
       const text = `File reference received: ${refLine ?? 'unknown'}`
       for (const piece of text.split(/(?<=\s)/)) {
         await pause(10, signal)

@@ -918,3 +918,13 @@
 - 真实隔离验证通过：rc.1 安装、插件链接、`--dump-config`、standard preset 启动、`/status`、workspace-write → danger-full-access → read-only → workspace-write 权限轮换、空闲退出与恢复提示。
 - 自动验证通过：`npm test`、`npm run verify`、`git diff --check`、npm pack dry-run；新报告文件已进入包内容。
 - 扩展验证仍保留：真实 Provider 对话/工具循环、图片与 compact E2E、Windows PTY。它们不影响已复现的启动、Session 快照和权限契约修复结论。
+
+## DSH rc.1 完整验证准备（2026-09-03）
+
+- 现有 `test/run-pty-suite.sh` 已覆盖流式输出、审批/工具、权限切换、中断、文件引用、OSC 1337/Kitty 图片、`/compact`、`/preset` 和 `/resume`；它要求一个包含 `profiles/tui` 的 Harness fixture。
+- `test/mock-bundle` 提供本地 mock LLM adapter 和审批工具，不调用真实 Provider；它能确定性验证 TUI 与 DSH runtime 的会话、工具、图片与 PTY 集成，但 fixture 尚未自动构建。
+- 旧的 `/private/tmp/dsh-omc-tui-rc2-fixture` 与 `/private/tmp/dsh-tui-test2` 仅残留 `node_modules`，缺失 `profiles/tui/package.json`，不能作为有效 fixture。将改用新建的 rc.1 临时 Home，显式安装本项目和 `test/mock-bundle`。
+- 完整验证应分层：先构建 rc.1 + mock bundle 的隔离 profile 跑全 PTY；再仅在可用且不泄露凭据时，以独立临时工作目录发送最小真实 Provider 请求；真实图片/compact 结果与 mock runtime 契约应分别记录。
+- 补充验证发现 rc.1 在 `approval/asked` 与 `approval/decided` 之间写入 `session/title`；它是不可见元数据，旧分组器却会结束当前 activity span。最小修复后并行工具折叠恢复，单测与 `pty-features` 通过。
+- rc.1 mock adapter 需要 `prepareCall()`；图片直通还必须在模型 metadata 明确声明 `inputModalities: ['text', 'image']`。这两项均属于测试 Provider 契约，不是 TUI 本地 Runtime 替代实现。
+- 当前发布门禁证据：e2e、features、file、image 四条主链路通过；interaction 的 timing 文案和 resume 的 preset 标记仍是未关闭项。现有 `v0.2.9` 标签不含本轮 activity span 修复。

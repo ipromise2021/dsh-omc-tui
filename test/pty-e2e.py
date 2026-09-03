@@ -91,10 +91,13 @@ def cleanup(exit_code):
 
 try:
     boot = wait_for("type a message", 40)
+    # The isolated mock fixture registers 12 skills after rc.1's first composer
+    # frame; don't submit until Agent-facing registrations have settled.
+    assert wait_for("12 skills", 20), "mock fixture skills did not finish loading"
     log.append(f"\n===== BOOT (ready={boot}) =====\n{buf.decode('utf-8', 'replace')}")
 
     send("hello mock\r")
-    assert wait_for("approval needed", 20), "approval prompt missing"
+    assert wait_for("Do you want to make this edit", 20), "approval prompt missing"
     snapshot("approval-visible")
 
     send("y")  # allow
@@ -111,9 +114,11 @@ try:
     wait_for("interrupted", 10)
     snapshot("after-interrupt")
 
-    send("\x03")  # idle → quit
+    drain(1.0)  # let the cancelled turn restore the idle input handler
+    send("/exit\r")  # deterministic exit after the interrupt settles
     deadline = time.time() + 15
     while time.time() < deadline:
+        drain(0.2)
         got, status = os.waitpid(pid, os.WNOHANG)
         if got == pid:
             cleanup(os.waitstatus_to_exitcode(status))
@@ -122,6 +127,7 @@ try:
 except SystemExit:
     raise
 except Exception as error:
+    snapshot("script-error")
     log.append(f"\n===== SCRIPT ERROR: {error} =====\n")
     cleanup("error")
     raise SystemExit(1)
