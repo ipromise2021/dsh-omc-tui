@@ -28,6 +28,7 @@ export function summarizeToolCall(call, maxWidth = 60) {
   const args = parseToolArgs(call.data?.arguments)
   const name = safe(call.data?.name || 'tool')
   const isBash = /bash|shell|terminal|exec|run_command/i.test(name)
+  const isRunCode = /^run_?code$/i.test(name)
   const isSkill = /^skill$/i.test(name)
   const isWrite = /write|create|save/i.test(name)
   const isEdit = /edit|replace|patch/i.test(name)
@@ -38,6 +39,13 @@ export function summarizeToolCall(call, maxWidth = 60) {
   if (isBash) {
     const cmd = args.command ?? args.cmd ?? args.script ?? args.CommandLine ?? ''
     return { name: 'Bash', target: String(cmd), text: `Bash(${shorten(String(cmd), maxWidth)})` }
+  }
+  if (isRunCode) {
+    const code = args.code ?? args.script ?? args.source ?? ''
+    const language = args.language ?? args.lang ?? args.runtime ?? ''
+    const lineCount = typeof code === 'string' && code.length > 0 ? code.split(/\r?\n/).length : 0
+    const details = [language, lineCount > 0 ? `${lineCount} lines` : ''].filter(Boolean).join(' · ')
+    return { name: 'Run code', target: String(code), text: `Run code${details ? ` (${shorten(details, maxWidth)})` : ''}` }
   }
   if (isSkill) {
     const skill = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'instructions'
@@ -102,8 +110,15 @@ export function computeActivitySummary(span) {
   if (totalCalls === 1) {
     const firstSummary = summarizeToolCall(calls[0], 50)
     text = `${firstSummary.text}${durationText ? ` · ${durationText}` : ''}`
-  } else {
+    if (errorCount > 0) text += ` · ✗ ${errorCount} error${errorCount > 1 ? 's' : ''}`
+  } else if (totalCalls > 1) {
     const parts = [`${totalCalls} tools`, ...nameParts]
+    if (durationText) parts.push(durationText)
+    if (errorCount > 0) parts.push(`✗ ${errorCount} error${errorCount > 1 ? 's' : ''}`)
+    text = parts.join(' · ')
+  } else {
+    const resultName = safe(results.find((result) => result.data?.name)?.data?.name || '')
+    const parts = [resultName ? `${resultName} result` : 'Tool result']
     if (durationText) parts.push(durationText)
     if (errorCount > 0) parts.push(`✗ ${errorCount} error${errorCount > 1 ? 's' : ''}`)
     text = parts.join(' · ')
@@ -127,12 +142,22 @@ export function computeActivitySummary(span) {
 export function groupActivitySpans(events) {
   const items = []
   let currentSpan = null
+  const completedCalls = new Map()
+  const unresolvedSingleCallSpans = []
 
   const closeCurrentSpan = (state = 'completed', endTime = undefined) => {
     if (!currentSpan) return
     currentSpan.state = state
     if (endTime) currentSpan.endTime = endTime
     currentSpan.summary = computeActivitySummary(currentSpan)
+    const completedResultIds = new Set(currentSpan.results.map((result) => result.data?.callId ?? result.data?.id))
+    for (const call of currentSpan.calls) {
+      const callId = call.data?.callId ?? call.data?.id
+      if (callId !== undefined && !completedResultIds.has(callId)) completedCalls.set(callId, currentSpan)
+    }
+    if (currentSpan.calls.length === 1 && currentSpan.results.length === 0) {
+      unresolvedSingleCallSpans.push(currentSpan)
+    }
     items.push({
       kind: 'activity',
       span: currentSpan
@@ -143,6 +168,25 @@ export function groupActivitySpans(events) {
   for (let i = 0; i < events.length; i++) {
     const event = events[i]
     const type = event.type
+
+    if (type === 'tool/result' && !currentSpan) {
+      const callId = event.data?.callId ?? event.data?.id
+      const completedSpan = (callId === undefined ? undefined : completedCalls.get(callId))
+        ?? unresolvedSingleCallSpans.at(-1)
+      if (completedSpan) {
+        completedSpan.events.push(event)
+        completedSpan.results.push(event)
+        completedSpan.endSeq = event.seq
+        completedSpan.endTime = Number(event.time) || completedSpan.endTime
+        completedSpan.summary = computeActivitySummary(completedSpan)
+        const completedCallId = completedSpan.calls[0]?.data?.callId ?? completedSpan.calls[0]?.data?.id
+        if (callId !== undefined) completedCalls.delete(callId)
+        if (completedCallId !== undefined) completedCalls.delete(completedCallId)
+        const unresolvedIndex = unresolvedSingleCallSpans.lastIndexOf(completedSpan)
+        if (unresolvedIndex >= 0) unresolvedSingleCallSpans.splice(unresolvedIndex, 1)
+        continue
+      }
+    }
 
     if (isToolEvent(type)) {
       if (!currentSpan) {

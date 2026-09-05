@@ -490,7 +490,7 @@ export class TuiApp {
       const callback = typeof encoding === 'function' ? encoding : cb
       const writeEncoding = typeof encoding === 'string' ? encoding : 'utf8'
       const text = String(chunk ?? '')
-      if (/Ignoring invalid configuration option|Database connection test failed|Access denied for user|Can't find any matching password/i.test(text)) {
+      if (/Ignoring invalid configuration option|Database connection test failed|Access denied for user|Can't find any matching password|ExperimentalWarning:\s*stripTypeScriptTypes is an experimental feature/i.test(text)) {
         if (typeof callback === 'function') callback()
         return true
       }
@@ -504,6 +504,10 @@ export class TuiApp {
         }
         this.clearFooter()
         const result = write()
+        // Direct stderr output moves the real terminal cursor and overwrites
+        // rows behind the alternate-screen renderer's back. Its cached frame
+        // is now stale even when the logical document did not change.
+        this.screenRenderer?.invalidate?.()
         this.render()
         return result
       } else {
@@ -6217,7 +6221,8 @@ export class TuiApp {
   }
 
   ruleStyle() {
-    return this.inBashMode() ? ANSI.bash : ANSI.rule
+    if (this.inBashMode()) return ANSI.bash
+    return this.active && this.input === '' ? ANSI.detail : ANSI.rule
   }
 
   runBash(command) {
@@ -6765,7 +6770,10 @@ export class TuiApp {
       else if (value === '\x7f' || value === '\x08') {
         const atIndex = this.input.lastIndexOf('@', this.cursor - 1)
         const afterAt = this.input.slice(atIndex + 1, this.cursor)
-        if (afterAt === '' || afterAt.endsWith('/')) this.goUpFilePicker()
+        if (atIndex === -1 || afterAt === '') {
+          this.closeFilePicker()
+          this.eraseBefore()
+        } else if (afterAt.endsWith('/')) this.goUpFilePicker()
         else this.eraseBefore()
       }
       return
@@ -6952,6 +6960,14 @@ export class TuiApp {
     }
 
     if (value === '\x1b') {
+      const isScrolledAwayFromEnd = this.viewport && (
+        !this.viewport.followEnd || this.viewport.scrollTop < this.viewport.maxScroll()
+      )
+      if (this.agent?.status === 'running' && isScrolledAwayFromEnd) {
+        this.viewport.scrollToBottom()
+        this.scheduleRender(true)
+        return
+      }
       if (this.withdrawQueuedSubmission()) return
       if (this.agent?.status === 'running') {
         this.clearPromptSuggestion()
@@ -7524,7 +7540,8 @@ export class TuiApp {
     this.caretRow = undefined
     this.caretCol = undefined
     const bashMode = this.inBashMode()
-    const prompt = bashMode ? `${ANSI.bash}!${ANSI.reset} ` : `${ANSI.blue}❯${ANSI.reset} `
+    const promptStyle = this.active && this.input === '' ? `${ANSI.blue}${ANSI.bold}` : ANSI.blue
+    const prompt = bashMode ? `${ANSI.bash}!${ANSI.reset} ` : `${promptStyle}❯${ANSI.reset} `
     const prefixWidth = 2
     const draftWidth = Math.max(24, columns - prefixWidth - 1)
     if (!this.agent) {
@@ -7576,16 +7593,19 @@ export class TuiApp {
       this.inputRowCount = 1
       this.inputWindowStart = 0
       this.inputOffsets = [0]
+      const emptyHint = this.active
+        ? ''
+        : `${ANSI.muted}type a message, or / for commands${ANSI.reset}`
       if (imageTags) {
         return [
-          `${prompt}${imageTags} ${ANSI.muted}type a message, or / for commands${ANSI.reset}${status}`
+          `${prompt}${imageTags} ${emptyHint}${status}`
         ]
       }
       if (this.promptSuggestion?.text && this.preferences?.promptSuggestions !== false) {
         const suggestion = truncateWidth(this.promptSuggestion.text, Math.max(10, columns - prefixWidth - 18))
         return [`${prompt}${ANSI.muted}${safe(suggestion)}${ANSI.reset} ${ANSI.dim}· Tab applies${ANSI.reset}`]
       }
-      return [`${prompt}${ANSI.muted}type a message, or / for commands${ANSI.reset}`]
+      return [`${prompt}${emptyHint}`]
     }
 
     // In bash mode, the prompt prefix already shows "!", so strip the leading "!" from display
@@ -7868,9 +7888,11 @@ export class TuiApp {
       const remain = Math.max(2, columns - widthOf(visibleOf(badgeText)))
       topRule = `${this.ruleStyle()}─── ${ANSI.dim}History ${histPos}${ANSI.reset}${this.ruleStyle()} ${'─'.repeat(remain)}${ANSI.reset}`
     } else if (linesBelow > 0 && !this.viewport.followEnd) {
-      const jumpText = `─── ↓ Jump to bottom (Esc · ${linesBelow} lines below) `
-      const remain = Math.max(2, columns - widthOf(visibleOf(jumpText)))
-      topRule = `${this.ruleStyle()}─── ${ANSI.blue}${ANSI.bold}↓ Jump to bottom${ANSI.reset} ${ANSI.dim}(Esc · ${linesBelow} lines below)${ANSI.reset}${this.ruleStyle()} ${'─'.repeat(remain)}${ANSI.reset}`
+      const jumpText = ` ↓ Jump to bottom (Esc · ${linesBelow} lines below) `
+      const jumpWidth = widthOf(jumpText)
+      const leftRuleWidth = Math.max(0, Math.floor((columns - jumpWidth) / 2))
+      const rightRuleWidth = Math.max(0, columns - jumpWidth - leftRuleWidth)
+      topRule = `${this.ruleStyle()}${'─'.repeat(leftRuleWidth)}${ANSI.reset} ${ANSI.blue}${ANSI.bold}↓ Jump to bottom${ANSI.reset} ${ANSI.dim}(Esc · ${linesBelow} lines below)${ANSI.reset} ${this.ruleStyle()}${'─'.repeat(rightRuleWidth)}${ANSI.reset}`
     } else {
       topRule = `${this.ruleStyle()}${'─'.repeat(Math.max(10, columns))}${ANSI.reset}`
     }

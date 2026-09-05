@@ -8,6 +8,7 @@
 
 | 版本 | 日期 | 说明 |
 | :--- | :--- | :--- |
+| **v0.2.11** | 2026-09-05 | **终端输入与工具活动投影可靠性修复**。运行期间保持输入框结构稳定并移除易误解的固定提示，过滤 `stripTypeScriptTypes` Node 实验警告且在外部 stderr 后强制刷新缓存；兼容 VS Code 空闲后拆分送达的 SGR 鼠标滚轮报告，避免控制序列泄漏成乱码；`Jump to bottom` 居中显示，生成期间按 Esc 先滚动到底部、再次按下才中断；修正跨空消息到达的工具结果被投影为 `0 tools`，为 `run_code` 显示语言、代码行数、错误状态并在展开时呈现完整执行代码；裸 `@` 文件匹配触发符现在一次 Backspace 即可删除并关闭面板。 |
 | **v0.2.10** | 2026-09-03 | **DSH rc.1 PTY 发布门禁闭环**。适配 `userQuestions` 从旧 provider 注册迁移至 Agent-scoped `user-questions/request` waterfall，同时保留旧 API 后备；修正 rc.1 上下文注入中的文件和图片内容块识别。隔离 rc.1 mock Profile 的六项 PTY（流式工具、功能、文件、图片、交互、resume）全部通过。 |
 | **v0.2.9** | 2026-09-03 | **DSH v0.1.2-rc.1 兼容适配与交互可靠性升级**。统一使用 rc.1 `snapshotEvents()` 会话快照与 `permissionPresets.current(session)` 权限契约，并保留集中式旧契约回退；补挂 preset 所需的 subagent model-selection Host 服务，移除失效 patch，19 个 DSH peer 对齐 rc.1；真实隔离 Profile 启动、`/status` 与权限轮换通过。同时加入安全会话导出、TUI 版本状态、未知 slash prompt 修复、视觉模型选项标识，以及 Jobs/Shell 输出、取消、竞态和小窗口布局加固。完整上游报告见 `DSH_V0.1.2_RC1_ADAPTATION.md`。 |
 | **v0.2.8** | 2026-08-29 | **Reasoning effort 默认选择持久化**。通过 Harness `agentDefaultModel.saveSelection()` 保存完整 provider、model 与 effort，确保新会话恢复已选等级；直接 `/effort <id>` 会按模型能力校验，拒绝持久化无效值；设置写入失败时保持当前模型和 effort 不变。文档同步明确官方 npm 包 [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) 截至 2026-08-29 的 `latest` / `next` 均为 `0.1.1-rc.2`。 |

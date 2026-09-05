@@ -56,6 +56,46 @@ assert.equal(multiBlocks.length, 2, 'Document should keep contiguous tool nodes 
 assert.match(multiBlocks[0].summary, /Read\(a\.js\)/)
 assert.match(multiBlocks[1].summary, /2 tools · Read · Edit/)
 
+// A provider may persist an assistant boundary between a tool call and its
+// result. Keep the pair together by callId so a result is not rendered as
+// a misleading "0 tools" activity.
+const splitRunCodeEvents = [
+  { seq: 1, type: 'tool/call', time: 1000, data: { callId: 'run-1', name: 'run_code', arguments: JSON.stringify({ language: 'python', code: 'print(1)\nprint(2)' }) } },
+  { seq: 2, type: 'assistant/message', time: 1100, data: { message: { content: '' } } },
+  { seq: 3, type: 'tool/result', time: 1200, data: { callId: 'run-1', error: { code: 'execution_failed', message: 'boom' } } }
+]
+const splitRunCodeSpans = groupActivitySpans(splitRunCodeEvents).filter((item) => item.kind === 'activity')
+assert.equal(splitRunCodeSpans.length, 1)
+assert.equal(splitRunCodeSpans[0].span.calls.length, 1)
+assert.equal(splitRunCodeSpans[0].span.results.length, 1)
+const splitRunCodeDoc = projectTranscript(splitRunCodeEvents, 80)
+const splitRunCodeBlock = splitRunCodeDoc.blocks.find((block) => block.kind === 'activity')
+assert.match(splitRunCodeBlock.summary, /Run code \(python · 2 lines\) · 0\.2s · ✗ 1 error/)
+assert.doesNotMatch(splitRunCodeDoc.rows.join('\n'), /0 tools/)
+
+const expandedRunCodeDoc = projectTranscript(splitRunCodeEvents, 80, {
+  expandedKeys: new Set([splitRunCodeBlock.key])
+})
+const expandedRunCodeText = visibleOf(expandedRunCodeDoc.rows.join('\n'))
+assert.match(expandedRunCodeText, /print\(1\)/, 'Expanded run_code activity should show the executed code')
+assert.match(expandedRunCodeText, /print\(2\)/, 'Expanded run_code activity should show every code line')
+assert.match(expandedRunCodeText, /execution_failed · boom/, 'Expanded run_code activity should keep its result details')
+for (const row of expandedRunCodeDoc.rows) {
+  assert.ok(widthOf(visibleOf(row)) <= 80, `Expanded run_code row exceeds terminal width: "${visibleOf(row)}"`)
+}
+
+// Some tool providers omit callId from both events. A lone pending call can
+// still safely absorb its immediately following result after an empty message.
+const unkeyedRunCodeEvents = [
+  { seq: 1, type: 'tool/call', time: 1000, data: { name: 'run_code', arguments: JSON.stringify({ code: '1 + 1' }) } },
+  { seq: 2, type: 'assistant/message', time: 1100, data: { message: { content: '' } } },
+  { seq: 3, type: 'tool/result', time: 1200, data: { error: { code: 'execution_failed', message: 'boom' } } }
+]
+const unkeyedRunCodeSpans = groupActivitySpans(unkeyedRunCodeEvents).filter((item) => item.kind === 'activity')
+assert.equal(unkeyedRunCodeSpans.length, 1)
+assert.equal(unkeyedRunCodeSpans[0].span.results.length, 1)
+assert.match(unkeyedRunCodeSpans[0].span.summary.summaryText, /Run code \(1 lines\) · 0\.2s · ✗ 1 error/)
+
 // 4. Approval and Hook integration
 const approvalEvents = [
   { seq: 1, type: 'tool/call', time: 1000, data: { callId: 'c4', name: 'bash', arguments: JSON.stringify({ command: 'rm -rf dist' }) } },

@@ -115,6 +115,18 @@ router.processInput('abc')
 assert.deepEqual(tokenEvents, ['a', 'b', 'c'], 'Typing after a truncated X10 report must remain intact')
 assert.equal(mouseEvents.length, 0, 'An expired X10 report must not create a mouse event')
 
+// 8.3 VS Code can deliver Escape before the rest of an SGR wheel report after
+// idle. Once Escape has timed out, the bare report must still be consumed.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 60))
+router.processInput('[<65;62;38M')
+assert.equal(mouseEvents.length, 1, 'A bare SGR wheel remainder must be parsed')
+assert.equal(mouseEvents[0].type, 'wheel')
+assert.equal(mouseEvents[0].deltaY, 2)
+assert.deepEqual(tokenEvents, [], 'The delayed Escape must remain part of the mouse report')
+
 // 9. Split Bracketed Paste across chunks
 pasteEvents = []
 router.processInput('\x1b[200~function test() {')

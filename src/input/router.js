@@ -1,7 +1,7 @@
 import { parseSgrMouse, parseX10Mouse } from './mouse.js'
 
-const SGR_MOUSE_SEQUENCE = /^(\x1b\[<\d+;\d+;\d+[Mm])/
-const SGR_MOUSE_PREFIX = /^\x1b\[<\d*(?:;\d*){0,2}$/
+const SGR_MOUSE_SEQUENCE = /^(\x1b?\[<\d+;\d+;\d+[Mm])/
+const SGR_MOUSE_PREFIX = /^\x1b?\[<\d*(?:;\d*){0,2}$/
 const MAX_SGR_MOUSE_LENGTH = 64
 
 export class InputRouter {
@@ -62,6 +62,29 @@ export class InputRouter {
 
     let i = 0
     while (i < str.length) {
+      // A preceding standalone Escape can already have been consumed by the
+      // terminal's idle-timeout path. Consume the remaining SGR report before
+      // it reaches normal text handling.
+      if (str.startsWith('[<', i)) {
+        const tail = str.slice(i)
+        const sgrMatch = tail.match(SGR_MOUSE_SEQUENCE)
+        if (sgrMatch) {
+          const sgrToken = sgrMatch[1]
+          const mouseEvent = parseSgrMouse(`\x1b${sgrToken}`)
+          if (mouseEvent) this.dispatchMouseEvent(mouseEvent)
+          i += sgrToken.length
+          continue
+        }
+        if (SGR_MOUSE_PREFIX.test(tail)) {
+          this.buffer = tail
+          this.bufferKind = 'sgr-mouse'
+          this.bufferContinuation = pendingKind === 'sgr-mouse'
+            ? pendingContinuation + incoming
+            : ''
+          return
+        }
+      }
+
       // 2. Bracketed paste start
       if (str.startsWith('\x1b[200~', i)) {
         this.inPaste = true
@@ -85,12 +108,15 @@ export class InputRouter {
       if (str[i] === '\x1b') {
         const tail = str.slice(i)
 
-        // SGR Mouse Protocol: \x1b[<Cb;Cx;Cy(M|m)
-        if (tail.startsWith('\x1b[<')) {
+        // SGR Mouse Protocol: \x1b[<Cb;Cx;Cy(M|m). VS Code can split the
+        // leading Escape into an earlier stdin chunk after the terminal has
+        // been idle. Accept the remaining bare [<... report as mouse input
+        // too, rather than allowing it to leak into the composer.
+        if (tail.startsWith('\x1b[<') || tail.startsWith('[<')) {
           const sgrMatch = tail.match(SGR_MOUSE_SEQUENCE)
           if (sgrMatch) {
             const sgrToken = sgrMatch[1]
-            const mouseEvent = parseSgrMouse(sgrToken)
+            const mouseEvent = parseSgrMouse(sgrToken.startsWith('\x1b') ? sgrToken : `\x1b${sgrToken}`)
             if (mouseEvent) this.dispatchMouseEvent(mouseEvent)
             i += sgrToken.length
             continue
@@ -168,7 +194,10 @@ export class InputRouter {
         // Incomplete CSI / SS3 sequence prefix at the end of input chunk
         if (tail === '\x1b' || /^\x1b\[[0-9;]*$/.test(tail) || tail === '\x1bO' || tail === '\x1b\x1b' || /^\x1b\x1b\[[0-9;]*$/.test(tail)) {
           this.buffer = tail
-          this.setFlushTimer()
+          // VS Code may deliver the Escape at the start of an SGR mouse
+          // report separately after an idle period. A slightly longer grace
+          // window avoids treating that byte as a task-cancelling Escape.
+          this.setFlushTimer(tail === '\x1b' ? 150 : 40)
           return
         }
       }
@@ -180,7 +209,7 @@ export class InputRouter {
     }
   }
 
-  setFlushTimer() {
+  setFlushTimer(delayMs = 40) {
     if (this.flushTimer) clearTimeout(this.flushTimer)
     this.flushTimer = setTimeout(() => {
       if (this.buffer) {
@@ -199,7 +228,7 @@ export class InputRouter {
           }
         }
       }
-    }, 40)
+    }, delayMs)
   }
 
   dispose() {

@@ -566,6 +566,19 @@ assert.equal(filePickerRefreshes, 0)
 TuiApp.prototype.maybeOpenFilePicker.call(recalledPrompt, true)
 assert.equal(filePickerRefreshes, 1)
 
+const bareFileMentionApp = new TuiApp({})
+bareFileMentionApp.input = 'review @'
+bareFileMentionApp.cursor = bareFileMentionApp.input.length
+bareFileMentionApp.filePicker = { baseDir: '', query: '', entries: [{ rel: 'src', name: 'src', isDir: true }], selected: 0 }
+bareFileMentionApp.currentFileQuery = ''
+bareFileMentionApp.scheduleRender = noop
+bareFileMentionApp.updateMenu = noop
+bareFileMentionApp.handleToken('\x7f')
+assert.equal(bareFileMentionApp.input, 'review ', 'Backspace should delete a bare @ trigger in one press')
+assert.equal(bareFileMentionApp.cursor, 'review '.length)
+assert.equal(bareFileMentionApp.filePicker, undefined, 'Deleting a bare @ should close file matching')
+assert.equal(bareFileMentionApp.currentFileQuery, undefined)
+
 let startupRepainted = false
 const startupApp = {
   initializing: { startedAt: Date.now() },
@@ -608,7 +621,9 @@ assert.equal(backgroundStarted, true)
 
 const originalStderrWrite = process.stderr.write
 let stderrCallbackCalled = false
+const stderrWrites = []
 process.stderr.write = (_chunk, encoding, callback) => {
+  stderrWrites.push(String(_chunk))
   const done = typeof encoding === 'function' ? encoding : callback
   done?.()
   return true
@@ -616,16 +631,23 @@ process.stderr.write = (_chunk, encoding, callback) => {
 const stderrApp = new TuiApp({})
 let stderrFooterCleared = false
 let stderrFooterRendered = false
+let stderrScreenInvalidated = false
 stderrApp.terminalOpen = true
 stderrApp.lastFooterHeight = 2
 stderrApp.clearFooter = () => { stderrFooterCleared = true }
 stderrApp.render = () => { stderrFooterRendered = true }
+stderrApp.screenRenderer = { invalidate: () => { stderrScreenInvalidated = true } }
 process.stderr.write('stderr callback probe', () => { stderrCallbackCalled = true })
+let experimentalWarningCallbackCalled = false
+process.stderr.write('(node:7453) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time\n', () => { experimentalWarningCallbackCalled = true })
 for (const dispose of [...stderrApp.disposers].reverse()) dispose()
 process.stderr.write = originalStderrWrite
 assert.equal(stderrCallbackCalled, true)
 assert.equal(stderrFooterCleared, true)
 assert.equal(stderrFooterRendered, true)
+assert.equal(stderrScreenInvalidated, true)
+assert.equal(experimentalWarningCallbackCalled, true)
+assert.deepEqual(stderrWrites, ['stderr callback probe'], 'stripTypeScriptTypes warning must not reach the terminal')
 
 let oldDisposed = false
 let repaintCleared = false
@@ -3147,6 +3169,51 @@ const histFooter = panelLayoutApp.buildFooter(80, 24)
 assert.ok(histFooter.some((l) => l.includes('History 2/3')), 'History indicator MUST be displayed on input top line')
 panelLayoutApp.historyIndex = -1
 
+// Jump-to-bottom notice is centered in the input separator.
+panelLayoutApp.viewport = { followEnd: false, scrollTop: 90, maxScroll: () => 100 }
+const jumpFooter = panelLayoutApp.buildFooter(80, 24)
+const jumpRule = visibleOf(jumpFooter.find((line) => line.includes('Jump to bottom')))
+const jumpLabel = ' ↓ Jump to bottom (Esc · 10 lines below) '
+const jumpStart = jumpRule.indexOf(jumpLabel)
+assert.ok(jumpStart >= 0, 'jump-to-bottom notice must be present')
+assert.ok(Math.abs(jumpStart - (jumpRule.length - jumpStart - jumpLabel.length)) <= 1, 'jump-to-bottom notice must be centered')
+panelLayoutApp.viewport = undefined
+
+// The draft prompt must stay visible while a tool is running, including on
+// light terminals where the normal muted placeholder has insufficient contrast.
+panelLayoutApp.agent = {}
+panelLayoutApp.active = true
+panelLayoutApp.input = ''
+const activeInputLines = panelLayoutApp.inputFrame(80)
+assert.equal(visibleOf(activeInputLines[0]).trim(), '❯', 'active empty input must not add a text hint')
+assert.ok(activeInputLines[0].includes('\x1b[1m'), 'active empty input prompt must stay visible')
+assert.equal(panelLayoutApp.ruleStyle(), ANSI.detail, 'active empty input must use visible borders')
+panelLayoutApp.active = false
+
+// While a response is running, Escape first restores follow mode and only a
+// subsequent Escape interrupts the agent.
+const escapePriorityApp = new TuiApp({})
+let escapeJumped = 0
+let escapeCancelled = 0
+escapePriorityApp.agent = { status: 'running', cancel: () => { escapeCancelled += 1 } }
+escapePriorityApp.viewport = {
+  followEnd: false,
+  scrollTop: 5,
+  maxScroll: () => 10,
+  scrollToBottom() {
+    escapeJumped += 1
+    this.scrollTop = 10
+    this.followEnd = true
+  }
+}
+escapePriorityApp.scheduleRender = noop
+escapePriorityApp.handleToken('\x1b')
+assert.equal(escapeJumped, 1)
+assert.equal(escapeCancelled, 0, 'first Escape must not interrupt while scrolled up')
+escapePriorityApp.handleToken('\x1b')
+assert.equal(escapeCancelled, 1, 'second Escape at the bottom must interrupt')
+for (const dispose of [...escapePriorityApp.disposers].reverse()) dispose()
+
 // Secondary panel layout test: effort picker / model picker are rendered below input box
 panelLayoutApp.effortPicker = { efforts: ['low', 'medium', 'high', 'max'], selected: 0 }
 panelLayoutApp.input = ''
@@ -4365,7 +4432,7 @@ inertDispose()
   })
   const { handleStatus } = await import('../src/commands/status.js')
   handleStatus(testStatusApp)
-  assert.match(statusLogOutput, /TUI:\s+dsh-omc-tui v0\.2\.10/)
+  assert.match(statusLogOutput, /TUI:\s+dsh-omc-tui v0\.2\.11/)
   assert.ok(statusLogOutput.includes('0 / 100.0k tokens (0%)') || statusLogOutput.includes('0 / 100k tokens (0%)') || statusLogOutput.includes('0 tokens (0%)'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
 }
 

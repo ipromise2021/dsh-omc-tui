@@ -93,6 +93,7 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
           const args = parseToolArgs(event.data?.arguments)
           const name = safe(event.data?.name || 'tool')
           const isBash = /bash|shell|terminal|exec/i.test(name)
+          const isRunCode = /^run_?code$/i.test(name)
           const isSkill = /^skill$/i.test(name)
           const isWrite = /write|create|save/i.test(name)
           const isEdit = /edit|replace|patch/i.test(name)
@@ -104,6 +105,10 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
             const command = args.command ?? args.cmd ?? args.script ?? ''
             line = `${indent}${ANSI.amber}● Bash(${safe(shorten(String(command), Math.max(20, contentWidth - 16)))})`
             logicalText = `Bash(${command})`
+          } else if (isRunCode) {
+            const summary = summarizeToolCall(event, Math.max(20, contentWidth - 16))
+            line = `${indent}${ANSI.amber}● ${safe(summary.text)}`
+            logicalText = summary.text
           } else if (isSkill) {
             const skillName = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'instructions'
             line = `${indent}${ANSI.blueSoft}● Skill(${safe(shorten(String(skillName), Math.max(20, contentWidth - 16)))})`
@@ -131,6 +136,25 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
           }
           detailRows.push(line)
           logicalLines.push(logicalText)
+
+          if (isRunCode) {
+            const rawCode = args.code ?? args.script ?? args.source
+            if (rawCode !== undefined && rawCode !== null && String(rawCode).length > 0) {
+              const code = safe(String(rawCode)).replace(/\t/g, '  ')
+              const boxWidth = Math.max(8, contentWidth - widthOf(indent))
+              const innerWidth = Math.max(6, boxWidth - 2)
+              const codeWidth = Math.max(4, innerWidth - 2)
+              const codeLines = wrap(code, codeWidth)
+
+              detailRows.push(`${indent}${ANSI.rule}╭${'─'.repeat(innerWidth)}╮${ANSI.reset}`)
+              for (const codeLine of codeLines) {
+                const padding = ' '.repeat(Math.max(0, codeWidth - widthOf(codeLine)))
+                detailRows.push(`${indent}${ANSI.rule}│${ANSI.reset} ${ANSI.ink}${codeLine}${padding}${ANSI.reset} ${ANSI.rule}│${ANSI.reset}`)
+              }
+              detailRows.push(`${indent}${ANSI.rule}╰${'─'.repeat(innerWidth)}╯${ANSI.reset}`)
+              logicalLines.push(code)
+            }
+          }
         } else if (event.type === 'approval/asked') {
           detailRows.push(`${indent}${ANSI.coral}! approval needed · ${safe(event.data?.toolName ?? '')}${ANSI.reset}`)
           logicalLines.push(`! approval needed · ${event.data?.toolName ?? ''}`)
