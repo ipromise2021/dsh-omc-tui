@@ -131,6 +131,20 @@ screen.initTerminal()
 assert.ok(capturedOutput.includes('\x1b[?1049h'), 'Must enter alt screen')
 
 capturedOutput = ''
+screen.reassertInputModes({ enterAltScreen: true })
+assert.ok(capturedOutput.includes('\x1b[?1049h'), 'Terminal recovery must re-enter alt screen when requested')
+assert.ok(capturedOutput.includes('\x1b[?1006h'), 'Terminal recovery must re-enable SGR mouse input')
+assert.ok(capturedOutput.includes('\x1b[?2004h'), 'Terminal recovery must re-enable bracketed paste')
+
+capturedOutput = ''
+screen.restoreInputModes()
+assert.ok(capturedOutput.includes('\x1b[?1000l'), 'Emergency restore must disable mouse tracking')
+assert.ok(capturedOutput.includes('\x1b[?1003l'), 'Emergency restore must disable any-motion mouse tracking')
+assert.ok(capturedOutput.includes('\x1b[?1006l'), 'Emergency restore must disable SGR mouse input')
+assert.ok(capturedOutput.includes('\x1b[?2004l'), 'Emergency restore must disable bracketed paste')
+assert.ok(capturedOutput.includes('\x1b[?25h'), 'Emergency restore must show the cursor')
+
+capturedOutput = ''
 screen.restoreTerminal(['Transcript line 1', 'Transcript line 2'])
 assert.ok(capturedOutput.includes('\x1b[?1049l'), 'Must exit alt screen')
 assert.ok(capturedOutput.includes('Transcript line 1'), 'Must flush transcript to main screen on restore')

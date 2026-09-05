@@ -7,7 +7,7 @@ export const TERM_CODES = {
   ENABLE_BRACKETED_PASTE: '\x1b[?2004h',
   DISABLE_BRACKETED_PASTE: '\x1b[?2004l',
   ENABLE_MOUSE_SGR: '\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1007l',
-  DISABLE_MOUSE_SGR: '\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1007h',
+  DISABLE_MOUSE_SGR: '\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1007h',
   SHOW_CURSOR: '\x1b[?25h',
   HIDE_CURSOR: '\x1b[?25l',
   CLEAR_SCREEN: '\x1b[2J\x1b[H',
@@ -37,16 +37,27 @@ export class ScreenRenderer {
     )
   }
 
-  restoreTerminal(fullTranscriptRows = []) {
+  reassertInputModes({ enterAltScreen = false } = {}) {
     if (!this.initialized) return
-    this.initialized = false
+    this.stdout.write(
+      (enterAltScreen ? TERM_CODES.ENTER_ALT_SCREEN : '') +
+      TERM_CODES.ENABLE_BRACKETED_PASTE +
+      TERM_CODES.ENABLE_MOUSE_SGR
+    )
+  }
 
-    // First disable mouse and bracketed paste
+  restoreInputModes() {
     this.stdout.write(
       TERM_CODES.DISABLE_MOUSE_SGR +
       TERM_CODES.DISABLE_BRACKETED_PASTE +
       TERM_CODES.SHOW_CURSOR
     )
+  }
+
+  restoreTerminal(fullTranscriptRows = []) {
+    if (!this.initialized) return
+    this.restoreInputModes()
+    this.initialized = false
 
     if (this.isAltScreen) {
       // Exit alt screen

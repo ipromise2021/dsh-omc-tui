@@ -15,7 +15,6 @@ import {
   defaultTheme,
   ANSI,
   applyTheme,
-  TERMINAL_MOUSE_OFF,
   STATUSLINE_MODES,
   CONTEXT_DISPLAY_MODES,
   DEFAULT_DISABLED_SKILLS,
@@ -459,6 +458,9 @@ export class TuiApp {
     this.autoRecapTimer = undefined
     this.lastRecappedSeq = undefined
     this.animationTimer = undefined
+    this.terminalHealthTimer = undefined
+    this.lastTerminalModeAssertionAt = 0
+    this.terminalSignalExitStarted = false
     this.caretRow = undefined
     this.caretCol = undefined
     this.overlayCaretRow = undefined
@@ -530,6 +532,7 @@ export class TuiApp {
       clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         if (!this.terminalOpen) return
+        this.recoverTerminalInputModes({ enterAltScreen: true })
         const newCols = process.stdout.columns || 80
         const newRows = process.stdout.rows || 24
         this.lastCols = newCols
@@ -836,18 +839,84 @@ export class TuiApp {
     saveMruFile(this.stateDir(), this.mru)
   }
 
+  recoverTerminalInputModes({ enterAltScreen = false, repaint = false, reassertModes = true } = {}) {
+    if (!this.terminalOpen) return
+    let rawModeWasLost = false
+    try {
+      if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') {
+        rawModeWasLost = !process.stdin.isRaw
+        if (rawModeWasLost) process.stdin.setRawMode(true)
+      }
+      if (process.stdin.isPaused()) process.stdin.resume()
+    } catch {}
+    if (reassertModes || enterAltScreen || rawModeWasLost) {
+      try {
+        this.screenRenderer.reassertInputModes({ enterAltScreen: enterAltScreen || rawModeWasLost })
+        this.lastTerminalModeAssertionAt = Date.now()
+      } catch {}
+    }
+    if (repaint || rawModeWasLost) {
+      this.screenRenderer.invalidate?.()
+      this.clearScreenRequested = true
+      this.repaint(true)
+    }
+  }
+
+  restoreTerminalInputModes() {
+    if (!this.terminalOpen) return
+    try { this.screenRenderer.restoreInputModes() } catch {}
+    try {
+      if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') process.stdin.setRawMode(false)
+    } catch {}
+  }
+
   openTerminal() {
     this.terminalOpen = true
     this.screenRenderer.initTerminal()
+    this.lastTerminalModeAssertionAt = Date.now()
     if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') process.stdin.setRawMode(true)
     process.stdin.resume()
     process.stdin.on('data', this.onData)
     process.stdout.on('resize', this.onResize)
-    const onSignal = () => {
-      void this.quit(0)
+    const onSignal = (code) => {
+      if (this.terminalSignalExitStarted) return
+      this.terminalSignalExitStarted = true
+      this.restoreTerminalInputModes()
+      void this.quit(code, { ignoreJobErrors: true })
     }
-    process.on('SIGTERM', onSignal)
-    this.disposers.push(() => process.off('SIGTERM', onSignal))
+    const onSigint = () => onSignal(130)
+    const onSighup = () => onSignal(129)
+    const onSigterm = () => onSignal(143)
+    const onSigcont = () => {
+      if (!this.terminalSignalExitStarted) {
+        this.recoverTerminalInputModes({ enterAltScreen: true, repaint: true })
+      }
+    }
+    const onExit = () => this.restoreTerminalInputModes()
+    process.on('SIGINT', onSigint)
+    process.on('SIGTERM', onSigterm)
+    if (process.platform !== 'win32') {
+      process.on('SIGHUP', onSighup)
+      process.on('SIGCONT', onSigcont)
+    }
+    process.on('exit', onExit)
+    this.disposers.push(() => process.off('exit', onExit))
+    if (process.platform !== 'win32') {
+      this.disposers.push(() => process.off('SIGCONT', onSigcont))
+      this.disposers.push(() => process.off('SIGHUP', onSighup))
+    }
+    this.disposers.push(() => process.off('SIGTERM', onSigterm))
+    this.disposers.push(() => process.off('SIGINT', onSigint))
+
+    this.terminalHealthTimer = setInterval(() => {
+      const modeRefreshDue = Date.now() - this.lastTerminalModeAssertionAt >= 30_000
+      this.recoverTerminalInputModes({ reassertModes: modeRefreshDue })
+    }, 5000)
+    this.terminalHealthTimer.unref?.()
+    this.disposers.push(() => {
+      clearInterval(this.terminalHealthTimer)
+      this.terminalHealthTimer = undefined
+    })
   }
 
   async stop({ ignoreJobErrors = false } = {}) {
@@ -929,10 +998,10 @@ export class TuiApp {
     return this.stopPromise
   }
 
-  async quit(code = 0) {
+  async quit(code = 0, { ignoreJobErrors = false } = {}) {
     const exit = this.ctx.get('appExit')
     try {
-      await this.stop()
+      await this.stop({ ignoreJobErrors })
     } catch (error) {
       this.log('error', error instanceof Error ? error.message : String(error), '/exit')
       this.message = ''
@@ -3527,8 +3596,7 @@ export class TuiApp {
     if (process.stdin.isTTY) process.stdin.setRawMode(false)
     const editor = process.env.EDITOR || process.env.VISUAL || 'vim'
     spawnSync(editor, [tmp], { stdio: 'inherit' })
-    process.stdout.write(`${TERMINAL_MOUSE_OFF}\x1b[?25l\x1b[?2004h`)
-    if (process.stdin.isTTY) process.stdin.setRawMode(true)
+    this.recoverTerminalInputModes({ enterAltScreen: true, repaint: true })
     try {
       const value = await readFile(tmp, 'utf8')
       this.input = value.replace(/\r?\n$/, '')

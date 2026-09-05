@@ -592,6 +592,32 @@ assert.equal(startupApp.lastFooterHeight, 0)
 assert.equal(startupApp.lastCursorRowInFooter, 0)
 assert.equal(startupRepainted, true)
 
+let recoveredInputModes
+let recoveredInputModeCalls = 0
+let recoveryInvalidated = false
+let recoveryRepainted = false
+let restoredInputModes = false
+const terminalRecoveryApp = {
+  terminalOpen: true,
+  screenRenderer: {
+    reassertInputModes(options) {
+      recoveredInputModes = options
+      recoveredInputModeCalls += 1
+    },
+    restoreInputModes() { restoredInputModes = true },
+    invalidate() { recoveryInvalidated = true }
+  },
+  repaint(clear) { recoveryRepainted = clear }
+}
+TuiApp.prototype.recoverTerminalInputModes.call(terminalRecoveryApp, { enterAltScreen: true, repaint: true })
+assert.deepEqual(recoveredInputModes, { enterAltScreen: true })
+assert.equal(recoveryInvalidated, true, 'Terminal recovery must invalidate the cached frame')
+assert.equal(recoveryRepainted, true, 'Terminal recovery must repaint after resume')
+TuiApp.prototype.recoverTerminalInputModes.call(terminalRecoveryApp, { reassertModes: false })
+assert.equal(recoveredInputModeCalls, 1, 'Lightweight health checks must not rewrite terminal modes when no refresh is due')
+TuiApp.prototype.restoreTerminalInputModes.call(terminalRecoveryApp)
+assert.equal(restoredInputModes, true, 'Emergency cleanup must restore terminal input modes')
+
 const originalStdoutWrite = process.stdout.write
 let initializationOutput = ''
 process.stdout.write = (chunk) => {
@@ -4955,6 +4981,46 @@ inertDispose()
   assert.equal(ctrlLApp.agent.session.id, 'ctrl-l-session', 'Session must be preserved on Ctrl+L')
   assert.equal(ctrlLApp.usage.input, 1234, 'Usage must be preserved on Ctrl+L')
   assert.equal(ctrlLApp.contextTokens, 1801, 'Context tokens must be preserved on Ctrl+L')
+}
+
+// A delivered SIGINT means raw mode was lost or the process was interrupted
+// externally. Even that path must synchronously restore terminal input modes
+// before the process exits, or mouse reports leak into the parent shell.
+{
+  const { spawn } = await import('node:child_process')
+  const moduleUrl = new URL('../src/index.js', import.meta.url).href
+  const childScript = `
+    import { TuiApp } from ${JSON.stringify(moduleUrl)}
+    const app = new TuiApp({ get() { return undefined } })
+    app.openTerminal()
+    process.stdout.write('SIGNAL_TEST_READY\\n')
+    setInterval(() => {}, 1000)
+  `
+  const child = spawn(process.execPath, ['--input-type=module', '-e', childScript], {
+    cwd: new URL('..', import.meta.url),
+    stdio: ['pipe', 'pipe', 'pipe']
+  })
+  let childOutput = ''
+  child.stdout.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => { childOutput += chunk })
+  await withTimeout(new Promise((resolve) => {
+    const check = () => {
+      if (!childOutput.includes('SIGNAL_TEST_READY')) return
+      child.stdout.off('data', check)
+      resolve()
+    }
+    child.stdout.on('data', check)
+    check()
+  }), 2000, { rejectOnTimeout: true, errorMessage: 'signal cleanup child did not start' })
+  const closed = new Promise((resolve) => child.once('close', (code, signal) => resolve({ code, signal })))
+  child.kill('SIGINT')
+  const result = await withTimeout(closed, 2000, { rejectOnTimeout: true, errorMessage: 'signal cleanup child did not exit' })
+  assert.equal(result.code, 130, 'Caught SIGINT should exit with the conventional status code')
+  assert.equal(result.signal, null, 'SIGINT should be handled instead of killing the process directly')
+  assert.ok(childOutput.includes('\x1b[?1000l'), 'SIGINT cleanup must disable mouse tracking')
+  assert.ok(childOutput.includes('\x1b[?1006l'), 'SIGINT cleanup must disable SGR mouse mode')
+  assert.ok(childOutput.includes('\x1b[?2004l'), 'SIGINT cleanup must disable bracketed paste')
+  assert.ok(childOutput.includes('\x1b[?1049l'), 'SIGINT cleanup must leave the alternate screen')
 }
 
 console.log('unit regressions: ok')
