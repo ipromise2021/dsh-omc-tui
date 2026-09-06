@@ -24,6 +24,134 @@ export function parseToolArgs(raw) {
   }
 }
 
+const PTC_TOOL_LABELS = {
+  bash: 'Bash',
+  shell: 'Bash',
+  read: 'Read',
+  read_file: 'Read',
+  edit: 'Edit',
+  edit_file: 'Edit',
+  write: 'Write',
+  write_file: 'Write',
+  todo_write: 'Plan',
+  todo: 'Plan'
+}
+
+const quotedProperty = (source, keys) => {
+  const pattern = new RegExp(`\\b(?:${keys.join('|')})\\s*:\\s*(['"\\\`])([\\s\\S]*?)\\1`)
+  const match = pattern.exec(source)
+  return match?.[2]?.replace(/\s+/g, ' ').trim() || ''
+}
+
+const matchingBracket = (source, start, open, close) => {
+  let depth = 0
+  let quote = ''
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index]
+    if (quote) {
+      if (char === '\\') index += 1
+      else if (char === quote) quote = ''
+      continue
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char
+      continue
+    }
+    if (char === open) depth += 1
+    else if (char === close && --depth === 0) return index
+  }
+  return -1
+}
+
+const runCodeToolCalls = (code) => {
+  if (typeof code !== 'string' || !code) return []
+  const calls = []
+  const matcher = /\btools\.([A-Za-z_$][\w$]*)\s*\(\s*\{/g
+  let match
+  while ((match = matcher.exec(code))) {
+    const start = code.indexOf('{', match.index)
+    const end = matchingBracket(code, start, '{', '}')
+    if (end < 0) continue
+    calls.push({ rawName: match[1], args: code.slice(start + 1, end) })
+    matcher.lastIndex = end + 1
+  }
+  return calls
+}
+
+export function summarizeRunCodeTools(code, maxWidth = 60) {
+  const calls = []
+  for (const call of runCodeToolCalls(code)) {
+    const rawName = call.rawName
+    const normalizedName = rawName.toLowerCase()
+    const name = PTC_TOOL_LABELS[normalizedName] ?? rawName.replace(/_/g, ' ')
+    const args = call.args
+    const target = normalizedName === 'todo_write' || normalizedName === 'todo'
+      ? ''
+      : quotedProperty(args, normalizedName === 'bash' || normalizedName === 'shell'
+        ? ['command', 'cmd']
+        : ['path', 'file_path', 'filePath', 'targetFile', 'target_file', 'query'])
+    const text = name === 'Plan'
+      ? 'Plan updated'
+      : target
+        ? `${name}(${shorten(target, maxWidth)})`
+        : name
+    calls.push({ name, target, text })
+  }
+  return calls
+}
+
+export function todoPlanFromRunCode(code) {
+  let seen = false
+  let latest = { seen: false, available: false, tasks: [] }
+  for (const call of runCodeToolCalls(code)) {
+    if (!/^(?:todo_write|todo)$/i.test(call.rawName)) continue
+    seen = true
+    const property = /\btodos\s*:\s*\[/.exec(call.args)
+    if (!property) {
+      latest = { seen: true, available: false, tasks: [] }
+      continue
+    }
+    const start = call.args.indexOf('[', property.index)
+    const end = matchingBracket(call.args, start, '[', ']')
+    if (end < 0) {
+      latest = { seen: true, available: false, tasks: [] }
+      continue
+    }
+    const tasks = []
+    const array = call.args.slice(start + 1, end)
+    for (let index = 0; index < array.length; index += 1) {
+      if (array[index] !== '{') continue
+      const objectEnd = matchingBracket(array, index, '{', '}')
+      if (objectEnd < 0) break
+      const item = array.slice(index + 1, objectEnd)
+      const content = quotedProperty(item, ['content', 'title', 'task'])
+      const status = quotedProperty(item, ['status']) || 'pending'
+      if (content) tasks.push({ content, status })
+      index = objectEnd
+    }
+    latest = { seen: true, available: true, tasks }
+  }
+  return seen ? latest : { seen: false, available: false, tasks: [] }
+}
+
+const resultTextFrom = (value) => {
+  if (typeof value === 'string') return value
+  const blockText = textOf(value)
+  if (blockText) return blockText
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  if (typeof value.text === 'string') return value.text
+  return resultTextFrom(value.content) || resultTextFrom(value.stdout) || resultTextFrom(value.stderr)
+}
+
+export function toolResultText(data = {}) {
+  return resultTextFrom(data.message?.content) ||
+    resultTextFrom(data.content) ||
+    resultTextFrom(data.output) ||
+    resultTextFrom(data.result) ||
+    resultTextFrom(data.stdout) ||
+    resultTextFrom(data.stderr)
+}
+
 export function summarizeToolCall(call, maxWidth = 60) {
   const args = parseToolArgs(call.data?.arguments)
   const name = safe(call.data?.name || 'tool')
@@ -45,7 +173,16 @@ export function summarizeToolCall(call, maxWidth = 60) {
     const language = args.language ?? args.lang ?? args.runtime ?? ''
     const lineCount = typeof code === 'string' && code.length > 0 ? code.split(/\r?\n/).length : 0
     const details = [language, lineCount > 0 ? `${lineCount} lines` : ''].filter(Boolean).join(' · ')
-    return { name: 'Run code', target: String(code), text: `Run code${details ? ` (${shorten(details, maxWidth)})` : ''}` }
+    const nestedTools = summarizeRunCodeTools(code, maxWidth)
+    if (nestedTools.length > 0) {
+      const counts = new Map()
+      for (const tool of nestedTools) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1)
+      const names = [...counts].map(([toolName, count]) => count > 1 ? `${toolName} ×${count}` : toolName)
+      const firstTarget = nestedTools.find((tool) => tool.target)?.target
+      const text = [`${nestedTools.length} actions`, ...names, firstTarget].filter(Boolean).join(' · ')
+      return { name: nestedTools[0].name, target: firstTarget ?? '', text: shorten(text, maxWidth), nestedTools, codeDetails: details }
+    }
+    return { name: 'Run code', target: String(code), text: `Run code${details ? ` (${shorten(details, maxWidth)})` : ''}`, nestedTools, codeDetails: details }
   }
   if (isSkill) {
     const skill = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'instructions'

@@ -2350,6 +2350,45 @@ const jobPanelRows = renderJobPanel(
 assert.match(visibleOf(jobPanelRows.join('\n')), /npm test.*2\.0s/)
 assert.match(visibleOf(jobPanelRows.join('\n')), /BACKGROUND JOBS/)
 
+const taskPlanRows = renderJobPanel(
+  {
+    tab: 'plan',
+    tasks: [
+      { content: 'Inspect scheduler', status: 'in_progress' },
+      { content: 'Check Kibana', status: 'pending' },
+      { content: 'Report findings', status: 'completed' }
+    ]
+  },
+  undefined,
+  10,
+  100,
+  ANSI
+)
+const taskPlanText = visibleOf(taskPlanRows.join('\n'))
+assert.match(taskPlanText, /TASKS.*PLAN/)
+assert.match(taskPlanText, /1\/3 complete/)
+assert.match(taskPlanText, /Inspect scheduler.*in progress/)
+assert.match(taskPlanText, /Tab\/→ background jobs/)
+
+const dynamicTaskPlanText = visibleOf(renderJobPanel(
+  { tab: 'plan', tasks: [], planUnavailable: true },
+  undefined,
+  8,
+  100,
+  ANSI
+).join('\n'))
+assert.match(dynamicTaskPlanText, /details unavailable/)
+assert.match(dynamicTaskPlanText, /did not persist literal todo_write items/)
+
+for (let capacity = 6; capacity <= 16; capacity += 1) {
+  const rows = renderJobPanel({
+    tab: 'plan',
+    tasks: Array.from({ length: 12 }, (_, index) => ({ content: `planned task ${index}`, status: index === 0 ? 'in_progress' : 'pending' }))
+  }, undefined, capacity, 80, ANSI)
+  assert.ok(rows.length <= capacity, `Task plan must fit capacity ${capacity}`)
+  assert.match(visibleOf(rows.join('\n')), /TASKS/)
+}
+
 const listTrailingNewlineRows = renderJobPanel(
   {
     entries: [{ id: 'shell-list', status: 'running', kind: 'bash', detail: 'npm run dev' }],
@@ -2470,6 +2509,34 @@ assert.equal(projectedActivities.activities.length, 1)
 assert.equal(projectedActivities.activities[0].status, 'completed')
 assert.match(projectedActivities.activities[0].detail, /Bash\(npm test\)/)
 assert.equal(projectedActivities.truncated, false)
+
+const taskPlanApp = {
+  agent: {
+    session: {
+      events: [
+        { type: 'tool/call', data: { name: 'run_code', arguments: JSON.stringify({ code: "await tools.todo_write({ todos: [{ content: 'First', status: 'pending' }] })" }) } },
+        { type: 'tool/call', data: { name: 'run_code', arguments: JSON.stringify({ code: "await tools.todo_write({ todos: [{ content: 'Current', status: 'in_progress' }, { content: 'Finish', status: 'pending' }] })" }) } }
+      ]
+    }
+  }
+}
+assert.deepEqual(TuiApp.prototype.taskPlanSnapshots.call(taskPlanApp), {
+  seen: true,
+  available: true,
+  tasks: [
+    { content: 'Current', status: 'in_progress' },
+    { content: 'Finish', status: 'pending' }
+  ]
+})
+
+const tasksCommandApp = {
+  openTasksPanel(tab) { this.openedTab = tab },
+  scheduleRender: noop
+}
+handleLocalCommand(tasksCommandApp, 'tasks')
+assert.equal(tasksCommandApp.openedTab, 'plan')
+handleLocalCommand(tasksCommandApp, 'jobs')
+assert.equal(tasksCommandApp.openedTab, 'jobs')
 
 const boundedActivityApp = {
   agent: {

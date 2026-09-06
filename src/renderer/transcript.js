@@ -4,7 +4,7 @@ import { ANSI as defaultAnsi } from './themes.js'
 import { renderMarkdownRows, renderMarkdownDocument } from './markdown.js'
 import { renderDiffLines } from './diff.js'
 import { compactExpandedFileReferences } from '../core/events.js'
-import { groupActivitySpans, parseToolArgs, summarizeToolCall } from './activity.js'
+import { groupActivitySpans, parseToolArgs, summarizeToolCall, toolResultText } from './activity.js'
 
 /**
  * Pure projection from durable events + state to TranscriptDocument (blocks, rows, layoutMap).
@@ -107,8 +107,18 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
             logicalText = `Bash(${command})`
           } else if (isRunCode) {
             const summary = summarizeToolCall(event, Math.max(20, contentWidth - 16))
-            line = `${indent}${ANSI.amber}● ${safe(summary.text)}`
-            logicalText = summary.text
+            if (summary.nestedTools?.length > 0) {
+              for (const tool of summary.nestedTools) {
+                detailRows.push(`${indent}${ANSI.amber}● ${safe(tool.text)}${ANSI.reset}`)
+                logicalLines.push(tool.text)
+              }
+              const details = summary.codeDetails || 'source'
+              line = `${indent}${ANSI.dim}↳ run_code (${safe(details)})${ANSI.reset}`
+              logicalText = `run_code (${details})`
+            } else {
+              line = `${indent}${ANSI.amber}● ${safe(summary.text)}${ANSI.reset}`
+              logicalText = summary.text
+            }
           } else if (isSkill) {
             const skillName = args.name ?? args.skill ?? args.skillName ?? args.id ?? 'instructions'
             line = `${indent}${ANSI.blueSoft}● Skill(${safe(shorten(String(skillName), Math.max(20, contentWidth - 16)))})`
@@ -172,7 +182,7 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
           detailRows.push(`${indent}${ANSI.dim}└ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}${ANSI.reset}`)
           logicalLines.push(`hook result: ${data.decision ?? ''}`)
         } else if (event.type === 'tool/result') {
-          const resultText = textOf(event.data?.message?.content)
+          const resultText = toolResultText(event.data)
           if (event.data?.error) {
             const detail = event.data.error.message ?? resultText
             detailRows.push(`${indent}${ANSI.coral}└ ✗ ${safe(event.data.error.code ?? 'error')} · ${shorten(detail, Math.max(20, contentWidth - 24))}${ANSI.reset}`)
@@ -194,6 +204,10 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
                 detailRows.push(`${indent}${ANSI.dim}  … ${resultLines.length - 6} more lines${ANSI.reset}`)
               }
             }
+          } else {
+            const message = 'no displayable output returned by the runtime'
+            detailRows.push(`${indent}${ANSI.dim}└ ${message}${ANSI.reset}`)
+            logicalLines.push(message)
           }
         } else if (event.type === 'assistant/message') {
           const transText = textOf(event.data?.message?.content)?.trim()

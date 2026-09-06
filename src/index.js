@@ -46,6 +46,7 @@ import {
   mergeTranscriptDocuments,
   hasTurnHeaderInCurrentTurn,
   groupActivitySpans,
+  todoPlanFromRunCode,
   ViewportState,
   ScreenRenderer,
   TERM_CODES
@@ -4866,6 +4867,9 @@ export class TuiApp {
       const activity = this.taskActivitySnapshots()
       this.jobPanel.activities = activity.activities
       this.jobPanel.activitiesTruncated = activity.truncated
+      const plan = this.taskPlanSnapshots()
+      this.jobPanel.tasks = plan.tasks
+      this.jobPanel.planUnavailable = plan.seen && !plan.available
       const selectedIndex = selectedId ? entries.findIndex((entry) => entry.id === selectedId) : -1
       this.jobPanel.selected = selectedIndex >= 0
         ? selectedIndex
@@ -4890,13 +4894,21 @@ export class TuiApp {
   }
 
   openJobsPanel() {
+    this.openTasksPanel('jobs')
+  }
+
+  openTasksPanel(tab = 'plan') {
     const snapshots = this.orderJobEntries(this.jobSnapshots())
     const activity = this.taskActivitySnapshots()
+    const plan = this.taskPlanSnapshots()
     this.jobPanel = {
+      tab,
       view: 'list',
       entries: snapshots,
       activities: activity.activities,
       activitiesTruncated: activity.truncated,
+      tasks: plan.tasks,
+      planUnavailable: plan.seen && !plan.available,
       selected: 0,
       selectedJobId: snapshots[0]?.id,
       outputJobId: undefined,
@@ -4912,6 +4924,20 @@ export class TuiApp {
       process.stdin.resume()
     }
     this.scheduleRender(true)
+  }
+
+  setTaskPanelTab(tab) {
+    if (!this.jobPanel || this.jobPanel.tab === tab) return
+    this.jobPanel.tab = tab
+    if (tab === 'plan') {
+      this.jobPanel.view = 'list'
+      const plan = this.taskPlanSnapshots()
+      this.jobPanel.tasks = plan.tasks
+      this.jobPanel.planUnavailable = plan.seen && !plan.available
+      this.scheduleRender()
+      return
+    }
+    void this.refreshJobsPanel()
   }
 
   normalizeJobSnapshot(job) {
@@ -4970,6 +4996,23 @@ export class TuiApp {
         durationMs: span.summary?.durationMs
       }))
     return { activities, truncated: start > 0 }
+  }
+
+  taskPlanSnapshots() {
+    let latest = { seen: false, available: false, tasks: [] }
+    for (const event of sessionEvents(this.agent?.session)) {
+      if (event.type !== 'tool/call' || !/^run_?code$/i.test(String(event.data?.name ?? ''))) continue
+      const rawArgs = event.data?.arguments ?? event.data?.args
+      let args = {}
+      try {
+        args = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs ?? {}
+      } catch {
+        continue
+      }
+      const plan = todoPlanFromRunCode(args?.code ?? args?.script ?? args?.source)
+      if (plan.seen) latest = plan
+    }
+    return latest
   }
 
   runningExitJobs() {
@@ -6957,6 +7000,12 @@ export class TuiApp {
         }
         this.jobPanel = undefined
         this.scheduleRender()
+      } else if (this.jobPanel.tab === 'plan') {
+        if (value === '\t') this.setTaskPanelTab('jobs')
+        else if (value === 'r' || value === 'R') void this.refreshJobsPanel()
+        else if (value.startsWith('\x1b[')) this.onEscapeSequence(value)
+      } else if (value === '\t' && this.jobPanel.view !== 'shell') {
+        this.setTaskPanelTab('plan')
       } else if (this.jobPanel.view === 'shell' && (value === '\r' || value === ' ')) {
         this.jobPanel.view = 'list'
         this.scheduleRender()
@@ -7203,6 +7252,14 @@ export class TuiApp {
 
   onEscapeSequence(value) {
     if (this.providerPanel) return this.handleProviderEscape(value)
+    if (this.jobPanel?.tab === 'plan' && (value === '\x1b[C' || value === '\x1bOC')) {
+      this.setTaskPanelTab('jobs')
+      return
+    }
+    if (this.jobPanel?.tab === 'jobs' && this.jobPanel.view === 'list' && (value === '\x1b[D' || value === '\x1bOD')) {
+      this.setTaskPanelTab('plan')
+      return
+    }
     if (this.jobPanel?.view === 'shell' && (value === '\x1b[D' || value === '\x1bOD')) {
       this.jobPanel.view = 'list'
       this.scheduleRender()
@@ -7255,6 +7312,7 @@ export class TuiApp {
       return
     }
     if (value === '\x1b[A' || value === '\x1bOA') {
+      if (this.jobPanel?.tab === 'plan') return
       if (this.picker) {
         this.picker.selected = Math.max(0, this.picker.selected - 1)
         this.scheduleRender()
@@ -7299,6 +7357,7 @@ export class TuiApp {
       return
     }
     if (value === '\x1b[B' || value === '\x1bOB') {
+      if (this.jobPanel?.tab === 'plan') return
       if (this.picker) {
         this.picker.selected = Math.min(this.picker.sessions.length - 1, this.picker.selected + 1)
         this.scheduleRender()

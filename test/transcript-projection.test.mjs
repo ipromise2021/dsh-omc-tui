@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { projectTranscript, formatEvents, mergeTranscriptDocuments, hasTurnHeaderInCurrentTurn } from '../src/renderer/transcript.js'
-import { groupActivitySpans } from '../src/renderer/activity.js'
+import { groupActivitySpans, summarizeToolCall, todoPlanFromRunCode } from '../src/renderer/activity.js'
 import { widthOf, visibleOf } from '../src/renderer/ansi.js'
 
 // 1. Single tool call grouping and collapsible state
@@ -83,6 +83,51 @@ assert.match(expandedRunCodeText, /execution_failed · boom/, 'Expanded run_code
 for (const row of expandedRunCodeDoc.rows) {
   assert.ok(widthOf(visibleOf(row)) <= 80, `Expanded run_code row exceeds terminal width: "${visibleOf(row)}"`)
 }
+
+// PTC wraps ordinary tools in run_code. Keep the wrapper available on expand,
+// but use the nested tool intent for the default activity summary.
+const ptcCode = `const status = await tools.bash({
+  command: 'curl -s http://localhost:5601/api/status',
+  description: 'Check Kibana status'
+})
+await tools.read({ path: 'src/scheduler.js' })
+await tools.todo_write({ todos: [{ content: 'Inspect schedule', status: 'in_progress' }] })`
+const ptcCall = { data: { name: 'run_code', arguments: JSON.stringify({ language: 'javascript', code: ptcCode }) } }
+assert.match(summarizeToolCall(ptcCall).text, /3 actions · Bash · Read · Plan/)
+assert.match(summarizeToolCall(ptcCall).text, /curl -s http:\/\/localhost/)
+
+const ptcEvents = [
+  { seq: 1, type: 'tool/call', time: 1000, data: { callId: 'ptc-1', name: 'run_code', arguments: ptcCall.data.arguments } },
+  { seq: 2, type: 'tool/result', time: 1200, data: { callId: 'ptc-1', output: { stdout: { text: 'Kibana is green' } } } }
+]
+const ptcDoc = projectTranscript(ptcEvents, 100)
+const ptcBlock = ptcDoc.blocks.find((block) => block.kind === 'activity')
+assert.match(ptcBlock.summary, /3 actions · Bash · Read · Plan/)
+assert.doesNotMatch(ptcBlock.summary, /^.*Run code/)
+const expandedPtcDoc = projectTranscript(ptcEvents, 100, { expandedKeys: new Set([ptcBlock.key]) })
+const expandedPtcText = visibleOf(expandedPtcDoc.rows.join('\n'))
+assert.match(expandedPtcText, /Bash\(curl -s http:\/\/localhost:5601\/api\/status\)/)
+assert.match(expandedPtcText, /Read\(src\/scheduler\.js\)/)
+assert.match(expandedPtcText, /Plan updated/)
+assert.match(expandedPtcText, /run_code \(javascript · 6 lines\)/)
+assert.match(expandedPtcText, /Kibana is green/)
+
+const emptyPtcResultDoc = projectTranscript([
+  { seq: 1, type: 'tool/call', time: 1000, data: { callId: 'ptc-empty', name: 'run_code', arguments: JSON.stringify({ code: "await tools.read({ path: 'a.js' })" }) } },
+  { seq: 2, type: 'tool/result', time: 1200, data: { callId: 'ptc-empty' } }
+], 100, { expandedKeys: new Set(['activity-ptc-empty']) })
+assert.match(visibleOf(emptyPtcResultDoc.rows.join('\n')), /no displayable output returned by the runtime/)
+
+assert.deepEqual(todoPlanFromRunCode(ptcCode), {
+  seen: true,
+  available: true,
+  tasks: [{ content: 'Inspect schedule', status: 'in_progress' }]
+})
+assert.deepEqual(todoPlanFromRunCode('await tools.todo_write({ todos: buildTasks() })'), {
+  seen: true,
+  available: false,
+  tasks: []
+})
 
 // Some tool providers omit callId from both events. A lone pending call can
 // still safely absorb its immediately following result after an empty message.

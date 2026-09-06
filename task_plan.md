@@ -226,6 +226,21 @@
 
 当前门禁结论：核心 rc.1 主链路与新增投影修复已验证；整套 PTY 因 interaction timing 旧文案和 preset/resume 标记两项尚未全绿，保持 `in_progress`，不移动现有 `v0.2.9` 标签。
 
+### 阶段 28：PTC 嵌套工具活动投影
+- [x] 提取 `run_code` 中静态可识别的 `tools.bash/read/edit/todo_write` 调用，作为可读活动摘要
+- [x] 将 `run_code` 源码降为展开后的执行包装器详情，并为无可展示结果提供明确提示
+- [x] 保持 Background Jobs 只读取 Harness Jobs 服务，不混入同步工具活动
+- [x] 为 PTC 摘要、输出提示和既有 `run_code` 错误展示补充回归测试
+- [x] 运行针对性测试、完整测试、模块导入与 diff 检查
+- **状态：** complete
+
+### 阶段 29：统一 Tasks 任务中心
+- [x] 以 `/tasks` 作为统一入口，默认展示 PTC todo 计划
+- [x] 在同一面板提供 Background Jobs Tab，`/jobs` 保持为该 Tab 的兼容入口
+- [x] 从 durable `run_code` 事件保守重放字面量 `todo_write`，动态参数明确降级
+- [x] 补充面板、命令和键盘切换回归，并完成完整验证
+- **状态：** complete
+
 ## 建议实现顺序
 1. CR-001 权限状态投影
 2. CR-002 无取消能力时的退出保护

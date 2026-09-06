@@ -68,7 +68,7 @@ dsh-omc-tui/
 │   │   ├── file-picker.js      # @ 路径树形逐级补全与搜索面板
 │   │   ├── settings-panel.js   # /settings 系统偏好交互设置面板
 │   │   ├── resume-panel.js     # /resume 历史会话恢复选择器
-│   │   └── jobs-panel.js       # /jobs 后台任务监控与取消面板
+│   │   └── jobs-panel.js       # /tasks 任务中心：Plan 与后台任务监控/取消
 │   ├── commands/               # 内置斜杠命令分发与实现
 │   │   ├── registry.js         # 命令统一注册与匹配调度器
 │   │   ├── recap.js            # /recap 会话历史结构化回顾与空闲总结
@@ -215,7 +215,8 @@ dsh-omc-tui/
 | `/model` | 列出并热切换当前 profile 下所有可用 LLM 模型 |
 | `/vision` | 查看推荐并绑定子代理旁路视觉多模态模型 |
 | `/resume` | 交互式选择并恢复历史会话（基于 durable events 完整重建） |
-| `/jobs` | 监控后台异步任务，支持单键终止指定任务 |
+| `/tasks` | 任务中心；默认展示 Agent Plan，并可切换至后台异步任务监控页 |
+| `/jobs` | 兼容入口；直接打开任务中心的后台任务页，支持读取输出和单键终止 |
 | `/steer` | 在 Agent 执行多步任务中途动态注入微调指令 |
 
 ---

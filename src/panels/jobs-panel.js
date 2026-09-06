@@ -44,6 +44,41 @@ const outputLinesFor = (output, width) => {
   return lines.flatMap((line) => wrap(line, width))
 }
 
+const taskStatusMeta = (status, ANSI) => {
+  if (status === 'completed') return { icon: '✓', color: ANSI.bash, label: 'done' }
+  if (status === 'in_progress' || status === 'running') return { icon: '◐', color: ANSI.blueSoft, label: 'in progress' }
+  if (status === 'failed' || status === 'cancelled') return { icon: '×', color: ANSI.coral, label: status }
+  return { icon: '·', color: ANSI.muted, label: 'pending' }
+}
+
+export function renderTaskPlanPanel(taskPanel, capacity, columns, ANSI = defaultAnsi) {
+  const maxWidth = Math.max(1, columns - 2)
+  const tasks = Array.isArray(taskPanel.tasks) ? taskPanel.tasks : []
+  const completed = tasks.filter((task) => task.status === 'completed').length
+  const lines = [
+    `${ANSI.teal}${ANSI.bold}TASKS${ANSI.reset} ${ANSI.dim}· PLAN${ANSI.reset}${taskPanel.planUnavailable ? ` ${ANSI.amber}· details unavailable${ANSI.reset}` : ''}`,
+    `${ANSI.dim}${tasks.length > 0 ? `${completed}/${tasks.length} complete` : 'no task plan recorded'} · Tab/→ background jobs${ANSI.reset}`
+  ]
+  if (taskPanel.planUnavailable) {
+    lines.push(`${ANSI.amber}PTC did not persist literal todo_write items for the latest plan.${ANSI.reset}`)
+  } else if (tasks.length > 0) {
+    const contentBudget = Math.max(0, capacity - 3)
+    const shown = tasks.slice(0, tasks.length > contentBudget ? Math.max(0, contentBudget - 1) : contentBudget)
+    for (const task of shown) {
+      const meta = taskStatusMeta(task.status, ANSI)
+      const prefix = `  ${meta.color}${meta.icon}${ANSI.reset} `
+      const suffix = ` ${ANSI.dim}${meta.label}${ANSI.reset}`
+      const detailBudget = Math.max(1, maxWidth - widthOf(visibleOf(prefix)) - widthOf(visibleOf(suffix)))
+      lines.push(`${prefix}${ANSI.ink}${shorten(safe(task.content), detailBudget)}${ANSI.reset}${suffix}`)
+    }
+    if (shown.length < tasks.length) lines.push(`${ANSI.dim}… ${tasks.length - shown.length} more tasks${ANSI.reset}`)
+  } else {
+    lines.push(`${ANSI.dim}The agent has not recorded a todo plan in this session.${ANSI.reset}`)
+  }
+  lines.push(`${ANSI.muted}Tab/→ background jobs  r refresh  Esc close${ANSI.reset}`)
+  return fit(lines.slice(0, Math.max(1, capacity)), maxWidth)
+}
+
 export function renderShellDetails(jobPanel, selectedJob, capacity, columns, ANSI = defaultAnsi) {
   const entry = jobPanel.entries?.find((item) => item.id === jobPanel.outputJobId) ?? selectedJob
   const maxWidth = Math.max(1, columns - 2)
@@ -109,6 +144,7 @@ export function renderShellDetails(jobPanel, selectedJob, capacity, columns, ANS
 }
 
 export function renderJobPanel(jobPanel, selectedJob, capacity, columns, ANSI = defaultAnsi) {
+  if (jobPanel.tab === 'plan') return renderTaskPlanPanel(jobPanel, capacity, columns, ANSI)
   if (jobPanel.view === 'shell') return renderShellDetails(jobPanel, selectedJob, capacity, columns, ANSI)
 
   const entries = Array.isArray(jobPanel.entries) ? jobPanel.entries : []
@@ -208,6 +244,6 @@ export function renderJobPanel(jobPanel, selectedJob, capacity, columns, ANSI = 
     }
   }
   if (!compact) lines.push('')
-  lines.push(`${ANSI.muted}↑↓ select  Enter inspect/read  f ${jobPanel.outputFollow === false ? 'follow' : 'pause'}  k cancel  r refresh  Esc close${ANSI.reset}`)
+  lines.push(`${ANSI.muted}←/Tab plan  ↑↓ select  Enter inspect/read  f ${jobPanel.outputFollow === false ? 'follow' : 'pause'}  k cancel  r refresh  Esc close${ANSI.reset}`)
   return fit(lines.slice(0, Math.max(1, capacity)), maxWidth)
 }

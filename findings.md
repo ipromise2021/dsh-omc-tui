@@ -928,3 +928,18 @@
 - 补充验证发现 rc.1 在 `approval/asked` 与 `approval/decided` 之间写入 `session/title`；它是不可见元数据，旧分组器却会结束当前 activity span。最小修复后并行工具折叠恢复，单测与 `pty-features` 通过。
 - rc.1 mock adapter 需要 `prepareCall()`；图片直通还必须在模型 metadata 明确声明 `inputModalities: ['text', 'image']`。这两项均属于测试 Provider 契约，不是 TUI 本地 Runtime 替代实现。
 - 当前发布门禁证据：e2e、features、file、image 四条主链路通过；interaction 的 timing 文案和 resume 的 preset 标记仍是未关闭项。现有 `v0.2.9` 标签不含本轮 activity span 修复。
+
+## PTC 嵌套工具活动投影（2026-09-06）
+
+- 用户现场确认当前 preset 将 Bash、Read、Edit、todo_write 等调用封装为顶层 `run_code`。会话 durable event 因而主要显示 `run_code` 与外层 `tool/result`，现有界面会产生大量同质的 “Run code” 行。
+- `src/renderer/activity.js` 已能识别 `run_code` 并显示语言、行数和源码，但没有解析其中 `tools.*` 调用；`src/renderer/transcript.js` 的结果正文只读取 `event.data.message.content`，正文缺失时展开区为空。
+- 本轮范围：在不伪造 Harness Jobs 的前提下，基于 durable 的 `run_code` 源码提取保守、静态的工具摘要；结果无法从 event 读取时明确告知用户。完整嵌套结果仍必须等待 runtime 暴露 durable trace，不能靠源码猜测。
+- 实现结果：默认摘要优先显示 `N actions · Bash · Read · Edit/Plan` 和第一个可识别目标；展开区依次显示提取到的工具动作，再显示 `run_code (language · lines)` 与原始源码。解析仅覆盖对象字面量和引号字符串参数，无法解析时自动保留原有 `Run code` 表示。
+- 结果投影额外兼容 `message.content`、`content`、`output`、`result`、`stdout`、`stderr` 中的文本/文本块；仍无正文时显示 “no displayable output returned by the runtime”。这不是对嵌套结果的猜测，而是让缺少 durable 输出的状态可见。
+- 验证：`node test/transcript-projection.test.mjs`、`npm test`、`npm run verify` 与 `git diff --check` 均通过。
+
+## 统一 Tasks 任务中心（2026-09-06）
+
+- 决策：不移除 Jobs。新增 `/tasks` 作为统一入口，分为 Plan 与 Background Jobs 两个 Tab；`/jobs` 作为直接打开 Background Jobs Tab 的兼容别名。
+- Plan 的唯一可重放来源是 durable `run_code` 中的 `tools.todo_write({...})` 字面量。只在可静态解析 `todos: [...]` 时展示；动态值或非字面量参数不显示旧计划，而明确标注 runtime 未提供可投影详情。
+- 已完成 `/tasks` 默认 Plan、Plan/Background Jobs Tab 切换和 `/jobs` 兼容直达；覆盖 durable 重放、动态降级、容量边界与命令路由的回归测试均通过。

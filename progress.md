@@ -2,6 +2,20 @@
 
 ## 会话：2026-09-03
 
+## 会话：2026-09-06
+
+### 阶段 28：PTC 嵌套工具活动投影
+- **状态：** complete
+- 用户反馈 PTC 将 Bash/Read/Edit 等动作封装为 `run_code`，使活动列表满屏显示包装器且 Tool result 展开无正文。
+- 已确认实现边界：Jobs 面板继续只显示 Harness Background Job；本轮仅优化 transcript 中的同步工具活动可读性与空结果反馈。
+- `src/renderer/activity.js` 新增 PTC 源码的保守静态摘要和多字段结果文本提取；`src/renderer/transcript.js` 在展开时先显示内部工具意图、再显示 run_code 包装器源码，空结果改为明确提示。
+- 新增 transcript 回归覆盖 Bash/Read/todo_write 摘要、结构化 stdout、原始源码保留及空结果提示。`npm test`、`npm run verify`、`git diff --check` 通过。
+
+### 阶段 29：统一 Tasks 任务中心
+- **状态：** complete
+- 用户确认采用统一入口、分层展示：`/tasks` 默认 Plan，Background Jobs 保留既有输出/取消能力，`/jobs` 兼容打开后台任务页。
+- 已完成 durable `todo_write` 字面量重放、动态参数降级提示、Plan/Background Jobs 键盘切换，以及面板/命令回归测试。
+
 ### 阶段 21：Jobs/Shell 审查整改
 - **状态：** complete
 - 执行的操作：
