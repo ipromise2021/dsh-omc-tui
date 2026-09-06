@@ -403,6 +403,8 @@ export class TuiApp {
     this.reasoningAt = undefined
     this.reasoningBlocks = [] // { key, lines, ms, text } most recent first
     this.expandedKeys = new Set()
+    this.statuslinePlanExpanded = false
+    this.statuslinePlanIdentity = undefined
     this.historySearch = undefined // { query, matches, selected }
     this.promptSuggestion = undefined // { text, controller, requestId }
     this.promptSuggestionSeq = 0
@@ -4715,6 +4717,8 @@ export class TuiApp {
     this.lastRecappedSeq = undefined
     this.clearAutoRecapTimer?.()
     this.expandedKeys = new Set()
+    this.statuslinePlanExpanded = false
+    this.statuslinePlanIdentity = undefined
     this.active = false
     this.focusedBlockKey = null
     this.baseTranscriptDocument = undefined
@@ -7171,12 +7175,13 @@ export class TuiApp {
       }
       const toolName = this.streaming.tool?.name ?? ''
       if (this.agent?.status === 'running' && /^(?:bash|shell|pwsh|powershell)$/i.test(String(toolName))) {
-        this.log('error', '当前 Agent Bash 已在前台执行，无法将已启动的工具进程转入后台；长任务请使用 run_in_background: true，然后通过 /jobs 查看。', 'Ctrl+B')
+        this.log('error', 'Agent Bash is already foreground; rerun with run_in_background: true.', 'Ctrl+B')
         this.scheduleRender()
         return
       }
     }
     if (value === '\x0f') return this.toggleCollapsible()
+    if (value === '\x14') return this.toggleStatuslinePlan()
     if (value === '\x01') return this.moveToLineStart()
     if (value === '\x05') return this.moveToLineEnd()
     if (value === '\x06') return this.openHistorySearch()
@@ -7528,6 +7533,14 @@ export class TuiApp {
     this.scheduleRender(true)
   }
 
+  toggleStatuslinePlan() {
+    const plan = this.taskPlanSnapshots()
+    if (plan.tasks.length === 0 || plan.tasks.some((task) => task.status !== 'completed')) return
+    this.statuslinePlanExpanded = !this.statuslinePlanExpanded
+    this.statusRowsCache = undefined
+    this.scheduleRender(true)
+  }
+
   // ── rendering ─────────────────────────────────────────────────────────
 
   startEdgeAutoScroll(delta) {
@@ -7627,6 +7640,12 @@ export class TuiApp {
     const effort = this.currentEffort().toUpperCase()
     const recent = this.recentUsage()
     const hasSystemPrompt = Boolean(this.agent?.ctx?.get?.('systemPrompt'))
+    const plan = this.taskPlanSnapshots()
+    const planIdentity = plan.tasks.map((task) => task.content ?? '').join('\x1f')
+    if (this.statuslinePlanIdentity !== planIdentity) {
+      this.statuslinePlanIdentity = planIdentity
+      this.statuslinePlanExpanded = false
+    }
 
     const { rows, cache } = renderStatusRows({
       columns,
@@ -7647,6 +7666,8 @@ export class TuiApp {
       hookCount: this.hookCount,
       localBackgroundJobs: this.localBackgroundJobs ?? [],
       recent,
+      plan,
+      planExpanded: this.statuslinePlanExpanded,
       hasSystemPrompt,
       git: this.gitStatus,
       turnStats: this.turnStats,
@@ -8212,7 +8233,7 @@ export function apply(ctx) {
   ctx.systemPrompt?.section?.({
     name: 'tui-background-shell',
     order: 110,
-    text: 'For long-running Bash commands such as npm install, dev servers, watchers, or builds, set run_in_background: true so the call returns immediately with a job id. Do not emulate this with nohup or a trailing & in a foreground call. The user can inspect and stop the job from /jobs.'
+    text: 'Use run_in_background: true only for independent work expected to outlive the next reasoning step: installs, builds, full test suites, dev servers, watchers, and long migrations. Keep a Bash call foreground when its output is needed before the next action. After backgrounding, continue useful work; use job_output only when its result is needed. Do not emulate backgrounding with nohup or a trailing &. The user manages jobs through /jobs.'
   })
   const skillDisposers = registerBundledSkills(ctx)
   const app = new TuiApp(ctx)

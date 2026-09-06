@@ -93,8 +93,10 @@ const ptcCode = `const status = await tools.bash({
 await tools.read({ path: 'src/scheduler.js' })
 await tools.todo_write({ todos: [{ content: 'Inspect schedule', status: 'in_progress' }] })`
 const ptcCall = { data: { name: 'run_code', arguments: JSON.stringify({ language: 'javascript', code: ptcCode }) } }
-assert.match(summarizeToolCall(ptcCall).text, /3 actions · Bash · Read · Plan/)
-assert.match(summarizeToolCall(ptcCall).text, /curl -s http:\/\/localhost/)
+assert.match(summarizeToolCall(ptcCall).text, /Bash · Read · Plan · 3 steps/)
+
+const singlePtcCall = { data: { name: 'run_code', arguments: JSON.stringify({ code: "await tools.glob({ pattern: '**/*.js' })" }) } }
+assert.equal(summarizeToolCall(singlePtcCall).text, 'glob')
 
 const ptcEvents = [
   { seq: 1, type: 'tool/call', time: 1000, data: { callId: 'ptc-1', name: 'run_code', arguments: ptcCall.data.arguments } },
@@ -102,7 +104,7 @@ const ptcEvents = [
 ]
 const ptcDoc = projectTranscript(ptcEvents, 100)
 const ptcBlock = ptcDoc.blocks.find((block) => block.kind === 'activity')
-assert.match(ptcBlock.summary, /3 actions · Bash · Read · Plan/)
+assert.match(ptcBlock.summary, /Bash · Read · Plan · 3 steps/)
 assert.doesNotMatch(ptcBlock.summary, /^.*Run code/)
 const expandedPtcDoc = projectTranscript(ptcEvents, 100, { expandedKeys: new Set([ptcBlock.key]) })
 const expandedPtcText = visibleOf(expandedPtcDoc.rows.join('\n'))

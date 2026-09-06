@@ -23,6 +23,8 @@ export function renderStatusRows(options) {
     hookCount = 0,
     localBackgroundJobs = [],
     recent = { toolDetails: [], jobs: [] },
+    plan = { tasks: [] },
+    planExpanded = false,
     hasSystemPrompt = false,
     git = { isGit: false, branch: '', dirty: false, ahead: 0, behind: 0 },
     turnStats = undefined,
@@ -49,19 +51,31 @@ export function renderStatusRows(options) {
   const gitKey = `${git?.isGit ? 1 : 0}:${git?.branch ?? ''}:${git?.dirty ? 1 : 0}:${git?.ahead ?? 0}:${git?.behind ?? 0}:${hudGit}`
   const speedKey = `${hudSpeed}:${turnStats?.speed ?? 0}:${turnStats?.durationMs ?? 0}`
   const toolsKey = `${hudTools}:${recentToolsKey}`
+  const planTasks = Array.isArray(plan?.tasks) ? plan.tasks : []
+  const planKey = `${planExpanded ? 1 : 0}:${planTasks.map((task) => `${task?.status ?? 'pending'}:${task?.content ?? ''}`).join('\x1f')}`
   const ansiKey = Object.entries(ANSI ?? {}).map(([key, value]) => `${key}:${value}`).join('\x1f')
   const activeJobs = []
   const seenJobIds = new Set()
-  for (const [index, job] of [...(recent.jobs ?? []), ...(localBackgroundJobs ?? [])].entries()) {
+  const trackedJobs = [...(recent.jobs ?? []), ...(localBackgroundJobs ?? [])]
+  for (const [index, job] of trackedJobs.entries()) {
     if (job.status !== 'running' && job.status !== 'stopping') continue
     const key = job.id ? `id:${job.id}` : `anonymous:${index}`
     if (seenJobIds.has(key)) continue
     seenJobIds.add(key)
     activeJobs.push(job)
   }
+  const failedJobs = []
+  const seenFailedJobIds = new Set()
+  for (const [index, job] of trackedJobs.entries()) {
+    if (job.status !== 'failed' && job.status !== 'killed') continue
+    const key = job.id ? `id:${job.id}` : `anonymous:${index}`
+    if (seenFailedJobIds.has(key)) continue
+    seenFailedJobIds.add(key)
+    failedJobs.push(job)
+  }
   const jobTicker = activeJobs.length > 0 ? Math.floor(Date.now() / 1000) : 'idle'
   const contextKey = `${contextTokens ?? 'fallback'}:${contextMode}:${contextWarnAt}:${contextCriticalAt}`
-  const cacheKey = `${columns}|${density}|${mode}|${pending}|${liveModel}|${cwdName}|${presetName}|${effort}|${permissionName}|${usage.input}|${usage.output}|${usage.cacheRead}|${usage.contextWindow}|${skills.length}|${mcpCount}|${hookCount}|${hasSystemPrompt}|${toolsKey}|${recentJobsKey}|${localJobsKey}|${titleKey}|${gitKey}|${speedKey}|${contextKey}|${jobTicker}|${runningAnimStep}|${runningWordStep}|${ansiKey}`
+  const cacheKey = `${columns}|${density}|${mode}|${pending}|${liveModel}|${cwdName}|${presetName}|${effort}|${permissionName}|${usage.input}|${usage.output}|${usage.cacheRead}|${usage.contextWindow}|${skills.length}|${mcpCount}|${hookCount}|${hasSystemPrompt}|${toolsKey}|${recentJobsKey}|${localJobsKey}|${planKey}|${titleKey}|${gitKey}|${speedKey}|${contextKey}|${jobTicker}|${runningAnimStep}|${runningWordStep}|${ansiKey}`
 
   const fitRows = (rows) => rows.map((row) => {
     const maxWidth = Math.max(1, columns - 2)
@@ -225,9 +239,11 @@ export function renderStatusRows(options) {
     })
     .filter(Boolean)
     .join(',')
-  const jobBadge = totalJobs > 0
-    ? `${ANSI.amber}${totalJobs} active${jobAgeText ? ` · ${jobAgeText}` : ''}${ANSI.reset}${ANSI.dim} · ↓${ANSI.reset}`
-    : `${ANSI.dim}0${ANSI.reset}`
+  const jobBadge = [
+    totalJobs > 0 ? `${ANSI.amber}${totalJobs} active${jobAgeText ? ` · ${jobAgeText}` : ''}${ANSI.reset}` : '',
+    failedJobs.length > 0 ? `${ANSI.coral}${failedJobs.length} failed${ANSI.reset}` : ''
+  ].filter(Boolean).join(`${ANSI.dim} · ${ANSI.reset}`)
+  const jobSegment = jobBadge ? `${ANSI.dim} · ${ANSI.reset}${ANSI.muted}jobs ${jobBadge}` : ''
   const skillBadge = skills.length > 0 ? `${ANSI.teal}${skills.length} skills${ANSI.reset}` : `${ANSI.dim}0 skills${ANSI.reset}`
   const hookBadge = hookCount > 0 ? `${ANSI.blueSoft}${hookCount} hooks${ANSI.reset}` : `${ANSI.dim}0 hooks${ANSI.reset}`
   const mcpBadge = mcpCount > 0 ? `${ANSI.teal}${mcpCount} MCPs${ANSI.reset}` : `${ANSI.dim}0 MCPs${ANSI.reset}`
@@ -235,13 +251,37 @@ export function renderStatusRows(options) {
 
   let row3 = ''
   if (columns >= 95) {
-    row3 = `  ${ANSI.muted}prompt ${ANSI.reset}${ANSI.blueSoft}${promptText}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${skillBadge}${ANSI.dim} · ${ANSI.reset}${mcpBadge}${ANSI.dim} · ${ANSI.reset}${hookBadge}${hudTools !== false ? `${ANSI.dim} · ${ANSI.reset}${ANSI.muted}tools ${ANSI.bash}${shorten(toolText, Math.max(10, effectiveColumns - 60))}${ANSI.reset}` : ''}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}jobs ${jobBadge}`
+    row3 = `  ${ANSI.muted}prompt ${ANSI.reset}${ANSI.blueSoft}${promptText}${ANSI.reset}${ANSI.dim} · ${ANSI.reset}${skillBadge}${ANSI.dim} · ${ANSI.reset}${mcpBadge}${ANSI.dim} · ${ANSI.reset}${hookBadge}${hudTools !== false ? `${ANSI.dim} · ${ANSI.reset}${ANSI.muted}tools ${ANSI.bash}${shorten(toolText, Math.max(10, effectiveColumns - 60))}${ANSI.reset}` : ''}${jobSegment}`
   } else if (columns >= 75) {
-    row3 = `  ${skillBadge}${ANSI.dim} · ${ANSI.reset}${mcpBadge}${hudTools !== false ? `${ANSI.dim} · ${ANSI.reset}${ANSI.muted}tools ${ANSI.bash}${shorten(toolText, Math.max(10, effectiveColumns - 40))}${ANSI.reset}` : ''}${ANSI.dim} · ${ANSI.reset}${ANSI.muted}jobs ${jobBadge}`
+    row3 = `  ${skillBadge}${ANSI.dim} · ${ANSI.reset}${mcpBadge}${hudTools !== false ? `${ANSI.dim} · ${ANSI.reset}${ANSI.muted}tools ${ANSI.bash}${shorten(toolText, Math.max(10, effectiveColumns - 40))}${ANSI.reset}` : ''}${jobSegment}`
   } else {
     row3 = `  ${skillBadge}${ANSI.dim} · ${ANSI.reset}${mcpBadge}${hudTools !== false ? `${ANSI.dim} · ${ANSI.reset}${ANSI.muted}tools ${ANSI.bash}${shorten(toolText, Math.max(8, effectiveColumns - 30))}${ANSI.reset}` : ''}`
   }
 
-  const result = fitRows([row1, row2, row3, permRow])
+  const completedPlans = planTasks.filter((task) => task.status === 'completed').length
+  const planComplete = planTasks.length > 0 && completedPlans === planTasks.length
+  const planRows = planTasks.length > 0
+    ? planComplete && !planExpanded
+      ? [`  ${ANSI.bash}✓${ANSI.reset} ${ANSI.teal}${ANSI.bold}PLAN${ANSI.reset} ${ANSI.dim}· ${completedPlans}/${planTasks.length} complete · Ctrl+T to view${ANSI.reset}`]
+      : [
+        `  ${ANSI.teal}${ANSI.bold}PLAN${ANSI.reset} ${ANSI.dim}· ${completedPlans}/${planTasks.length} complete${planComplete ? ' · Ctrl+T to collapse' : ''}${ANSI.reset}`,
+        ...planTasks.slice(0, 3).map((task) => {
+          const status = task.status ?? 'pending'
+          const meta = status === 'completed'
+            ? { icon: '✓', color: ANSI.bash, label: 'done' }
+            : status === 'in_progress' || status === 'running'
+              ? { icon: '◐', color: ANSI.blueSoft, label: 'in progress' }
+              : status === 'failed' || status === 'cancelled'
+                ? { icon: '×', color: ANSI.coral, label: status }
+                : { icon: '·', color: ANSI.muted, label: 'pending' }
+          const prefix = `  ${meta.color}${meta.icon}${ANSI.reset} `
+          const suffix = ` ${ANSI.dim}${meta.label}${ANSI.reset}`
+          const detailWidth = Math.max(8, effectiveColumns - widthOf(visibleOf(prefix)) - widthOf(visibleOf(suffix)))
+          return `${prefix}${ANSI.ink}${shorten(safe(task.content), detailWidth)}${ANSI.reset}${suffix}`
+        }),
+        ...(planTasks.length > 3 ? [`  ${ANSI.dim}… ${planTasks.length - 3} more${ANSI.reset}`] : [])
+      ]
+    : []
+  const result = fitRows([row1, row2, row3, permRow, ...planRows])
   return { rows: result, cache: { key: cacheKey, rows: result } }
 }

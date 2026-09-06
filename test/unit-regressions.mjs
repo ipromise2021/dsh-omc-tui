@@ -2172,6 +2172,38 @@ assert.match(hudText, /Context.*85k \/ 100k · 85% ⚠️ \| session in 12k · o
 assert.match(hudText, /Read: index\.js/)
 assert.match(hudText, /Edit: statusline\.js/)
 
+const planStatus = renderStatusRows({
+  columns: 100,
+  plan: {
+    tasks: [
+      { content: '检查服务配置', status: 'in_progress' },
+      { content: '补充运维文档', status: 'pending' },
+      { content: '验证构建', status: 'completed' },
+      { content: '报告结果', status: 'pending' }
+    ]
+  }
+})
+const planStatusText = visibleOf(planStatus.rows.join('\n'))
+assert.match(planStatusText, /PLAN.*1\/4 complete/)
+assert.match(planStatusText, /检查服务配置.*in progress/)
+assert.match(planStatusText, /补充运维文档.*pending/)
+assert.match(planStatusText, /验证构建.*done/)
+assert.match(planStatusText, /… 1 more/)
+assert.equal(renderStatusRows({ columns: 100, density: 'compact', plan: { tasks: [{ content: 'hidden', status: 'pending' }] } }).rows.length, 2)
+
+const completePlanStatus = renderStatusRows({
+  columns: 100,
+  plan: { tasks: [{ content: '验证构建', status: 'completed' }] }
+})
+assert.match(visibleOf(completePlanStatus.rows.join('\n')), /✓ PLAN · 1\/1 complete · Ctrl\+T to view/)
+assert.doesNotMatch(visibleOf(completePlanStatus.rows.join('\n')), /验证构建/)
+const expandedCompletePlanStatus = renderStatusRows({
+  columns: 100,
+  plan: { tasks: [{ content: '验证构建', status: 'completed' }] },
+  planExpanded: true
+})
+assert.match(visibleOf(expandedCompletePlanStatus.rows.join('\n')), /验证构建.*done/)
+
 const measuredContext = renderStatusRows({
   columns: 120,
   contextTokens: 20000,
@@ -2328,7 +2360,7 @@ const jobDurationStatus = renderStatusRows({
   recent: { toolDetails: [], jobs: [{ id: 'job-1', status: 'running', startedAt: Date.now() - 2200 }] }
 })
 assert.match(visibleOf(jobDurationStatus.rows.join('\n')), /jobs 1 active · 2\.[0-9]s/)
-assert.match(visibleOf(jobDurationStatus.rows.join('\n')), /jobs 1 active.*↓/)
+assert.doesNotMatch(visibleOf(jobDurationStatus.rows.join('\n')), /↓/)
 
 const duplicateJob = { id: 'job-1', status: 'running', startedAt: Date.now() - 2200 }
 const dedupedJobStatus = renderStatusRows({
@@ -2339,6 +2371,14 @@ const dedupedJobStatus = renderStatusRows({
 const dedupedJobText = visibleOf(dedupedJobStatus.rows.join('\n'))
 assert.match(dedupedJobText, /jobs 1 active/)
 assert.equal(dedupedJobText.includes('jobs 2 active'), false)
+
+const failedJobStatus = renderStatusRows({
+  columns: 120,
+  recent: { toolDetails: [], jobs: [{ id: 'job-failed', status: 'failed' }] }
+})
+assert.match(visibleOf(failedJobStatus.rows.join('\n')), /jobs 1 failed/)
+const idleJobStatus = renderStatusRows({ columns: 120, recent: { toolDetails: [], jobs: [] } })
+assert.equal(visibleOf(idleJobStatus.rows.join('\n')).includes('jobs 0'), false)
 
 const jobPanelRows = renderJobPanel(
   { entries: [{ id: 'job-1', status: 'completed', detail: 'npm test', durationMs: 2000 }], selected: 0 },
@@ -2534,7 +2574,7 @@ const tasksCommandApp = {
   scheduleRender: noop
 }
 handleLocalCommand(tasksCommandApp, 'tasks')
-assert.equal(tasksCommandApp.openedTab, 'plan')
+assert.equal(tasksCommandApp.openedTab, undefined)
 handleLocalCommand(tasksCommandApp, 'jobs')
 assert.equal(tasksCommandApp.openedTab, 'jobs')
 

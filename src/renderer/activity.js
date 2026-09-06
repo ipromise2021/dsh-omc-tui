@@ -179,7 +179,9 @@ export function summarizeToolCall(call, maxWidth = 60) {
       for (const tool of nestedTools) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1)
       const names = [...counts].map(([toolName, count]) => count > 1 ? `${toolName} ×${count}` : toolName)
       const firstTarget = nestedTools.find((tool) => tool.target)?.target
-      const text = [`${nestedTools.length} actions`, ...names, firstTarget].filter(Boolean).join(' · ')
+      const text = nestedTools.length === 1
+        ? nestedTools[0].text
+        : [...names, `${nestedTools.length} steps`].join(' · ')
       return { name: nestedTools[0].name, target: firstTarget ?? '', text: shorten(text, maxWidth), nestedTools, codeDetails: details }
     }
     return { name: 'Run code', target: String(code), text: `Run code${details ? ` (${shorten(details, maxWidth)})` : ''}`, nestedTools, codeDetails: details }
