@@ -58,11 +58,13 @@
 - 首轮测试发现分钟进位条件误覆盖 61.3 秒，已收紧为仅对不足一分钟的值进位。最终 `npm test`、`npm run verify`、`git diff --check`、npm pack dry-run 均通过。
 
 ### 阶段 35：v0.2.13 正式发布
-- **状态：** in_progress
+- **状态：** complete
 - 用户已授权提交当前整改、推送 GitHub、发布 npm 官方 registry，并创建正式 GitHub Release；不发布预发布版本。
 - 发布目标为 `dsh-omc-tui@0.2.13` / `v0.2.13`，将先完成最终门禁与版本占用检查，再执行外部发布并回查。
 - 最终本地门禁通过：`npm test`、`npm run verify`、`git diff --check` 与隔离 cache 的 npm pack dry-run 均成功；包为 65 个文件、389,812 B 压缩、1,047,607 B 解包。
 - 外网预检暂时失败：npm 与 GitHub HTTPS 均返回 `LibreSSL SSL_connect: SSL_ERROR_SYSCALL`；Git/系统代理为空，`127.0.0.1:7892` 及常见代理端口均无监听，因此先提交已验证代码，再重试外部发布。
+- 网络恢复后已创建发布提交 `507f3fa` 并推送 `main`；npm 官方账号 `tangsz` 成功发布 `dsh-omc-tui@0.2.13`。
+- 注释标签 `v0.2.13` 已推送，GitHub 正式 Release 已创建；回查确认 npm `version=latest=0.2.13`，Release 非草稿、非预发布，标签指向 `507f3fa`。
 
 ### 阶段 21：Jobs/Shell 审查整改
 - **状态：** complete

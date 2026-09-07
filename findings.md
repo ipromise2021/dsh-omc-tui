@@ -1006,3 +1006,10 @@
 - `package.json` 仍为 `0.2.12`，`CHANGELOG.md` 最新也是 `v0.2.12`，HEAD 无 tag。发布 npm 前必须先确定下一版本并补 CHANGELOG；同一版本无法重复发布。
 - 第二轮验证通过：所有 `src/**/*.js` 语法检查、`npm test`、`npm run verify`、`git diff --check`。5 万事件性能基准和 80×10 footer 复现均为本地只读诊断，没有修改产品代码。
 - 整改后：README 将 `/tasks` 作为任务中心主入口，`/jobs` 明确为兼容入口；版本升级为 `0.2.13` 并补充 CHANGELOG。`npm test`、`npm run verify`、`git diff --check` 和 npm pack dry-run 通过，包版本为 `dsh-omc-tui@0.2.13`。
+
+## v0.2.13 发布结果（2026-09-08）
+
+- 发布提交 `507f3fa` 已推送到 `origin/main`，注释标签 `v0.2.13` 指向该提交。
+- npm 官方 registry 已接受 `dsh-omc-tui@0.2.13`，回查 `version` 与 `dist-tags.latest` 均为 `0.2.13`。
+- GitHub 正式 Release `v0.2.13` 已创建，状态为非草稿、非预发布。
+- 首次外网预检曾同时对 npm/GitHub 返回 `SSL_ERROR_SYSCALL`；确认无残留 Git/系统代理与本地代理监听后，网络自行恢复，后续推送和发布均一次成功。

@@ -4,7 +4,7 @@
 完成 `v0.2.7` 的版本固化、验证、Git/npm/GitHub 发布，并保留历史审查与 rc.2 兼容验证记录。
 
 ## 当前阶段
-阶段 35（v0.2.13 正式发布，进行中）
+阶段 35（v0.2.13 正式发布，完成）
 
 ## 各阶段
 
@@ -278,12 +278,12 @@
 - **状态：** complete
 
 ### 阶段 35：v0.2.13 正式发布
-- [ ] 复跑测试、模块验证、空白检查与 npm 打包预检
-- [ ] 核对 npm/GitHub 身份、远端、版本与标签占用状态
-- [ ] 提交并推送 v0.2.13 发布代码
-- [ ] 发布 npm 官方 registry，并创建 Git 标签与 GitHub Release
-- [ ] 回查 npm latest、GitHub Release 与最终工作区状态
-- **状态：** in_progress
+- [x] 复跑测试、模块验证、空白检查与 npm 打包预检
+- [x] 核对 npm/GitHub 身份、远端、版本与标签占用状态
+- [x] 提交并推送 v0.2.13 发布代码
+- [x] 发布 npm 官方 registry，并创建 Git 标签与 GitHub Release
+- [x] 回查 npm latest、GitHub Release 与最终工作区状态
+- **状态：** complete
 
 ## 建议实现顺序
 1. CR-001 权限状态投影
