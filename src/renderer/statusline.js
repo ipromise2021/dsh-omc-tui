@@ -25,6 +25,7 @@ export function renderStatusRows(options) {
     recent = { toolDetails: [], jobs: [] },
     plan = { tasks: [] },
     planExpanded = false,
+    maxPlanRows = undefined,
     hasSystemPrompt = false,
     git = { isGit: false, branch: '', dirty: false, ahead: 0, behind: 0 },
     turnStats = undefined,
@@ -260,12 +261,21 @@ export function renderStatusRows(options) {
 
   const completedPlans = planTasks.filter((task) => task.status === 'completed').length
   const planComplete = planTasks.length > 0 && completedPlans === planTasks.length
-  const planRows = planTasks.length > 0
-    ? planComplete && !planExpanded
-      ? [`  ${ANSI.bash}✓${ANSI.reset} ${ANSI.teal}${ANSI.bold}PLAN${ANSI.reset} ${ANSI.dim}· ${completedPlans}/${planTasks.length} complete · Ctrl+T to view${ANSI.reset}`]
-      : [
+  const planRowLimit = Number.isFinite(maxPlanRows) ? Math.max(0, Math.floor(maxPlanRows)) : Infinity
+  const planSummary = `  ${ANSI.teal}${ANSI.bold}PLAN${ANSI.reset} ${ANSI.dim}· ${completedPlans}/${planTasks.length} complete · Ctrl+T or /tasks${ANSI.reset}`
+  let planRows = []
+  if (planTasks.length > 0 && planRowLimit > 0) {
+    if (planComplete && !planExpanded) {
+      planRows = [`  ${ANSI.bash}✓${ANSI.reset} ${ANSI.teal}${ANSI.bold}PLAN${ANSI.reset} ${ANSI.dim}· ${completedPlans}/${planTasks.length} complete · Ctrl+T to view${ANSI.reset}`]
+    } else if (planRowLimit === 1) {
+      planRows = [planSummary]
+    } else {
+      const taskBudget = Number.isFinite(planRowLimit) ? planRowLimit - 1 : 4
+      const needsMore = planTasks.length > (Number.isFinite(planRowLimit) ? taskBudget : 3)
+      const shown = planTasks.slice(0, needsMore ? Math.max(0, taskBudget - 1) : taskBudget)
+      planRows = [
         `  ${ANSI.teal}${ANSI.bold}PLAN${ANSI.reset} ${ANSI.dim}· ${completedPlans}/${planTasks.length} complete${planComplete ? ' · Ctrl+T to collapse' : ''}${ANSI.reset}`,
-        ...planTasks.slice(0, 3).map((task) => {
+        ...shown.map((task) => {
           const status = task.status ?? 'pending'
           const meta = status === 'completed'
             ? { icon: '✓', color: ANSI.bash, label: 'done' }
@@ -279,9 +289,10 @@ export function renderStatusRows(options) {
           const detailWidth = Math.max(8, effectiveColumns - widthOf(visibleOf(prefix)) - widthOf(visibleOf(suffix)))
           return `${prefix}${ANSI.ink}${shorten(safe(task.content), detailWidth)}${ANSI.reset}${suffix}`
         }),
-        ...(planTasks.length > 3 ? [`  ${ANSI.dim}… ${planTasks.length - 3} more${ANSI.reset}`] : [])
+        ...(needsMore ? [`  ${ANSI.dim}… ${planTasks.length - shown.length} more · /tasks${ANSI.reset}`] : [])
       ]
-    : []
+    }
+  }
   const result = fitRows([row1, row2, row3, permRow, ...planRows])
   return { rows: result, cache: { key: cacheKey, rows: result } }
 }

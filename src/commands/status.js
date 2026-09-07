@@ -58,5 +58,5 @@ export function handleStatus(app) {
     'Preferences',
     `  Theme: ${app.preferences?.theme ?? 'claude'} · history ${app.preferences?.persistHistory !== false ? 'on' : 'off'}`
   ]
-  app.log('ok', lines.join('\n'), '/status')
+  app.log('ok', lines.join('\n'), '/status', { structured: 'status' })
 }

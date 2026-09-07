@@ -7,7 +7,7 @@ import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
 import { pngDimensions, jpegDimensions, imageDimensions, MAX_SAFE_IMAGE_PIXELS, downscaleImageBuffer } from '../src/image-protocol.js'
 import { alignCodePoint, moveCursorLine, moveWordLeft, moveWordRight } from '../src/input/editor.js'
 import { handleCompact } from '../src/commands/compact.js'
-import { handleLocalCommand } from '../src/commands/registry.js'
+import { handleLocalCommand, LOCAL_COMMANDS } from '../src/commands/registry.js'
 import { renderMarkdownRows } from '../src/renderer/markdown.js'
 import { renderStatusRows } from '../src/renderer/statusline.js'
 import { renderJobPanel } from '../src/panels/jobs-panel.js'
@@ -111,12 +111,14 @@ assert.match(visionTool.output.render({}, { model: 'deepseek/vision', analysis: 
 const pngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 16, 0, 0, 0, 8])
 assert.equal(formatDurationMs(999), '999ms')
 assert.equal(formatDurationMs(59900), '59.9s')
+assert.equal(formatDurationMs(59950), '1m 00s')
 assert.equal(formatDurationMs(60000), '1m 00s')
 assert.equal(formatDurationMs(61300), '1m 01s')
 assert.equal(formatDurationMs(3723000), '62m 03s')
 assert.equal(formatTokens(999), '999')
 assert.equal(formatTokens(2500), '2.5k')
 assert.equal(formatTokens(66909), '67k')
+assert.equal(formatTokens(999500), '1m')
 assert.deepEqual(pngDimensions(pngHeader), { width: 16, height: 8 })
 
 const oversizedPngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 15, 160, 0, 0, 11, 184])
@@ -2198,6 +2200,13 @@ assert.match(planStatusText, /补充运维文档.*pending/)
 assert.match(planStatusText, /验证构建.*done/)
 assert.match(planStatusText, /… 1 more/)
 assert.equal(renderStatusRows({ columns: 100, density: 'compact', plan: { tasks: [{ content: 'hidden', status: 'pending' }] } }).rows.length, 2)
+const constrainedPlanStatus = renderStatusRows({
+  columns: 100,
+  maxPlanRows: 1,
+  plan: { tasks: Array.from({ length: 4 }, (_, index) => ({ content: `task ${index + 1}`, status: 'pending' })) }
+})
+assert.equal(constrainedPlanStatus.rows.length, 5, 'one plan row must keep detailed status within its budget')
+assert.match(visibleOf(constrainedPlanStatus.rows.at(-1)), /PLAN.*0\/4 complete.*\/tasks/)
 
 const completePlanStatus = renderStatusRows({
   columns: 100,
@@ -2576,13 +2585,27 @@ assert.deepEqual(TuiApp.prototype.taskPlanSnapshots.call(taskPlanApp), {
     { content: 'Finish', status: 'pending' }
   ]
 })
+const cachedTaskPlanEvents = [
+  { seq: 1, type: 'tool/call', data: { name: 'run_code', arguments: JSON.stringify({ code: "await tools.todo_write({ todos: [{ content: 'Cached', status: 'pending' }] })" }) } }
+]
+let taskPlanSnapshotReads = 0
+const cachedTaskPlanApp = {
+  agent: { session: { snapshotEvents: () => { taskPlanSnapshotReads += 1; return cachedTaskPlanEvents } } }
+}
+TuiApp.prototype.taskPlanSnapshots.call(cachedTaskPlanApp)
+TuiApp.prototype.taskPlanSnapshots.call(cachedTaskPlanApp)
+assert.equal(taskPlanSnapshotReads, 2, 'the session snapshot is read, but parsing is cached for an unchanged event tail')
+assert.equal(cachedTaskPlanApp.taskPlanCache.plan.tasks[0].content, 'Cached')
+cachedTaskPlanEvents.push({ seq: 2, type: 'tool/call', data: { name: 'run_code', arguments: JSON.stringify({ code: "await tools.todo_write({ todos: [{ content: 'Fresh', status: 'completed' }] })" }) } })
+assert.equal(TuiApp.prototype.taskPlanSnapshots.call(cachedTaskPlanApp).tasks[0].content, 'Fresh')
 
 const tasksCommandApp = {
   openTasksPanel(tab) { this.openedTab = tab },
   scheduleRender: noop
 }
 handleLocalCommand(tasksCommandApp, 'tasks')
-assert.equal(tasksCommandApp.openedTab, undefined)
+assert.equal(LOCAL_COMMANDS.some((item) => item.name === 'tasks'), true)
+assert.equal(tasksCommandApp.openedTab, 'plan')
 handleLocalCommand(tasksCommandApp, 'jobs')
 assert.equal(tasksCommandApp.openedTab, 'jobs')
 
@@ -3302,6 +3325,28 @@ panelLayoutApp.input = '/moe'
 panelLayoutApp.buildFooter(80, 24)
 assert.ok(panelLayoutApp.floatingRows.some((l) => l.includes('No commands match "/moe"')), 'No match message must be displayed')
 panelLayoutApp.commandPalette = undefined
+
+panelLayoutApp.compactState = {}
+const compactFooter = panelLayoutApp.buildFooter(80, 24)
+assert.match(visibleOf(compactFooter.join('\n')), /Compacting conversation history.*\(0\.1s\)/)
+assert.doesNotMatch(visibleOf(compactFooter.join('\n')), /0\.1ss/)
+panelLayoutApp.compactState = undefined
+
+const compactHeightPlanApp = new TuiApp({})
+compactHeightPlanApp.agent = {
+  options: { model: 'test-model' },
+  session: {
+    events: [{ seq: 1, type: 'tool/call', data: { name: 'run_code', arguments: JSON.stringify({ code: "await tools.todo_write({ todos: [{ content: 'first', status: 'in_progress' }, { content: 'second', status: 'pending' }, { content: 'third', status: 'pending' }] })" }) } }]
+  },
+  ctx: { get: () => undefined }
+}
+compactHeightPlanApp.currentEffort = () => 'provider'
+compactHeightPlanApp.planModeService = () => ({ get: () => ({ active: false }) })
+compactHeightPlanApp.recentUsage = () => ({ toolDetails: [], jobs: [] })
+compactHeightPlanApp.preferences.statusline = 'detailed'
+const compactHeightFooter = compactHeightPlanApp.buildFooter(80, 10)
+assert.ok(compactHeightFooter.length <= 9, 'footer must reserve at least one viewport row in a 10-row terminal')
+assert.match(visibleOf(compactHeightFooter.join('\n')), /PLAN.*0\/3 complete/)
 
 // History indicator badge test: ─── History X/Y ─────
 panelLayoutApp.history = ['msg1', 'msg2', 'msg3']
@@ -4577,8 +4622,31 @@ inertDispose()
   assert.match(statusLogOutput, /Runtime\n  TUI:/)
   assert.match(statusLogOutput, /Session\n  Directory:/)
   assert.match(statusLogOutput, /Usage\n  Context:/)
-  assert.match(statusLogOutput, /TUI:\s+dsh-omc-tui v0\.2\.12/)
+  assert.match(statusLogOutput, /TUI:\s+dsh-omc-tui v0\.2\.13/)
   assert.ok(statusLogOutput.includes('0 / 100.0k tokens (0%)') || statusLogOutput.includes('0 / 100k tokens (0%)') || statusLogOutput.includes('0 tokens (0%)'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
+
+  const structuredStatusRows = TuiApp.prototype.formatLogEntry.call({}, {
+    kind: 'ok',
+    command: '/status',
+    structured: 'status',
+    text: 'STATUS · session diagnostics\n\nRuntime\n  TUI: dsh-omc-tui v0.2.13'
+  })
+  const structuredStatusText = visibleOf(structuredStatusRows.join('\n'))
+  assert.match(structuredStatusText, /STATUS · session diagnostics\n\n  Runtime\n    TUI:/)
+  assert.doesNotMatch(structuredStatusText, /·\s*\n/, 'structured status blank lines must remain blank')
+
+  const replayedStatusText = visibleOf(formatEvents([{
+    seq: 1,
+    time: 1,
+    type: 'local/log',
+    data: {
+      structured: 'status',
+      text: 'STATUS · session diagnostics\n\nRuntime\n  TUI: dsh-omc-tui v0.2.13',
+      level: 'ok'
+    }
+  }], 100).join('\n'))
+  assert.match(replayedStatusText, /STATUS · session diagnostics\n\n  Runtime\n    TUI:/)
+  assert.doesNotMatch(replayedStatusText, /·\s*\n/, 'replayed status blank lines must remain blank')
 }
 
 // ── Session Recap Summary & Auto-Recap after 15m idle gap ────────────────

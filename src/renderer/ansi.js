@@ -250,6 +250,7 @@ export function shorten(text, size = 110) {
 
 export function formatTokens(value) {
   if (value >= 1000000) return `${(value / 1000000).toFixed(value % 1000000 === 0 ? 0 : 1)}m`
+  if (value >= 999500) return '1m'
   if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k`
   return String(value)
 }
@@ -262,6 +263,7 @@ export function formatTime(time) {
 export function formatDurationMs(ms) {
   if (!Number.isFinite(ms) || ms < 0) return '—'
   if (ms < 1000) return `${Math.max(1, Math.round(ms))}ms`
+  if (ms < 60000 && Math.round(ms / 100) >= 600) return '1m 00s'
   if (ms >= 60000) {
     const minutes = Math.floor(ms / 60000)
     const seconds = Math.floor((ms % 60000) / 1000)

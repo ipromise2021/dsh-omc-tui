@@ -405,6 +405,7 @@ export class TuiApp {
     this.expandedKeys = new Set()
     this.statuslinePlanExpanded = false
     this.statuslinePlanIdentity = undefined
+    this.taskPlanCache = undefined
     this.historySearch = undefined // { query, matches, selected }
     this.promptSuggestion = undefined // { text, controller, requestId }
     this.promptSuggestionSeq = 0
@@ -2282,8 +2283,8 @@ export class TuiApp {
     return localEntry
   }
 
-  log(kind, text, command) {
-    const entry = this.appendLocalLogEntry({ kind, text, command, seq: this.agent?.session?.seq ?? 0, time: Date.now() })
+  log(kind, text, command, options = {}) {
+    const entry = this.appendLocalLogEntry({ kind, text, command, ...options, seq: this.agent?.session?.seq ?? 0, time: Date.now() })
     const lines = this.formatLogEntry(entry)
     this.commitToScrollback(lines)
   }
@@ -2340,7 +2341,13 @@ export class TuiApp {
         // Slash command: "❯ /cmd", Claude Code style
         lines.push('')
         lines.push(`${ANSI.blue}${ANSI.bold}❯ ${entry.command}${ANSI.reset}`)
-        if (entry.text) {
+        if (entry.structured === 'status' && entry.text) {
+          for (const line of String(entry.text).split('\n')) {
+            if (!line) lines.push('')
+            else if (!/^\s/.test(line)) lines.push(`  ${ANSI.teal}${ANSI.bold}${safe(line)}${ANSI.reset}`)
+            else lines.push(`    ${ANSI.ink}${safe(line.trimStart())}${ANSI.reset}`)
+          }
+        } else if (entry.text) {
           const isError = entry.kind === 'error'
           const prefix = isError ? `${ANSI.coral}✗${ANSI.reset}` : `${ANSI.blueSoft}·${ANSI.reset}`
           for (const line of String(entry.text).split('\n')) {
@@ -4751,6 +4758,7 @@ export class TuiApp {
     this.expandedKeys = new Set()
     this.statuslinePlanExpanded = false
     this.statuslinePlanIdentity = undefined
+    this.taskPlanCache = undefined
     this.active = false
     this.focusedBlockKey = null
     this.baseTranscriptDocument = undefined
@@ -5035,8 +5043,13 @@ export class TuiApp {
   }
 
   taskPlanSnapshots() {
+    const session = this.agent?.session
+    const events = sessionEvents(session)
+    const last = events.at(-1)
+    const cached = this.taskPlanCache
+    if (cached?.session === session && cached.length === events.length && cached.lastSeq === last?.seq) return cached.plan
     let latest = { seen: false, available: false, tasks: [] }
-    for (const event of sessionEvents(this.agent?.session)) {
+    for (const event of events) {
       if (event.type !== 'tool/call' || !/^run_?code$/i.test(String(event.data?.name ?? ''))) continue
       const rawArgs = event.data?.arguments ?? event.data?.args
       let args = {}
@@ -5048,6 +5061,7 @@ export class TuiApp {
       const plan = todoPlanFromRunCode(args?.code ?? args?.script ?? args?.source)
       if (plan.seen) latest = plan
     }
+    this.taskPlanCache = { session, length: events.length, lastSeq: last?.seq, plan: latest }
     return latest
   }
 
@@ -7661,7 +7675,7 @@ export class TuiApp {
     return idleWords[this.idleIndex] ?? idleWords[0]
   }
 
-  statusRows(columns) {
+  statusRows(columns, options = {}) {
     if (!this.agent) {
       const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? {}
       const liveModel = selection.model ?? 'deepseek-v4-flash'
@@ -7670,7 +7684,7 @@ export class TuiApp {
         `  ${ANSI.blueSoft}BUILD${ANSI.reset} | ${ANSI.dim}[${liveModel}]${ANSI.reset} | ${ANSI.dim}${cwdName}${ANSI.reset} | ${ANSI.dim}initializing session…${ANSI.reset}`
       ]
     }
-    const density = this.preferences?.statusline ?? 'detailed'
+    const density = options.density ?? this.preferences?.statusline ?? 'detailed'
     const selection = this.agent?.options
     const liveModel = this.activeModel?.model ?? selection?.model ?? 'deepseek'
     const cwdName = process.cwd().split('/').filter(Boolean).pop() || process.cwd()
@@ -7681,7 +7695,7 @@ export class TuiApp {
     const recent = this.recentUsage()
     const hasSystemPrompt = Boolean(this.agent?.ctx?.get?.('systemPrompt'))
     const plan = this.taskPlanSnapshots()
-    const planIdentity = plan.tasks.map((task) => task.content ?? '').join('\x1f')
+    const planIdentity = plan.tasks.map((task) => `${task.status ?? 'pending'}:${task.content ?? ''}`).join('\x1f')
     if (this.statuslinePlanIdentity !== planIdentity) {
       this.statuslinePlanIdentity = planIdentity
       this.statuslinePlanExpanded = false
@@ -7708,6 +7722,7 @@ export class TuiApp {
       recent,
       plan,
       planExpanded: this.statuslinePlanExpanded,
+      maxPlanRows: options.maxPlanRows,
       hasSystemPrompt,
       git: this.gitStatus,
       turnStats: this.turnStats,
@@ -8005,9 +8020,22 @@ export class TuiApp {
     const bashMode = this.inBashMode()
     const topRows = this.topPanelRows(columns, rows)
     const bottomRows = this.bottomPanelRows(columns, rows)
-    const statusRows = bashMode
-      ? [`  ${ANSI.bash}! for shell mode${ANSI.reset}`]
-      : this.statusRows(columns)
+    const hasCompactProgress = Boolean(this.compactState)
+    const hasActiveProgress = this.active && !this.questionPanel && !this.pendingApproval && !this.streaming?.text
+    const progressRows = hasCompactProgress
+      ? 2 + (this.compactState.phrase ? 1 : 0) + (this.compactState.tip ? 1 : 0)
+      : hasActiveProgress ? 3 : 0
+    const statusBudget = Math.max(1, rows - 1 - 3 - progressRows)
+    const preferredDensity = this.preferences?.statusline ?? 'detailed'
+    const density = preferredDensity === 'detailed' && statusBudget < 4
+      ? (statusBudget >= 2 ? 'compact' : 'minimal')
+      : preferredDensity === 'compact' && statusBudget < 2 ? 'minimal' : preferredDensity
+    const maxPlanRows = density === 'detailed' ? Math.max(0, statusBudget - 4) : 0
+    const statusRows = bottomRows.length > 0
+      ? []
+      : bashMode
+        ? [`  ${ANSI.bash}! for shell mode${ANSI.reset}`]
+        : this.statusRows(columns, { density, maxPlanRows })
     
     this.inputMaxRows = Math.max(3, Math.min(10, rows - 10))
 
@@ -8020,7 +8048,7 @@ export class TuiApp {
         ? formatDurationMs(Date.now() - this.compactState.startedAt)
         : '0.1s'
 
-      lines.push(`  ${ANSI.blueSoft}${frame}${ANSI.reset} ${ANSI.bold}Compacting conversation history${dots}${ANSI.reset} ${ANSI.dim}(${elapsed}s)${ANSI.reset}`)
+      lines.push(`  ${ANSI.blueSoft}${frame}${ANSI.reset} ${ANSI.bold}Compacting conversation history${dots}${ANSI.reset} ${ANSI.dim}(${elapsed})${ANSI.reset}`)
       if (this.compactState.phrase) {
         lines.push(`    ${ANSI.dim}│ ${this.compactState.phrase}${ANSI.reset}`)
       }

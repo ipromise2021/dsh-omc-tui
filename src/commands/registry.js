@@ -24,6 +24,7 @@ export const LOCAL_COMMANDS = [
   { name: 'status', description: 'show full session and environment status' },
   { name: 'preset', description: 'select the agent preset for this blank session' },
   { name: 'settings', description: 'configure TUI theme and local preferences' },
+  { name: 'tasks', description: 'show the task plan and background jobs' },
   { name: 'jobs', description: 'show background jobs and long-running work' },
   { name: 'paste', description: 'paste image from system clipboard' },
   { name: 'export', description: 'export the transcript as markdown' },
@@ -183,6 +184,10 @@ export function handleLocalCommand(app, commandName, line = '') {
     }
     case 'settings':
       app.openSettings()
+      break
+    case 'tasks':
+      if (typeof app.openTasksPanel === 'function') app.openTasksPanel('plan')
+      else app.openJobsPanel?.()
       break
     case 'jobs':
       if (typeof app.openTasksPanel === 'function') app.openTasksPanel('jobs')

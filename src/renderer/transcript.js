@@ -570,6 +570,20 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
         } else if (entry.badge) {
           rows.push(`  ${color}${icon} ${safe(entry.badge)}: ${safe(entry.text)}${ANSI.reset}`)
           logicalLines.push(`${entry.badge}: ${entry.text}`)
+        } else if (entry.structured === 'status') {
+          for (const line of String(entry.text).split('\n')) {
+            if (!line) {
+              rows.push('')
+              logicalLines.push('')
+            } else if (!/^\s/.test(line)) {
+              rows.push(`  ${ANSI.teal}${ANSI.bold}${safe(line)}${ANSI.reset}`)
+              logicalLines.push(line)
+            } else {
+              const detail = line.trimStart()
+              rows.push(`    ${ANSI.ink}${safe(detail)}${ANSI.reset}`)
+              logicalLines.push(detail)
+            }
+          }
         } else {
           for (const line of String(entry.text).split('\n')) {
             rows.push(`  ${color}${safe(line)}${ANSI.reset}`)

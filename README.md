@@ -92,7 +92,7 @@ deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片�
 - `/btw`：使用独立临时会话回答旁路问题
 - `/compact`：调用 Harness 压缩当前会话上下文
 - `!命令`：执行本地 Shell 命令
-- `/jobs`：直接查看和取消后台任务
+- `/tasks`：查看 Agent Plan，并切换查看后台任务
 - `/resume`：恢复历史会话
 - `/steer`：运行中调整当前任务方向
 
@@ -189,7 +189,8 @@ npx --yes @deepseek-ai/dsh@0.1.2-rc.1 --profile tui
 | `/new` | 使用当前模型、权限和预设创建新会话 |
 | `/btw <问题>` | 在独立临时会话中提问，不加入主会话历史 |
 | `/compact` | 压缩当前会话上下文 |
-| `/jobs` | 打开后台任务页；读取输出、刷新或取消任务（可切换查看计划） |
+| `/tasks` | 打开任务中心；默认查看 Agent Plan，可切换后台任务 |
+| `/jobs` | 兼容入口；直接打开后台任务页，读取输出、刷新或取消任务 |
 | `/skills` | 浏览并在 TUI Profile 中切换 Skill 的 on/off 状态 |
 | `/resume` | 恢复当前工作目录下的历史会话 |
 | `/rename <标题>` | 重命名当前会话 |

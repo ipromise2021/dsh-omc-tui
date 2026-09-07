@@ -25,6 +25,45 @@
 - 已统一 `formatDurationMs()`，运行中 token 复用 `formatTokens()`；`/status` 具备标题和 Runtime/Session/Usage/Preferences 分组；MCP 嵌套摘要保留 `_`；macOS 剪贴板支持 PNG 和 TIFF→PNG 回退，并为失败提供简洁错误。
 - 验证通过：当前剪贴板非图片时返回明确原因；`npm test`、`npm run verify`、`git diff --check` 全部通过。
 
+## 会话：2026-09-08
+
+### 阶段 31：v0.2.12 后发布前代码与提交审查
+- **状态：** complete
+- 审查范围：已推送的 `v0.2.12..8925b21`，重点为 Tasks/Jobs、状态栏、活动摘要与图片粘贴的近期变更；不修改产品代码或执行发布。
+- 已确认两项 P1 发布阻断：`/tasks` 未注册/分发；compact footer 复用带单位耗时后追加了第二个 `s`。最小 Node 复现分别得到 `{ listed: false, openedTab: null }` 和 `(1m 02ss)`。
+- 自动验证均通过：`npm test`、`npm run verify`、`git diff --check` 与隔离 cache 的 npm pack dry-run；版本、CHANGELOG 和 tag 仍停在 `0.2.12`，发布前必须先修复并固化新版本元数据。
+
+### 阶段 32：发布阻断项修复
+- **状态：** complete
+- 用户授权修复 `/tasks` 未注册/分发，以及 `/compact` 的重复时间单位；版本与发布元数据暂不调整。
+- 已将 `/tasks` 注册并路由到 Plan 任务中心，`/jobs` 保持直达后台任务；compact footer 直接使用已带单位的时长。
+- 新增命令注册/路由与 compact footer 回归断言。`npm test`、`npm run verify`、`git diff --check`、隔离 cache 的 npm pack dry-run 全部通过。
+
+### 阶段 33：发布前第二轮深度审查
+- **状态：** complete
+- 本轮只审查和记录，未修改产品代码；重点复核 `/status` 最终内容区、计划状态栏在矮终端的布局、计划投影热路径、格式边界与发布元数据。
+- 确认 CR-080（P2）：`/status` 原始分组经过通用 slash renderer 后，每行和空行仍带 `·`，视觉层级没有真正建立。
+- 确认 CR-081（P2）：80×10 终端下详细计划使 footer 增至 12 行，`composeFrame()` 从尾部截断，计划只剩标题和首项。
+- 确认 CR-082（P3）：计划提取在状态栏 memoization 前扫描完整事件历史；5 万事件基准约 1.2ms/帧，运行中 10fps 约 12ms CPU/秒。
+- 确认 CR-083（P3）：格式阈值前因四舍五入出现 `60.0s` 和 `1000k`。
+- README 仍缺 `/tasks` 主入口，版本/CHANGELOG/tag 仍停在 v0.2.12；新版本发布前必须补齐。
+- 验证通过：递归 `node --check`、`npm test`、`npm run verify`、`git diff --check`。
+
+### 阶段 34：发布前审查整改
+- **状态：** complete
+- `/status` 使用结构化本地日志标记；即时输出和重投影历史都保留真正空行，并对 STATUS/分组/详情做分层渲染。
+- footer 在 8～12 行级别的矮终端预留 viewport，自动降为 compact/minimal，详细模式下的 Plan 遵守行预算并引导用户使用 `/tasks`。
+- 计划 durable 投影按 Session、事件数量与末尾 seq 缓存，会话切换清空缓存；格式化边界统一为 `1m 00s` 和 `1m`。
+- README、CHANGELOG 与包版本已同步为 `0.2.13`；`/tasks` 为主入口，`/jobs` 为兼容入口。
+- 首轮测试发现分钟进位条件误覆盖 61.3 秒，已收紧为仅对不足一分钟的值进位。最终 `npm test`、`npm run verify`、`git diff --check`、npm pack dry-run 均通过。
+
+### 阶段 35：v0.2.13 正式发布
+- **状态：** in_progress
+- 用户已授权提交当前整改、推送 GitHub、发布 npm 官方 registry，并创建正式 GitHub Release；不发布预发布版本。
+- 发布目标为 `dsh-omc-tui@0.2.13` / `v0.2.13`，将先完成最终门禁与版本占用检查，再执行外部发布并回查。
+- 最终本地门禁通过：`npm test`、`npm run verify`、`git diff --check` 与隔离 cache 的 npm pack dry-run 均成功；包为 65 个文件、389,812 B 压缩、1,047,607 B 解包。
+- 外网预检暂时失败：npm 与 GitHub HTTPS 均返回 `LibreSSL SSL_connect: SSL_ERROR_SYSCALL`；Git/系统代理为空，`127.0.0.1:7892` 及常见代理端口均无监听，因此先提交已验证代码，再重试外部发布。
+
 ### 阶段 21：Jobs/Shell 审查整改
 - **状态：** complete
 - 执行的操作：

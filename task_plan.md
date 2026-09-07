@@ -4,7 +4,7 @@
 完成 `v0.2.7` 的版本固化、验证、Git/npm/GitHub 发布，并保留历史审查与 rc.2 兼容验证记录。
 
 ## 当前阶段
-阶段 30（终端信息展示与图片粘贴体验优化，完成）
+阶段 35（v0.2.13 正式发布，进行中）
 
 ## 各阶段
 
@@ -249,6 +249,42 @@
 - [x] 补充回归测试并运行完整验证
 - **状态：** complete
 
+### 阶段 31：v0.2.12 后发布前代码与提交审查
+- [x] 审查 `v0.2.12..HEAD` 的代码与测试变更
+- [x] 复核当前工作区、版本、发布说明和包内容
+- [x] 运行发布前验证并记录风险与结论
+- **状态：** complete
+
+### 阶段 32：发布阻断项修复
+- [x] 注册并分发 `/tasks` 到 Plan 任务中心
+- [x] 修复 `/compact` 耗时单位重复
+- [x] 补充命令路由与 footer 格式回归测试
+- [x] 运行完整发布前验证
+- **状态：** complete
+
+### 阶段 33：发布前第二轮深度审查
+- [x] 审查 Tasks 计划投影的刷新频率、复杂度与大会话表现
+- [x] 审查 `/status` 内容区渲染、图片粘贴失败路径与终端边界
+- [x] 核对版本、CHANGELOG、README 与 npm 包发布一致性
+- [x] 运行针对性验证并记录发布建议
+- **状态：** complete
+
+### 阶段 34：发布前审查整改
+- [x] 为 `/status` 增加结构化内容区渲染，并保持历史重放一致
+- [x] 按终端高度降级状态栏密度并限制计划行数
+- [x] 缓存计划投影，修正时间与 token 进位边界
+- [x] 同步 `/tasks` 文档、版本与 CHANGELOG，并补充回归测试
+- [x] 运行完整发布前验证
+- **状态：** complete
+
+### 阶段 35：v0.2.13 正式发布
+- [ ] 复跑测试、模块验证、空白检查与 npm 打包预检
+- [ ] 核对 npm/GitHub 身份、远端、版本与标签占用状态
+- [ ] 提交并推送 v0.2.13 发布代码
+- [ ] 发布 npm 官方 registry，并创建 Git 标签与 GitHub Release
+- [ ] 回查 npm latest、GitHub Release 与最终工作区状态
+- **状态：** in_progress
+
 ## 建议实现顺序
 1. CR-001 权限状态投影
 2. CR-002 无取消能力时的退出保护
@@ -274,6 +310,8 @@
 |------|---------|---------|
 | `npm pack --dry-run` 因 `~/.npm/_cacache` 存在 root-owned 文件返回 `EPERM` | 1 | 不修改全局缓存权限；改用 `/private/tmp/dsh-omc-tui-npm-cache-v027` 隔离 cache 重试 |
 | `npm whoami` 返回 `ENEEDAUTH` | 1 | 默认 registry 指向 npmmirror，而 token 绑定 npmjs；发布命令显式使用 `https://registry.npmjs.org/`，官方身份验证成功 |
+| npm/GitHub HTTPS 预检返回 `SSL_ERROR_SYSCALL` | 1 | 已确认 Git 与系统代理为空、常见本地代理端口未监听；先完成本地提交，再等待网络恢复后重试外部发布 |
+| `formatDurationMs(61300)` 被分钟进位误显示为 `1m 00s` | 1 | 将进位条件限制为不足 60 秒的舍入边界，保留一分钟以上的真实秒位 |
 | PTY 测试缺少 `DSH_HOME` 或 `DSH_TEST_FIXTURE_HOME` | 1 | 记录为环境阻塞；准备 Harness fixture 后补跑 |
 | 首次同步阶段 14 记录时补丁上下文格式错误 | 1 | 拆分为标准多文件 patch 后成功写入 |
 | 第二次同步阶段 14 记录时多文件 patch hunk 格式错误 | 1 | 分为两个独立 apply_patch 调用后写入 |

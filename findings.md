@@ -953,3 +953,56 @@
 - 图片直贴仅通过 AppleScript 请求 macOS 剪贴板 `PNGf` 数据，读取异常被静默吞掉后仅尝试文本 `pbpaste`。应返回可诊断失败原因，并为常见 TIFF 剪贴板图像增加 PNG 转换回退。
 - 实现结果：`formatDurationMs()` 在一分钟后使用 `Xm YYs`；运行中 token 复用既有 `formatTokens()`；活动、状态栏、转录和 Jobs 共享同一耗时格式。`/status` 采用轻量标题和分组。MCP 摘要保留 identifier 原文。剪贴板读取支持 PNG/TIFF，TIFF 经 `sips` 转 PNG，并在无图、超时和读取失败时返回简洁原因。
 - 本机冒烟：当前非图片剪贴板正确返回 “no PNG or TIFF image found in the system clipboard”，未读取或输出剪贴板内容。
+
+## v0.2.12 后发布前审查（2026-09-08）
+
+- 审查范围：`v0.2.12..8925b21` 的三次提交（Tasks/Jobs、状态栏、活动摘要和图片粘贴），以及当前发布元数据与 npm 打包清单。
+- P1：`/tasks` 已写入 `ARCHITECTURE.md`，但既未注册到 `LOCAL_COMMANDS`，也没有 `handleLocalCommand()` 分支。最小复现确认 `LOCAL_COMMANDS.some(name === 'tasks')` 为 false，调用后不会打开面板；实际输入 `/tasks` 会作为未知命令处理。
+- P1：`buildFooter()` 已将 compact 耗时替换为返回带单位的 `formatDurationMs()`，但字符串仍拼接额外的 `s`。62 秒会渲染为 `(1m 02ss)`；短时间也会出现 `0.1ss`。现有测试只覆盖共享函数，不覆盖 compact footer。
+- 发布元数据未准备：`package.json` 仍为 `0.2.12`，HEAD 没有新 tag，`CHANGELOG.md` 没有 Unreleased/下一版本条目。不能以相同 npm 版本重新发布。
+- 自动验证：`npm test`、`npm run verify`、`git diff --check` 和隔离 cache 的 `npm pack --dry-run --json` 均通过；包为 65 个文件、388,717 B 压缩、1,043,681 B 解包。测试通过不消除上述两项未覆盖的 P1。
+- 修复结果：`/tasks` 已加入本地命令列表并路由到 `openTasksPanel('plan')`；compact footer 不再为完整时长追加额外单位。新增断言覆盖命令注册/Plan 路由与 `0.1s` compact fallback，完整测试、模块验证、空白检查和打包预检通过。
+
+## 发布前第二轮深度审查（2026-09-08）
+
+### CR-080：`/status` 分组结构被通用项目符号渲染破坏
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/commands/status.js:40-60`、`src/index.js:2339-2349`
+- **现象：** `/status` 已增加 STATUS 标题、分组标题与空行，但通用 slash-command 日志渲染器仍为正文的每一行（包括空行）统一添加 `·`。实际输出会出现 `· STATUS`、`· Runtime` 和多行只有 `·` 的分隔行。
+- **影响：** 用户提出的“内容区缺少 status、格式别扭”只解决了标题缺失，视觉层级仍被重复项目符号打散。
+- **建议：** 为结构化状态输出提供无项目符号的 block 渲染方式，或至少让空行保持真正空白、分组标题使用单独样式；补充对 `formatLogEntry()` 最终可见文本的回归测试，而非只断言 `handleStatus()` 原始字符串。
+- **关闭验证：** `/status` 以 `structured: 'status'` 写入本地日志；即时 `formatLogEntry()` 与历史 `projectTranscript()` 都将标题、分组和详情分层渲染，空行不再显示项目符号。回归测试覆盖两条渲染链路。
+
+### CR-081：详细状态栏的计划行在矮终端被尾部静默截断
+- **优先级：** P2
+- **状态：** resolved
+- **位置：** `src/renderer/statusline.js:261-285`、`src/renderer/screen.js:87-119`
+- **现象：** 未完成计划可为详细状态栏增加最多 5 行。80×10 的最小复现中，footer 共 12 行，`composeFrame()` 仍保留 1 行 viewport 后再从数组尾部截断，结果只显示计划标题与第一条任务，其余任务、more 提示被静默丢弃。
+- **影响：** 小窗/分屏时计划内容不完整，且没有降级提示；运行中额外 activity 行会进一步压缩状态栏。
+- **建议：** 根据可用终端高度为 plan 行设置预算，矮终端自动折叠为单行摘要或切换 compact 表示；增加 8～12 行终端高度矩阵回归。
+- **关闭验证：** footer 现在预留至少一行 viewport，并按可用行数将详细状态栏降级为 compact/minimal；仍为 detailed 时，Plan 严格遵守剩余行预算，单行摘要指向 `Ctrl+T` 或 `/tasks`。80×10 回归验证 footer 不超过 9 行。
+
+### CR-082：计划提取绕过状态栏缓存重复扫描完整会话
+- **优先级：** P3
+- **状态：** resolved
+- **位置：** `src/index.js:5037-5051`、`src/index.js:7664-7690`
+- **现象：** `statusRows()` 在进入 `renderStatusRows()` 的 memoization 之前调用 `taskPlanSnapshots()`，每次扫描全部 durable events。运行期动画每 100ms 调度重绘，因此缓存命中也无法避免该扫描。
+- **影响：** 合成数据测得 5 万事件约 1.2ms/次，即运行中约 12ms CPU/秒；若上游 `snapshotEvents()` 复制数组或 run_code 较大，成本会更高。当前不是发布阻断，但与架构文档“缓存后开销降至 0ms”的描述不一致。
+- **建议：** 以 session id + seq 缓存计划投影，或在 `session/event` 到达时增量更新；会话切换时清理缓存。
+- **关闭验证：** 计划投影以 Session 对象、事件数量和最后 seq 为键缓存；会话提交时清理缓存，新增事件会自动失效重算。
+
+### CR-083：展示格式在进位边界出现 `60.0s` 与 `1000k`
+- **优先级：** P3
+- **状态：** resolved
+- **位置：** `src/renderer/ansi.js:251-270`
+- **现象：** `formatDurationMs(59950)` 四舍五入为 `60.0s`，而 60000 才切为 `1m 00s`；`formatTokens(999500)` 四舍五入为 `1000k`，1000000 才切为 `1m`。
+- **影响：** 临界值短暂显示为已达到下一单位但仍沿用旧单位，属于发布前可见的格式抖动。
+- **建议：** 要么避免向上舍入跨单位，要么按舍入后的显示值进位；补充阈值前后测试。
+- **关闭验证：** 59.95 秒进位显示为 `1m 00s`，999.5k token 进位显示为 `1m`；一分钟以上仍保留真实秒位。边界测试已覆盖。
+
+### 发布一致性复核
+- `README.md` 的常用工作流和命令表仍只列 `/jobs`，没有把已实现的 `/tasks` 作为主入口，与 `ARCHITECTURE.md` 和命令注册不一致。
+- `package.json` 仍为 `0.2.12`，`CHANGELOG.md` 最新也是 `v0.2.12`，HEAD 无 tag。发布 npm 前必须先确定下一版本并补 CHANGELOG；同一版本无法重复发布。
+- 第二轮验证通过：所有 `src/**/*.js` 语法检查、`npm test`、`npm run verify`、`git diff --check`。5 万事件性能基准和 80×10 footer 复现均为本地只读诊断，没有修改产品代码。
+- 整改后：README 将 `/tasks` 作为任务中心主入口，`/jobs` 明确为兼容入口；版本升级为 `0.2.13` 并补充 CHANGELOG。`npm test`、`npm run verify`、`git diff --check` 和 npm pack dry-run 通过，包版本为 `dsh-omc-tui@0.2.13`。
