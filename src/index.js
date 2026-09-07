@@ -2185,50 +2185,82 @@ export class TuiApp {
   }
 
   async tryPasteClipboardImage() {
-    if (process.platform !== 'darwin') return false
+    this.lastClipboardImagePasteError = undefined
+    if (process.platform !== 'darwin') {
+      this.lastClipboardImagePasteError = 'system clipboard image paste is currently supported on macOS only'
+      return false
+    }
     try {
       const script = `
+        set imageData to missing value
+        set imageExtension to ""
         try
           set pngData to the clipboard as «class PNGf»
-          set filePath to POSIX path of (path to temporary items as text) & "dsh-clipboard-" & ((random number from 10000 to 99999) as text) & ".png"
-          set fileRef to open for access (POSIX file filePath) with write permission
-          set eof fileRef to 0
-          write pngData to fileRef
-          close access fileRef
-          return filePath
+          set imageData to pngData
+          set imageExtension to ".png"
         on error
-          return ""
+          try
+            set tiffData to the clipboard as «class TIFF»
+            set imageData to tiffData
+            set imageExtension to ".tiff"
+          on error
+            set imageData to missing value
+          end try
         end try
+        if imageExtension is "" then return ""
+        set filePath to POSIX path of (path to temporary items as text) & "dsh-clipboard-" & ((random number from 10000 to 99999) as text) & imageExtension
+        set fileRef to open for access (POSIX file filePath) with write permission
+        set eof fileRef to 0
+        write imageData to fileRef
+        close access fileRef
+        return filePath
       `
       const { execFile } = await import('node:child_process')
       const { promisify } = await import('node:util')
       const execFileAsync = promisify(execFile)
       const { stdout } = await execFileAsync('osascript', ['-e', script], { timeout: 3000 })
       const filePath = stdout.trim()
-      if (filePath && filePath.endsWith('.png')) {
+      if (filePath && /\.png$|\.tiff?$/i.test(filePath)) {
         const { readFile, unlink } = await import('node:fs/promises')
-        let data = await readFile(filePath)
-        const dims = pngDimensions(data)
-        if (dims && (dims.width > MAX_SAFE_IMAGE_PIXELS || dims.height > MAX_SAFE_IMAGE_PIXELS)) {
-          try {
-            await execFileAsync('sips', ['-Z', String(MAX_SAFE_IMAGE_PIXELS), filePath], { timeout: 5000 })
-            data = await readFile(filePath)
-          } catch {
-            // retain original data
+        let readablePath = filePath
+        const isTiff = /\.tiff?$/i.test(filePath)
+        const convertedPath = isTiff ? join(tmpdir(), `dsh-clipboard-${randomUUID()}.png`) : undefined
+        try {
+          if (convertedPath) {
+            await execFileAsync('sips', ['-s', 'format', 'png', filePath, '--out', convertedPath], { timeout: 5000 })
+            readablePath = convertedPath
           }
+          let data = await readFile(readablePath)
+          const dims = pngDimensions(data)
+          if (dims && (dims.width > MAX_SAFE_IMAGE_PIXELS || dims.height > MAX_SAFE_IMAGE_PIXELS)) {
+            try {
+              await execFileAsync('sips', ['-Z', String(MAX_SAFE_IMAGE_PIXELS), readablePath], { timeout: 5000 })
+              data = await readFile(readablePath)
+            } catch {
+              // retain original data; acceptImage will validate and report a precise error if needed
+            }
+          }
+          if (data && data.length > 0) {
+            await this.acceptImage({
+              data,
+              mediaType: 'image/png',
+              name: 'clipboard.png'
+            })
+            return true
+          }
+          this.lastClipboardImagePasteError = 'clipboard image data was empty'
+        } finally {
+          await unlink(filePath).catch(() => {})
+          if (convertedPath) await unlink(convertedPath).catch(() => {})
         }
-        await unlink(filePath).catch(() => {})
-        if (data && data.length > 0) {
-          await this.acceptImage({
-            data,
-            mediaType: 'image/png',
-            name: 'clipboard.png'
-          })
-          return true
-        }
+      } else {
+        this.lastClipboardImagePasteError = 'no PNG or TIFF image found in the system clipboard'
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.lastClipboardImagePasteError = /timed out|ETIMEDOUT/i.test(message)
+        ? 'system clipboard image read timed out; copy the image again and retry'
+        : 'unable to read system clipboard image; copy the image again or try /paste'
     }
     return false
   }
@@ -7198,8 +7230,16 @@ export class TuiApp {
             const { promisify } = await import('node:util')
             const execFileAsync = promisify(execFile)
             const { stdout } = await execFileAsync(process.platform === 'darwin' ? 'pbpaste' : 'xclip', process.platform === 'darwin' ? [] : ['-selection', 'clipboard', '-o'], { timeout: 2000 })
-            if (stdout) this.handlePaste(stdout)
-          } catch {}
+            if (stdout) {
+              this.lastClipboardImagePasteError = undefined
+              this.handlePaste(stdout)
+              return
+            }
+          } catch {
+            // Report the image-read failure below when no text fallback is available.
+          }
+          this.log('error', this.lastClipboardImagePasteError ?? 'no image or text found in system clipboard', 'Ctrl+V')
+          this.scheduleRender()
         }
       })()
       return
@@ -7977,8 +8017,8 @@ export class TuiApp {
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]
       const dots = ['.  ', '.. ', '...', '.. '][Math.floor(Date.now() / 240) % 4]
       const elapsed = this.compactState.startedAt
-        ? ((Date.now() - this.compactState.startedAt) / 1000).toFixed(1)
-        : '0.1'
+        ? formatDurationMs(Date.now() - this.compactState.startedAt)
+        : '0.1s'
 
       lines.push(`  ${ANSI.blueSoft}${frame}${ANSI.reset} ${ANSI.bold}Compacting conversation history${dots}${ANSI.reset} ${ANSI.dim}(${elapsed}s)${ANSI.reset}`)
       if (this.compactState.phrase) {
@@ -7997,7 +8037,7 @@ export class TuiApp {
         : (this.reasoningAt ? Math.max(1, Math.floor((Date.now() - this.reasoningAt) / 1000)) : 1)
 
       const currentTurnTokens = Math.max(0, (this.usage?.output ?? 0) - (this.turnStartOutputTokens ?? 0))
-      const tokStr = currentTurnTokens > 0 ? ` · ↓ ${currentTurnTokens} tokens` : ''
+      const tokStr = currentTurnTokens > 0 ? ` · ↓ ${formatTokens(currentTurnTokens)} tokens` : ''
       const speed = this.turnStats?.speed || 0
       const speedStr = speed > 0 ? ` · ${speed >= 10 ? speed.toFixed(1) : speed.toFixed(2)} tok/s` : ''
 
@@ -8020,7 +8060,7 @@ export class TuiApp {
         phrase = this.activityPhrase() || 'Ideating'
       }
 
-      lines.push(`  ${ANSI.peach}${icon} ${phrase}${dots}${ANSI.reset} ${ANSI.dim}(${elapsedSec}s${effortSuffix}${tokStr}${speedStr})${ANSI.reset}`)
+      lines.push(`  ${ANSI.peach}${icon} ${phrase}${dots}${ANSI.reset} ${ANSI.dim}(${formatDurationMs(elapsedSec * 1000)}${effortSuffix}${tokStr}${speedStr})${ANSI.reset}`)
       lines.push('')
     }
 

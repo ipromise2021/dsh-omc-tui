@@ -178,7 +178,7 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
           const data = event.data ?? {}
           const ok = data.decision === 'allow' || data.decision === 'pass'
           const decision = ok ? `${ANSI.blue}${safe(data.decision ?? '')}${ANSI.reset}` : `${ANSI.coral}${safe(data.decision ?? '')}${ANSI.reset}`
-          const duration = data.durationMs !== undefined ? ` · ${(data.durationMs / 1000).toFixed(1)}s` : ''
+          const duration = data.durationMs !== undefined ? ` · ${formatDurationMs(data.durationMs)}` : ''
           detailRows.push(`${indent}${ANSI.dim}└ ${decision}${duration}${data.stderrSummary ? ` · ${shorten(data.stderrSummary, 40)}` : ''}${ANSI.reset}`)
           logicalLines.push(`hook result: ${data.decision ?? ''}`)
         } else if (event.type === 'tool/result') {
@@ -624,7 +624,7 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
       const reasonRows = []
       const reasonLogical = []
       const elapsedSec = activeStream.elapsedSec ?? Math.max(1, Math.floor((Date.now() - (activeStream.time || Date.now())) / 1000))
-      const timeStr = `${elapsedSec}s`
+      const timeStr = formatDurationMs(elapsedSec * 1000)
       const summaryText = `Thinking for ${timeStr}...`
 
       const fullHint = isReasonCollapsed ? '(ctrl+o to expand)' : '(ctrl+o to collapse)'

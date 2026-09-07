@@ -70,7 +70,7 @@ assert.equal(splitRunCodeSpans[0].span.calls.length, 1)
 assert.equal(splitRunCodeSpans[0].span.results.length, 1)
 const splitRunCodeDoc = projectTranscript(splitRunCodeEvents, 80)
 const splitRunCodeBlock = splitRunCodeDoc.blocks.find((block) => block.kind === 'activity')
-assert.match(splitRunCodeBlock.summary, /Run code \(python · 2 lines\) · 0\.2s · ✗ 1 error/)
+assert.match(splitRunCodeBlock.summary, /Run code \(python · 2 lines\) · 200ms · ✗ 1 error/)
 assert.doesNotMatch(splitRunCodeDoc.rows.join('\n'), /0 tools/)
 
 const expandedRunCodeDoc = projectTranscript(splitRunCodeEvents, 80, {
@@ -97,6 +97,9 @@ assert.match(summarizeToolCall(ptcCall).text, /Bash · Read · Plan · 3 steps/)
 
 const singlePtcCall = { data: { name: 'run_code', arguments: JSON.stringify({ code: "await tools.glob({ pattern: '**/*.js' })" }) } }
 assert.equal(summarizeToolCall(singlePtcCall).text, 'glob')
+
+const mcpPtcCall = { data: { name: 'run_code', arguments: JSON.stringify({ code: "await tools.mcp__mysql_trans__mysql_query({ query: 'SHOW DATABASES' })" }) } }
+assert.match(summarizeToolCall(mcpPtcCall).text, /^mcp__mysql_trans__mysql_query\(/)
 
 const ptcEvents = [
   { seq: 1, type: 'tool/call', time: 1000, data: { callId: 'ptc-1', name: 'run_code', arguments: ptcCall.data.arguments } },
@@ -141,7 +144,7 @@ const unkeyedRunCodeEvents = [
 const unkeyedRunCodeSpans = groupActivitySpans(unkeyedRunCodeEvents).filter((item) => item.kind === 'activity')
 assert.equal(unkeyedRunCodeSpans.length, 1)
 assert.equal(unkeyedRunCodeSpans[0].span.results.length, 1)
-assert.match(unkeyedRunCodeSpans[0].span.summary.summaryText, /Run code \(1 lines\) · 0\.2s · ✗ 1 error/)
+assert.match(unkeyedRunCodeSpans[0].span.summary.summaryText, /Run code \(1 lines\) · 200ms · ✗ 1 error/)
 
 // 4. Approval and Hook integration
 const approvalEvents = [

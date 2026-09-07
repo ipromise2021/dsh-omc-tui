@@ -38,15 +38,25 @@ export function handleStatus(app) {
     .filter((job) => job.status === 'running' || job.status === 'stopping').length
 
   const lines = [
-    `TUI:          ${packageName} v${packageVersion}`,
-    `Model:        ${modelStr} · effort ${effortStr}`,
-    `Mode:         ${modeStr} · Preset: ${presetStr}`,
-    `Directory:    ${cwd}`,
-    `Session:      ${sessionId} · "${sessionTitle}" (${turns} turns, ${events.length} events)`,
-    `Context:      ${formatTokens(activeTokens)} / ${formatTokens(cw)} tokens (${pct}%) · session total ${formatTokens(total)} (in ${formatTokens(inp)}, out ${formatTokens(out)}, cache ${formatTokens(cache)})`,
-    `Permission:   ${perm}`,
-    `Extensions:   ${skillCount} skills · ${mcpCount} MCPs · ${hookCount} hooks · ${runningJobs} active jobs`,
-    `Preferences:  theme: ${app.preferences?.theme ?? 'claude'} · history: ${app.preferences?.persistHistory !== false ? 'on' : 'off'}`
+    'STATUS · session diagnostics',
+    '',
+    'Runtime',
+    `  TUI: ${packageName} v${packageVersion}`,
+    `  Model: ${modelStr} · effort ${effortStr}`,
+    `  Mode: ${modeStr} · preset ${presetStr}`,
+    '',
+    'Session',
+    `  Directory: ${cwd}`,
+    `  ID: ${sessionId} · "${sessionTitle}"`,
+    `  Activity: ${turns} turns · ${events.length} events · permission ${perm}`,
+    '',
+    'Usage',
+    `  Context: ${formatTokens(activeTokens)} / ${formatTokens(cw)} tokens (${pct}%)`,
+    `  Session total: ${formatTokens(total)} (in ${formatTokens(inp)}, out ${formatTokens(out)}, cache ${formatTokens(cache)})`,
+    `  Extensions: ${skillCount} skills · ${mcpCount} MCPs · ${hookCount} hooks · ${runningJobs} active jobs`,
+    '',
+    'Preferences',
+    `  Theme: ${app.preferences?.theme ?? 'claude'} · history ${app.preferences?.persistHistory !== false ? 'on' : 'off'}`
   ]
   app.log('ok', lines.join('\n'), '/status')
 }

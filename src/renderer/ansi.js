@@ -262,6 +262,11 @@ export function formatTime(time) {
 export function formatDurationMs(ms) {
   if (!Number.isFinite(ms) || ms < 0) return '—'
   if (ms < 1000) return `${Math.max(1, Math.round(ms))}ms`
+  if (ms >= 60000) {
+    const minutes = Math.floor(ms / 60000)
+    const seconds = Math.floor((ms % 60000) / 1000)
+    return `${minutes}m ${String(seconds).padStart(2, '0')}s`
+  }
   return `${(ms / 1000).toFixed(1)}s`
 }
 

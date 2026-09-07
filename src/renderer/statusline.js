@@ -199,7 +199,7 @@ export function renderStatusRows(options) {
       ? `${ANSI.muted}⚡ ${ANSI.ink}${turnStats.speed >= 10 ? turnStats.speed.toFixed(1) : turnStats.speed.toFixed(2)} tok/s${ANSI.reset}`
       : ''
     const durPart = turnStats.durationMs > 0
-      ? `${ANSI.muted}⏱️ ${ANSI.ink}${Math.max(1, Math.round(turnStats.durationMs / 1000))}s${ANSI.reset}`
+      ? `${ANSI.muted}⏱️ ${ANSI.ink}${formatDurationMs(turnStats.durationMs)}${ANSI.reset}`
       : ''
     if (speedPart && durPart) {
       speedText = `${ANSI.dim} · ${ANSI.reset}${speedPart}${ANSI.dim} · ${ANSI.reset}${durPart}`

@@ -134,7 +134,7 @@ export function handleLocalCommand(app, commandName, line = '') {
       void (async () => {
         const pasted = await app.tryPasteClipboardImage()
         if (!pasted) {
-          app.log('error', 'no image found in system clipboard', '/paste')
+          app.log('error', app.lastClipboardImagePasteError ?? 'no image found in system clipboard', '/paste')
         }
       })()
       break

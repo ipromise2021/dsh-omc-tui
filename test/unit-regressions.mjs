@@ -19,7 +19,7 @@ import { renderSkillsPanel } from '../src/panels/skills-panel.js'
 import { formatEvents } from '../src/renderer/transcript.js'
 import { BrowserLease, chromeApprovalReason, chromeConnectionApprovalReason, chromeLaunchArgs, chromeToolRisk, isChromeTool, registerBrowserLease } from '../src/browser-lease.js'
 import { ANSI, applyTheme } from '../src/renderer/themes.js'
-import { safe, visibleOf, widthOf } from '../src/renderer/ansi.js'
+import { safe, visibleOf, widthOf, formatDurationMs, formatTokens } from '../src/renderer/ansi.js'
 import { ScreenRenderer } from '../src/renderer/screen.js'
 import { loadShellHistoryFile, loadSystemShellHistory } from '../src/input/history.js'
 import { listDir } from '../src/input/autocomplete.js'
@@ -109,6 +109,14 @@ assert.equal(visionTool.parameters.properties.attachment_id.type, 'string')
 assert.match(visionTool.output.render({}, { model: 'deepseek/vision', analysis: 'Detected text' })[0].text, /Detected text/)
 
 const pngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 16, 0, 0, 0, 8])
+assert.equal(formatDurationMs(999), '999ms')
+assert.equal(formatDurationMs(59900), '59.9s')
+assert.equal(formatDurationMs(60000), '1m 00s')
+assert.equal(formatDurationMs(61300), '1m 01s')
+assert.equal(formatDurationMs(3723000), '62m 03s')
+assert.equal(formatTokens(999), '999')
+assert.equal(formatTokens(2500), '2.5k')
+assert.equal(formatTokens(66909), '67k')
 assert.deepEqual(pngDimensions(pngHeader), { width: 16, height: 8 })
 
 const oversizedPngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 15, 160, 0, 0, 11, 184])
@@ -2167,7 +2175,7 @@ const hudStatus = renderStatusRows({
 const hudText = visibleOf(hudStatus.rows.join('\n'))
 assert.match(hudText, /git:\(main\* ↑1\)/)
 assert.match(hudText, /48\.5 tok\/s/)
-assert.match(hudText, /⏱️ 2s/)
+assert.match(hudText, /⏱️ 2\.2s/)
 assert.match(hudText, /Context.*85k \/ 100k · 85% ⚠️ \| session in 12k · out 2\.5k/)
 assert.match(hudText, /Read: index\.js/)
 assert.match(hudText, /Edit: statusline\.js/)
@@ -2611,7 +2619,7 @@ const shellDetailRows = renderJobPanel(
 const shellDetailText = visibleOf(shellDetailRows.join('\n'))
 assert.match(shellDetailText, /SHELL DETAILS/)
 assert.match(shellDetailText, /Status:.*running/)
-assert.match(shellDetailText, /Runtime:.*196\.0s/)
+assert.match(shellDetailText, /Runtime:.*3m 16s/)
 assert.match(shellDetailText, /Command:.*npm run start:prod/)
 assert.match(shellDetailText, /live · showing 6 of 12 lines/)
 assert.match(shellDetailText, /Showing 6 lines of/)
@@ -4565,6 +4573,10 @@ inertDispose()
   })
   const { handleStatus } = await import('../src/commands/status.js')
   handleStatus(testStatusApp)
+  assert.match(statusLogOutput, /STATUS · session diagnostics/)
+  assert.match(statusLogOutput, /Runtime\n  TUI:/)
+  assert.match(statusLogOutput, /Session\n  Directory:/)
+  assert.match(statusLogOutput, /Usage\n  Context:/)
   assert.match(statusLogOutput, /TUI:\s+dsh-omc-tui v0\.2\.12/)
   assert.ok(statusLogOutput.includes('0 / 100.0k tokens (0%)') || statusLogOutput.includes('0 / 100k tokens (0%)') || statusLogOutput.includes('0 tokens (0%)'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
 }

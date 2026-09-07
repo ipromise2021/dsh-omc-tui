@@ -83,7 +83,7 @@ export function summarizeRunCodeTools(code, maxWidth = 60) {
   for (const call of runCodeToolCalls(code)) {
     const rawName = call.rawName
     const normalizedName = rawName.toLowerCase()
-    const name = PTC_TOOL_LABELS[normalizedName] ?? rawName.replace(/_/g, ' ')
+    const name = PTC_TOOL_LABELS[normalizedName] ?? rawName
     const args = call.args
     const target = normalizedName === 'todo_write' || normalizedName === 'todo'
       ? ''
@@ -243,7 +243,7 @@ export function computeActivitySummary(span) {
   }
 
   const durationMs = (span.endTime && span.startTime) ? Math.max(0, span.endTime - span.startTime) : (span.durationMs || 0)
-  const durationText = durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : ''
+  const durationText = durationMs > 0 ? formatDurationMs(durationMs) : ''
 
   let text = ''
   if (totalCalls === 1) {

@@ -943,3 +943,13 @@
 - 决策：不移除 Jobs。新增 `/tasks` 作为统一入口，分为 Plan 与 Background Jobs 两个 Tab；`/jobs` 作为直接打开 Background Jobs Tab 的兼容别名。
 - Plan 的唯一可重放来源是 durable `run_code` 中的 `tools.todo_write({...})` 字面量。只在可静态解析 `todos: [...]` 时展示；动态值或非字面量参数不显示旧计划，而明确标注 runtime 未提供可投影详情。
 - 已完成 `/tasks` 默认 Plan、Plan/Background Jobs Tab 切换和 `/jobs` 兼容直达；覆盖 durable 重放、动态降级、容量边界与命令路由的回归测试均通过。
+
+## 终端信息展示与图片粘贴体验优化（2026-09-07）
+
+- 长耗时目前由 `formatDurationMs()` 统一显示为秒，运行中提示另行直接拼接秒数；应统一为不足一分钟保留秒、达到一分钟显示 `Xm YYs`。
+- `formatTokens()` 已支持 `k/m`，但运行中提示未复用，导致 token 数量仍显示原始整数。
+- `/status` 的命令头由通用日志渲染器提供，但数据体直接从 `TUI:` 开始；应在命令体内增加轻量标题与 Runtime、Session、Usage、Preferences 分组。
+- PTC `run_code` 嵌套工具摘要将未知工具名的下划线替换为空格，破坏 MCP server/tool identifier。应保留原始下划线。
+- 图片直贴仅通过 AppleScript 请求 macOS 剪贴板 `PNGf` 数据，读取异常被静默吞掉后仅尝试文本 `pbpaste`。应返回可诊断失败原因，并为常见 TIFF 剪贴板图像增加 PNG 转换回退。
+- 实现结果：`formatDurationMs()` 在一分钟后使用 `Xm YYs`；运行中 token 复用既有 `formatTokens()`；活动、状态栏、转录和 Jobs 共享同一耗时格式。`/status` 采用轻量标题和分组。MCP 摘要保留 identifier 原文。剪贴板读取支持 PNG/TIFF，TIFF 经 `sips` 转 PNG，并在无图、超时和读取失败时返回简洁原因。
+- 本机冒烟：当前非图片剪贴板正确返回 “no PNG or TIFF image found in the system clipboard”，未读取或输出剪贴板内容。

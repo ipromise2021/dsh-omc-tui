@@ -16,6 +16,15 @@
 - 用户确认采用统一入口、分层展示：`/tasks` 默认 Plan，Background Jobs 保留既有输出/取消能力，`/jobs` 兼容打开后台任务页。
 - 已完成 durable `todo_write` 字面量重放、动态参数降级提示、Plan/Background Jobs 键盘切换，以及面板/命令回归测试。
 
+## 会话：2026-09-07
+
+### 阶段 30：终端信息展示与图片粘贴体验优化
+- **状态：** complete
+- 已确认用户期望：长耗时显示为分钟+秒，运行中 token 使用 `k/m`；`/status` 具有清晰内容区层级；MCP identifier 保留下划线；图片直贴需要更稳定且可解释的失败反馈。
+- 已定位到共享格式化、状态命令、PTC 嵌套工具摘要和 macOS 剪贴板读取的实现入口，准备按最小影响面改造并补充回归测试。
+- 已统一 `formatDurationMs()`，运行中 token 复用 `formatTokens()`；`/status` 具备标题和 Runtime/Session/Usage/Preferences 分组；MCP 嵌套摘要保留 `_`；macOS 剪贴板支持 PNG 和 TIFF→PNG 回退，并为失败提供简洁错误。
+- 验证通过：当前剪贴板非图片时返回明确原因；`npm test`、`npm run verify`、`git diff --check` 全部通过。
+
 ### 阶段 21：Jobs/Shell 审查整改
 - **状态：** complete
 - 执行的操作：
