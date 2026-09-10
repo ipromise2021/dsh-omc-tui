@@ -97,8 +97,8 @@ export function renderStatusRows(options) {
     ? Math.round((sessionContextTokens / usage.contextWindow) * 100)
     : 0
 
-  let barColor = ANSI.contextFill ?? ANSI.barFill ?? ANSI.teal ?? ANSI.bash
-  let percentColor = ANSI.contextFill ?? ANSI.blueSoft ?? ANSI.teal
+  let barColor = ANSI.barFill ?? ANSI.contextFill ?? ANSI.teal ?? ANSI.bash
+  let percentColor = ANSI.barFill ?? ANSI.contextFill ?? ANSI.blueSoft ?? ANSI.teal
   let percentAlert = ''
   if (percent >= contextCriticalAt) {
     barColor = ANSI.contextCritical ?? ANSI.coral ?? '\x1b[38;5;167m'
@@ -111,9 +111,7 @@ export function renderStatusRows(options) {
 
   const meterWidth = columns >= 80 ? 14 : 8
   const filled = percent > 0 ? Math.min(meterWidth, Math.max(1, Math.floor((percent / 100) * meterWidth))) : 0
-  const meter = filled > 0
-    ? `${barColor}${'█'.repeat(filled)}${ANSI.bar}${'░'.repeat(meterWidth - filled)}${ANSI.reset}`
-    : `${ANSI.bar}${'░'.repeat(meterWidth)}${ANSI.reset}`
+  const meter = `${ANSI.dim}[${ANSI.reset}${ANSI.bold}${barColor}${'░'.repeat(filled)}${ANSI.rule ?? ANSI.bar}${'░'.repeat(meterWidth - filled)}${ANSI.dim}]${ANSI.reset}`
 
   const cacheTotal = usage.input + usage.cacheRead
   const cachePercent = cacheTotal > 0 ? Math.round((usage.cacheRead / cacheTotal) * 100) : 0

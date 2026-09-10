@@ -458,6 +458,7 @@ export class TuiApp {
     this.baseTranscriptDocument = undefined
     this.baseTranscriptColumns = undefined
     this.needsLiveProjection = false
+    this.transcriptProjectionPending = false
     this.edgeScrollTimer = undefined
     this.edgeScrollDelta = 0
     this.dangerGuardDispose = undefined
@@ -988,6 +989,7 @@ export class TuiApp {
         clearInterval(this.animationTimer)
         this.animationTimer = undefined
         this.needsLiveProjection = false
+        this.transcriptProjectionPending = false
         this.stopEdgeAutoScroll()
         process.stdin.off('data', this.onData)
         process.stdout.off('resize', this.onResize)
@@ -1339,6 +1341,7 @@ export class TuiApp {
   }
 
   reprojectDocument(preserveFollowEnd = true) {
+    this.transcriptProjectionPending = false
     const columns = process.stdout.columns || 80
     const rows = process.stdout.rows || 24
     const footerHeight = this.lastFooterHeight || 4
@@ -1423,6 +1426,12 @@ export class TuiApp {
     this.scheduleRender()
   }
 
+  queueTranscriptProjection() {
+    if (!this.screenRenderer?.isAltScreen) return
+    this.transcriptProjectionPending = true
+    this.scheduleRender()
+  }
+
   commitUnprintedEvents() {
     if (!this.agent) return
     const allEvents = sessionEvents(this.agent?.session)
@@ -1431,7 +1440,7 @@ export class TuiApp {
     this.lastCommittedSeq = allEvents[allEvents.length - 1]?.seq ?? this.lastCommittedSeq
 
     if (this.screenRenderer?.isAltScreen) {
-      this.reprojectDocument(true)
+      this.queueTranscriptProjection()
       return
     }
 
@@ -2371,8 +2380,19 @@ export class TuiApp {
     return localEntry
   }
 
+  appendLocalOutput(data, lines = []) {
+    this.appendLocalLogEntry({
+      type: 'local/log',
+      seq: this.agent?.session?.seq ?? 0,
+      time: Date.now(),
+      data
+    })
+    this.commitToScrollback(lines)
+  }
+
   log(kind, text, command, options = {}) {
-    const entry = this.appendLocalLogEntry({ kind, text, command, ...options, seq: this.agent?.session?.seq ?? 0, time: Date.now() })
+    const level = options.level ?? (kind === 'error' ? 'err' : kind === 'ok' ? 'ok' : undefined)
+    const entry = this.appendLocalLogEntry({ kind, level, text, command, ...options, seq: this.agent?.session?.seq ?? 0, time: Date.now() })
     const lines = this.formatLogEntry(entry)
     this.commitToScrollback(lines)
   }
@@ -3178,6 +3198,7 @@ export class TuiApp {
             : ''
       if (!data) return undefined
       return {
+        type: 'image',
         mediaType: image.mediaType || 'image/png',
         data,
         ...(image.name ? { name: image.name } : {})
@@ -3283,7 +3304,7 @@ export class TuiApp {
     const registry = this.ctx.commands
     const found = registry?.find(this.agent, commandName)
     const useRegistryCommand = commandName === 'plan' && Boolean(found)
-    const useRegistryForImages = images.length > 0 && found?.input?.images === true
+    const useRegistryForImages = images.length > 0 && found?.input?.attachments === true
     if (local && !useRegistryCommand && !useRegistryForImages) {
       if (images.length > 0) {
         this.pendingImages = [...images, ...(this.pendingImages ?? [])]
@@ -4885,6 +4906,7 @@ export class TuiApp {
     this.baseTranscriptDocument = undefined
     this.baseTranscriptColumns = undefined
     this.needsLiveProjection = false
+    this.transcriptProjectionPending = false
     this.statusRowsCache = undefined
     this.pastedTexts?.clear?.()
     this.pastedTextCounter = 0
@@ -6209,7 +6231,7 @@ export class TuiApp {
       }
     }
     if (this.cursor <= 0) {
-      if (this.input === '' && this.pendingImages.length > 0) {
+      if (this.pendingImages.length > 0) {
         this.pendingImages.pop()
         this.scheduleRender(true)
       }
@@ -7285,14 +7307,6 @@ export class TuiApp {
         this.scheduleRender(true)
         return
       }
-      if (this.withdrawQueuedSubmission()) return
-      if (this.agent?.status === 'running') {
-        this.clearPromptSuggestion()
-        this.agent.cancel({ kind: 'user' })
-        return
-      }
-      this.clearPromptSuggestion()
-      this.clearShellCompletion()
       if (this.selection) {
         this.selection = undefined
         this.scheduleRender()
@@ -7308,6 +7322,14 @@ export class TuiApp {
         this.scheduleRender()
         return
       }
+      if (this.withdrawQueuedSubmission()) return
+      if (this.agent?.status === 'running') {
+        this.clearPromptSuggestion()
+        this.agent.cancel({ kind: 'user' })
+        return
+      }
+      this.clearPromptSuggestion()
+      this.clearShellCompletion()
       if (this.viewport && (!this.viewport.followEnd || this.viewport.scrollTop < this.viewport.maxScroll())) {
         this.viewport.scrollToBottom()
         this.scheduleRender(true)
@@ -8354,7 +8376,9 @@ export class TuiApp {
 
   render() {
     if (!this.terminalOpen || this.isCommittingScrollback) return
-    if (this.needsLiveProjection) {
+    if (this.transcriptProjectionPending) {
+      this.reprojectDocument(true)
+    } else if (this.needsLiveProjection) {
       this.needsLiveProjection = false
       this.reprojectLiveStream(true)
     }

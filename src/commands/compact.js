@@ -3,6 +3,14 @@ import { ANSI } from '../renderer/themes.js'
 import { foldUsage } from '../core/events.js'
 import { sessionEvents } from '../core/session-events.js'
 
+function commitCompactOutput(app, data, lines) {
+  if (typeof app.appendLocalOutput === 'function') {
+    app.appendLocalOutput({ structured: 'compaction-result', level: 'ok', ...data }, lines)
+  } else {
+    app.commitToScrollback(lines)
+  }
+}
+
 export const COMPACT_PHRASES = [
   'Distilling key context and decisions',
   'Summarizing conversation thread memories',
@@ -37,9 +45,6 @@ export async function handleCompact(app, line) {
   app.compacting = true
   app.message = 'compacting conversation…'
   
-  // Print command header in scrollback immediately
-  app.commitToScrollback(['', `${ANSI.blue}${ANSI.bold}❯ /compact${ANSI.reset}`])
-
   const startedAt = Date.now()
   let currentTipIndex = Math.floor(Math.random() * COMPACT_TIPS.length)
   let currentPhraseIndex = 0
@@ -95,7 +100,11 @@ export async function handleCompact(app, line) {
           `  ${ANSI.dim}· Conversation is already fully compacted (no new messages to compress).${ANSI.reset}`,
           ''
         ]
-        app.commitToScrollback(summaryLines)
+        commitCompactOutput(app, {
+          text: 'Conversation is already fully compacted (no new messages to compress).',
+          duration: totalSec,
+          alreadyCompacted: true
+        }, summaryLines)
       } else {
         const afterContextTokens = Number.isFinite(app.contextTokens) ? app.contextTokens : undefined
         const tokenDiff = beforeContextTokens !== undefined && afterContextTokens !== undefined && beforeContextTokens > afterContextTokens
@@ -107,7 +116,11 @@ export async function handleCompact(app, line) {
           `    ${ANSI.dim}└ ${text}${tokenDiff} · Context window freed for new tasks${ANSI.reset}`,
           ''
         ]
-        app.commitToScrollback(summaryLines)
+        commitCompactOutput(app, {
+          text,
+          duration: totalSec,
+          contextChange: tokenDiff
+        }, summaryLines)
       }
     } else if (result?.kind === 'error') {
       app.log('error', result.text ?? 'failed', '/compact')

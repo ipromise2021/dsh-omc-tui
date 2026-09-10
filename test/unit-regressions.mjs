@@ -27,7 +27,7 @@ import { loadShellHistoryFile, loadSystemShellHistory } from '../src/input/histo
 import { listDir } from '../src/input/autocomplete.js'
 import { createDangerGuard, checkDangerCommand, compileDangerRules, DEFAULT_DANGER_RULES } from '../src/core/danger-guard.js'
 import { currentPermissionPreset, sessionEvents, toolCallId } from '../src/core/session-events.js'
-import { groupActivitySpans } from '../src/renderer/activity.js'
+import { groupActivitySpans, toolResultText } from '../src/renderer/activity.js'
 
 const noop = () => {}
 
@@ -592,6 +592,17 @@ assert.equal(bareFileMentionApp.cursor, 'review '.length)
 assert.equal(bareFileMentionApp.filePicker, undefined, 'Deleting a bare @ should close file matching')
 assert.equal(bareFileMentionApp.currentFileQuery, undefined)
 
+const imageEraseApp = new TuiApp({})
+imageEraseApp.input = '/plan reference this image'
+imageEraseApp.cursor = 0
+imageEraseApp.pendingImages = [{ name: 'first.png' }, { name: 'second.png' }]
+imageEraseApp.scheduleRender = noop
+imageEraseApp.eraseBefore()
+assert.equal(imageEraseApp.pendingImages.length, 1, 'Backspace at the text start removes the last pending image')
+assert.equal(imageEraseApp.pendingImages[0].name, 'first.png')
+assert.equal(imageEraseApp.input, '/plan reference this image', 'Removing an image must preserve the text draft')
+for (const dispose of [...imageEraseApp.disposers].reverse()) dispose()
+
 let startupRepainted = false
 const startupApp = {
   initializing: { startedAt: Date.now() },
@@ -1150,7 +1161,7 @@ let commandArgs
 const commandApp = {
   ctx: {
     commands: {
-      find: () => ({ input: { images: true } }),
+      find: () => ({ input: { attachments: true } }),
       async execute(...args) {
         commandArgs = args
         return { result: { kind: 'success', text: 'ok' } }
@@ -1166,14 +1177,14 @@ const commandApp = {
 }
 await TuiApp.prototype.runCommand.call(commandApp, '/goal inspect', [{ base64: 'AQ==', mediaType: 'image/png', name: 'one.png' }])
 assert.equal(commandArgs[1], '/goal inspect')
-assert.deepEqual(commandArgs[2], [{ data: 'AQ==', mediaType: 'image/png', name: 'one.png' }])
+assert.deepEqual(commandArgs[2], [{ type: 'image', data: 'AQ==', mediaType: 'image/png', name: 'one.png' }])
 assert.ok(commandArgs[3] instanceof AbortSignal)
 
 let planRoute
 const planCommandApp = {
   ctx: {
     commands: {
-      find: () => ({ input: { images: true } }),
+      find: () => ({ input: { attachments: true } }),
       async execute() {
         planRoute = 'registry'
         return { result: { kind: 'success', text: 'ok' } }
@@ -1194,7 +1205,7 @@ assert.equal(planRoute, 'registry')
 const failedCommandApp = {
   ctx: {
     commands: {
-      find: () => ({ input: { images: true } }),
+      find: () => ({ input: { attachments: true } }),
       async execute() {
         return { result: { kind: 'error', text: 'rejected' } }
       }
@@ -1210,6 +1221,21 @@ const failedCommandApp = {
 const failedImage = { base64: 'AQ==', mediaType: 'image/png', name: 'retry.png' }
 await TuiApp.prototype.runCommand.call(failedCommandApp, '/plan inspect', [failedImage])
 assert.deepEqual(failedCommandApp.pendingImages, [failedImage])
+
+assert.equal(toolResultText({
+  message: {
+    content: [{ type: 'tool-result', toolCallId: 'call-1', content: [{ type: 'text', text: 'tool output' }] }]
+  }
+}), 'tool output', 'tool results must extract nested text blocks from durable events')
+
+const logLevelApp = new TuiApp({})
+logLevelApp.agent = { session: { seq: 1 } }
+logLevelApp.terminalOpen = false
+logLevelApp.log('error', 'broken', '/test')
+logLevelApp.log('ok', 'done', '/test')
+assert.equal(logLevelApp.localLog.at(-2).level, 'err', 'error logs must retain their error level for projection')
+assert.equal(logLevelApp.localLog.at(-1).level, 'ok', 'success logs must retain their success level for projection')
+for (const dispose of [...logLevelApp.disposers].reverse()) dispose()
 
 let submittedImageMessage
 const imageSubmitApp = {
@@ -2036,18 +2062,25 @@ assert.equal(transcript.join('\n').includes(osc), false)
 assert.equal(safe(osc), '')
 
 const compactCommits = []
+const compactLocalOutputs = []
 await handleCompact({
   compacting: false,
   ctx: { commands: { find: () => true, async execute() { return { result: { kind: 'success', text: `summary ${osc}` } } } } },
   agent: { session: { usage: { input: 10 }, events: [] } },
   contextTokens: 4000,
   refreshContextTokens() { this.contextTokens = 500 },
+  appendLocalOutput(data, lines) {
+    compactLocalOutputs.push(data)
+    compactCommits.push(...lines)
+  },
   commitToScrollback(lines) { compactCommits.push(...lines) },
   log: noop,
   scheduleRender: noop
 }, '/compact')
 assert.equal(compactCommits.some((line) => line.includes(osc)), false)
 assert.match(visibleOf(compactCommits.join('\n')), /Context 4\.0k → 500/)
+assert.equal(compactLocalOutputs.length, 1, 'compact success must be persisted for alt-screen projection')
+assert.equal(compactLocalOutputs[0].structured, 'compaction-result')
 
 import { parseGitStatusOutput } from '../src/core/git.js'
 import { tuiSettingsSchema } from '../src/renderer/themes.js'
@@ -2227,6 +2260,7 @@ assert.match(hudText, /git:\(main\* ↑1\)/)
 assert.match(hudText, /48\.5 tok\/s/)
 assert.match(hudText, /⏱️ 2\.2s/)
 assert.match(hudText, /Context.*85k \/ 100k · 85% ⚠️ \| session in 12k · out 2\.5k/)
+assert.match(hudText, /\[░{14}\]/, 'Context meter uses one glyph for filled and remaining capacity')
 assert.match(hudText, /Read: index\.js/)
 assert.match(hudText, /Edit: statusline\.js/)
 
@@ -3502,6 +3536,16 @@ escapePriorityApp.handleToken('\x1b')
 assert.equal(escapeCancelled, 1, 'second Escape at the bottom must interrupt')
 for (const dispose of [...escapePriorityApp.disposers].reverse()) dispose()
 
+const escapePanelApp = new TuiApp({})
+let panelEscapeCancelled = 0
+escapePanelApp.agent = { status: 'running', cancel: () => { panelEscapeCancelled += 1 } }
+escapePanelApp.help = true
+escapePanelApp.scheduleRender = noop
+escapePanelApp.handleToken('\x1b')
+assert.equal(escapePanelApp.help, false, 'Escape must close help before handling the running turn')
+assert.equal(panelEscapeCancelled, 0, 'closing help must not cancel the running turn')
+for (const dispose of [...escapePanelApp.disposers].reverse()) dispose()
+
 // Secondary panel layout test: effort picker / model picker are rendered below input box
 panelLayoutApp.effortPicker = { efforts: ['low', 'medium', 'high', 'max'], selected: 0 }
 panelLayoutApp.input = ''
@@ -3565,6 +3609,21 @@ benchApp.reprojectDocument(true)
 const baseDoc = benchApp.baseTranscriptDocument
 assert.ok(baseDoc, 'baseTranscriptDocument must be cached')
 
+// Durable events can arrive in a burst. They should mark the base transcript
+// dirty without rebuilding it until the next coalesced render frame.
+benchApp.lastCommittedSeq = 200
+benchApp.scheduleRender = noop
+benchApp.agent.session.events.push(
+  { seq: 201, type: 'tool/call', time: 2100, data: { callId: 'burst-1', name: 'read_file', arguments: JSON.stringify({ path: 'burst.js' }) } },
+  { seq: 202, type: 'tool/result', time: 2110, data: { callId: 'burst-1', message: { content: 'burst result' } } }
+)
+benchApp.commitUnprintedEvents()
+assert.equal(benchApp.baseTranscriptDocument, baseDoc, 'Durable bursts must not re-project immediately')
+assert.equal(benchApp.transcriptProjectionPending, true, 'Durable bursts must queue a transcript projection')
+benchApp.render()
+assert.notEqual(benchApp.baseTranscriptDocument, baseDoc, 'The next render frame must commit the queued projection')
+const burstDoc = benchApp.baseTranscriptDocument
+
 // Simulate high-frequency streaming deltas (including CJK and emoji)
 benchApp.active = true
 const streamDeltas = ['你好', '世界', ' 🚀 ', 'test\n', '```python\nprint("hello")\n```\n', '🎯 end of stream']
@@ -3575,7 +3634,7 @@ for (const chunkText of streamDeltas) {
     data: { chunk: { type: 'text-delta', text: chunkText } }
   })
 }
-assert.equal(benchApp.baseTranscriptDocument, baseDoc, 'Streaming chunks MUST NOT re-project baseTranscriptDocument')
+assert.equal(benchApp.baseTranscriptDocument, burstDoc, 'Streaming chunks MUST NOT re-project baseTranscriptDocument')
 benchApp.render()
 assert.ok(benchApp.viewport.allRows.join('\n').includes('🎯 end of stream'), 'Live stream merged into viewport')
 

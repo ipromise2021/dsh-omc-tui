@@ -1,8 +1,16 @@
 import { randomUUID } from 'node:crypto'
-import { safe, textOf, truncateWidth, widthOf } from '../renderer/ansi.js'
+import { safe, textOf, truncateWidth, visibleOf, widthOf } from '../renderer/ansi.js'
 import { userMessage } from '../core/events.js'
 import { renderMarkdownRows } from '../renderer/markdown.js'
 import { ANSI } from '../renderer/themes.js'
+
+function commitBtwOutput(app, data, lines) {
+  if (typeof app.appendLocalOutput === 'function') {
+    app.appendLocalOutput(data, lines)
+  } else {
+    app.commitToScrollback(lines)
+  }
+}
 
 export async function handleBtw(app, line) {
   const query = line.replace(/^\/btw\s*/i, '').trim()
@@ -15,12 +23,14 @@ export async function handleBtw(app, line) {
       `  ${ANSI.dim}  示例: /btw 什么是 AST 抽象语法树？${ANSI.reset}`,
       ''
     ]
-    app.commitToScrollback(usageLines)
+    commitBtwOutput(app, {
+      badge: '/btw',
+      level: 'ok',
+      text: 'Side Query (旁路问答)\n用法: /btw <你的问题...>\n示例: /btw 什么是 AST 抽象语法树？'
+    }, usageLines)
     return
   }
 
-  // Print command header in scrollback
-  app.commitToScrollback(['', `${ANSI.blue}${ANSI.bold}❯ /btw ${safe(query)}${ANSI.reset}`])
   app.message = 'asking side query (ephemeral context)…'
   app.scheduleRender()
 
@@ -102,19 +112,30 @@ export async function handleBtw(app, line) {
           cardLines.push(`  ${ANSI.blueSoft}│${ANSI.reset}${' '.repeat(boxWidth - 2)}${ANSI.blueSoft}│${ANSI.reset}`)
         } else {
           const lineText = r[1]
-          const pad = ' '.repeat(Math.max(0, boxWidth - 4 - widthOf(lineText)))
+          const pad = ' '.repeat(Math.max(0, boxWidth - 4 - widthOf(visibleOf(lineText))))
           cardLines.push(`  ${ANSI.blueSoft}│${ANSI.reset} ${lineText}${pad} ${ANSI.blueSoft}│${ANSI.reset}`)
         }
       }
 
       cardLines.push(`  ${ANSI.blueSoft}╰${'─'.repeat(boxWidth - 2)}╯${ANSI.reset}`)
       cardLines.push('')
-      app.commitToScrollback(cardLines)
+      commitBtwOutput(app, {
+        structured: 'side-query',
+        level: 'ok',
+        query,
+        model: selection.model,
+        text: fullResponse
+      }, cardLines)
     } else {
-      app.commitToScrollback([`  ${ANSI.coral}✗ No response received for side query${ANSI.reset}`, ''])
+      commitBtwOutput(app, {
+        badge: '/btw',
+        level: 'err',
+        text: 'No response received for side query'
+      }, [`  ${ANSI.coral}✗ No response received for side query${ANSI.reset}`, ''])
     }
   } catch (err) {
-    app.commitToScrollback([`  ${ANSI.coral}✗ Side query failed: ${safe(err instanceof Error ? err.message : String(err))}${ANSI.reset}`, ''])
+    const text = `Side query failed: ${safe(err instanceof Error ? err.message : String(err))}`
+    commitBtwOutput(app, { badge: '/btw', level: 'err', text }, [`  ${ANSI.coral}✗ ${text}${ANSI.reset}`, ''])
   } finally {
     app.message = ''
     app.scheduleRender()

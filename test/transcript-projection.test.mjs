@@ -30,6 +30,52 @@ assert.equal(expandedActivity.collapsed, false)
 assert.match(expandedDoc.rows.join('\n'), /console\.log\("hello"\)/)
 assert.match(expandedDoc.rows.join('\n'), /ctrl\+o to collapse/)
 
+const structuredMetaEvents = [
+  { seq: 1, type: 'user/message', time: 1000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Update src/example.js' }] } },
+  { seq: 2, type: 'tool/call', time: 1100, data: { callId: 'meta-1', name: 'edit_file', arguments: JSON.stringify({ path: 'src/example.js' }) } },
+  {
+    seq: 3,
+    type: 'tool/result',
+    time: 1200,
+    data: {
+      callId: 'meta-1',
+      meta: { diffs: [{ path: 'src/example.js', oldText: 'const value = 1', newText: 'const value = 2' }] }
+    }
+  }
+]
+const structuredMetaBase = projectTranscript(structuredMetaEvents, 80)
+const structuredMetaActivity = structuredMetaBase.blocks.find((block) => block.kind === 'activity')
+const structuredMetaDoc = projectTranscript(structuredMetaEvents, 80, { expandedKeys: new Set([structuredMetaActivity.key]) })
+assert.match(visibleOf(structuredMetaDoc.rows.join('\n')), /src\/example\.js/)
+assert.match(visibleOf(structuredMetaDoc.rows.join('\n')), /-const value = 1/)
+assert.match(visibleOf(structuredMetaDoc.rows.join('\n')), /\+const value = 2/)
+
+const structuredReadEvents = [
+  { seq: 1, type: 'tool/call', time: 1000, data: { callId: 'meta-read', name: 'read_file', arguments: JSON.stringify({ path: 'src/read.js' }) } },
+  { seq: 2, type: 'tool/result', time: 1100, data: { callId: 'meta-read', meta: { path: 'src/read.js', lineStart: 4, lineEnd: 8, totalLines: 42, lang: 'javascript' } } }
+]
+const structuredReadBase = projectTranscript(structuredReadEvents, 80)
+const structuredReadActivity = structuredReadBase.blocks.find((block) => block.kind === 'activity')
+const structuredReadDoc = projectTranscript(structuredReadEvents, 80, { expandedKeys: new Set([structuredReadActivity.key]) })
+assert.match(visibleOf(structuredReadDoc.rows.join('\n')), /src\/read\.js · lines 4–8\/42 · javascript/)
+
+const compactResultDoc = projectTranscript([{
+  seq: 1,
+  type: 'local/log',
+  time: 1000,
+  data: {
+    structured: 'compaction-result',
+    level: 'ok',
+    duration: '14.2',
+    contextChange: ' · Context 177k → 76k',
+    text: 'Summary of the work:\n\n```text\nALL INTEGRATION TESTS PASSED\n```'
+  }
+}], 80)
+const compactResultText = visibleOf(compactResultDoc.rows.join('\n'))
+assert.match(compactResultText, /Conversation compacted successfully \(in 14\.2s\)/)
+assert.match(compactResultText, /ALL INTEGRATION TESTS PASSED/)
+assert.doesNotMatch(compactResultText, /undefined/)
+
 // 3. Multiple tool calls with intermediate assistant transition message
 const multiToolEvents = [
   { seq: 1, type: 'user/message', time: 1000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Refactor code' }] } },
@@ -212,6 +258,42 @@ const legacyStatusDoc = projectTranscript([{
   data: { level: 'ok', structured: 'status', text: 'STATUS · session diagnostics\n\nRuntime\n  TUI: dsh-omc-tui v0.2.12' }
 }], 80)
 assert.match(visibleOf(legacyStatusDoc.rows.join('\n')), /◆ \/status\n\s+TUI\s{2,}dsh-omc-tui v0\.2\.12/)
+
+const sideQueryDoc = projectTranscript([{
+  seq: 1,
+  type: 'local/log',
+  data: {
+    structured: 'side-query',
+    level: 'ok',
+    query: 'What is an AST?',
+    model: 'deepseek-v4',
+    text: 'An **AST** is a structured representation of source code.'
+  }
+}], 80)
+const sideQueryText = visibleOf(sideQueryDoc.rows.join('\n'))
+assert.match(sideQueryText, /Side Query · deepseek-v4/)
+assert.match(sideQueryText, /AST is a structured representation/)
+for (const row of sideQueryDoc.rows) {
+  assert.ok(widthOf(visibleOf(row)) <= 80, `Side query row exceeds terminal width: "${visibleOf(row)}"`)
+}
+
+const richSideQueryDoc = projectTranscript([{
+  seq: 1,
+  type: 'local/log',
+  data: {
+    structured: 'side-query',
+    level: 'ok',
+    model: 'deepseek-v4',
+    text: '**粗体中文** with `inline code` and a sentence long enough to wrap.\n\n```js\nconst result = veryLongFunctionName("中文")\n```'
+  }
+}], 50)
+const richSideQueryRows = richSideQueryDoc.rows
+  .map((row) => visibleOf(row))
+  .filter((row) => row.includes('│'))
+assert.ok(richSideQueryRows.length > 0)
+for (const row of richSideQueryRows) {
+  assert.equal(widthOf(row), 50, `Side query border must align at 50 columns: "${row}"`)
+}
 
 for (const cols of [30, 50, 80, 120]) {
   const doc = projectTranscript(cjkEvents, cols)

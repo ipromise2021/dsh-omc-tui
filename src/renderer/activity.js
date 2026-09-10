@@ -137,9 +137,10 @@ export function todoPlanFromRunCode(code) {
 
 const resultTextFrom = (value) => {
   if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(resultTextFrom).filter(Boolean).join('\n')
   const blockText = textOf(value)
   if (blockText) return blockText
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  if (!value || typeof value !== 'object') return ''
   if (typeof value.text === 'string') return value.text
   return resultTextFrom(value.content) || resultTextFrom(value.stdout) || resultTextFrom(value.stderr)
 }

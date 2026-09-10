@@ -6,6 +6,36 @@ import { renderDiffLines } from './diff.js'
 import { compactExpandedFileReferences, stripImageAttachmentNotices } from '../core/events.js'
 import { groupActivitySpans, parseToolArgs, summarizeToolCall, toolResultText } from './activity.js'
 
+function metaDiffText(meta) {
+  if (!Array.isArray(meta?.diffs) || meta.diffs.length === 0) return ''
+  return meta.diffs.map((diff, index) => {
+    const path = safe(String(diff?.path || `change-${index + 1}`))
+    const oldText = String(diff?.oldText ?? '')
+    const newText = String(diff?.newText ?? '')
+    const oldLines = oldText.split('\n').map((line) => `-${line}`)
+    const newLines = newText.split('\n').map((line) => `+${line}`)
+    return [`diff -- ${path}`, `--- ${path}`, `+++ ${path}`, ...oldLines, ...newLines].join('\n')
+  }).join('\n')
+}
+
+function metaSummary(meta) {
+  if (!meta || typeof meta !== 'object') return ''
+  const path = typeof meta.path === 'string' ? safe(meta.path) : ''
+  const totalLines = Number.isFinite(meta.totalLines) ? meta.totalLines : undefined
+  const lineStart = Number.isFinite(meta.lineStart) ? meta.lineStart : undefined
+  const lineEnd = Number.isFinite(meta.lineEnd) ? meta.lineEnd : undefined
+  const lang = typeof meta.lang === 'string' ? safe(meta.lang) : ''
+  const parts = []
+  if (path) parts.push(path)
+  if (lineStart !== undefined && lineEnd !== undefined) {
+    parts.push(`lines ${lineStart}–${lineEnd}${totalLines !== undefined ? `/${totalLines}` : ''}`)
+  } else if (totalLines !== undefined) {
+    parts.push(`${totalLines} lines`)
+  }
+  if (lang) parts.push(lang)
+  return parts.join(' · ')
+}
+
 export function renderStatusPanelRows(text, contentWidth, ANSI = defaultAnsi) {
   const sourceLines = safe(text).split(/\r?\n/).map((line) => {
     const oldField = line.match(/^\s+([^:]+):\s*(.*)$/)
@@ -123,9 +153,12 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
       detailRows.push(summaryRow)
       logicalLines.push(summary.summaryText)
 
-      // 2. Expanded details
-      const indent = totalCalls > 1 ? '    ' : '  '
-      for (const event of span.events) {
+      // 2. Expanded details. Rendering these rows dominates long-session
+      // projection time, so collapsed blocks intentionally retain only their
+      // summary; reopening the block rebuilds the exact detail rows.
+      if (isExpanded) {
+        const indent = totalCalls > 1 ? '    ' : '  '
+        for (const event of span.events) {
         if (event.type === 'tool/call') {
           const args = parseToolArgs(event.data?.arguments)
           const name = safe(event.data?.name || 'tool')
@@ -220,17 +253,23 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
           logicalLines.push(`hook result: ${data.decision ?? ''}`)
         } else if (event.type === 'tool/result') {
           const resultText = toolResultText(event.data)
+          const diffText = metaDiffText(event.data?.meta)
+          const summary = metaSummary(event.data?.meta)
           if (event.data?.error) {
             const detail = event.data.error.message ?? resultText
             detailRows.push(`${indent}${ANSI.coral}└ ✗ ${safe(event.data.error.code ?? 'error')} · ${shorten(detail, Math.max(20, contentWidth - 24))}${ANSI.reset}`)
             logicalLines.push(`error: ${detail}`)
-          } else if (/^diff |\n(---|\+\+\+)/.test(`\n${resultText}`) && /^[+-]/.test(resultText.split('\n').find((l) => l.startsWith('+') || l.startsWith('-')) ?? '')) {
-            const diffLines = renderDiffLines(resultText, contentWidth, ANSI)
+          } else if (diffText || (/^diff |\n(---|\+\+\+)/.test(`\n${resultText}`) && /^[+-]/.test(resultText.split('\n').find((l) => l.startsWith('+') || l.startsWith('-')) ?? ''))) {
+            const diffLines = renderDiffLines(diffText || resultText, contentWidth, ANSI)
             for (const line of diffLines) detailRows.push(line)
-            logicalLines.push(resultText)
+            logicalLines.push(diffText || resultText)
           } else if (resultText) {
             const resultLines = safe(resultText).split(/\r?\n/).filter((l) => l.trim().length > 0)
             if (resultLines.length > 0) {
+              if (summary) {
+                detailRows.push(`${indent}${ANSI.dim}└ ${shorten(summary, Math.max(20, contentWidth - 10))}${ANSI.reset}`)
+                logicalLines.push(summary)
+              }
               detailRows.push(`${indent}${ANSI.dim}└ ${shorten(resultLines[0], Math.max(20, contentWidth - 10))}${ANSI.reset}`)
               logicalLines.push(resultLines[0])
               for (let idx = 1; idx < Math.min(6, resultLines.length); idx++) {
@@ -241,6 +280,9 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
                 detailRows.push(`${indent}${ANSI.dim}  … ${resultLines.length - 6} more lines${ANSI.reset}`)
               }
             }
+          } else if (summary) {
+            detailRows.push(`${indent}${ANSI.dim}└ ${shorten(summary, Math.max(20, contentWidth - 10))}${ANSI.reset}`)
+            logicalLines.push(summary)
           } else {
             const message = 'no displayable output returned by the runtime'
             detailRows.push(`${indent}${ANSI.dim}└ ${message}${ANSI.reset}`)
@@ -259,6 +301,7 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
             detailRows.push(errLine)
             logicalLines.push(`✗ ${errStr}`)
           }
+        }
         }
       }
 
@@ -628,10 +671,43 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
         if (!entry || !entry.text) break
         const rows = []
         const logicalLines = []
-        const color = entry.level === 'ok' ? ANSI.green : (entry.level === 'err' ? ANSI.coral : ANSI.dim)
+        const color = entry.level === 'ok' ? ANSI.teal : (entry.level === 'err' ? ANSI.coral : ANSI.dim)
         const icon = entry.level === 'ok' ? '✓' : (entry.level === 'err' ? '✗' : '·')
 
-        if (entry.isRecapResponse) {
+        if (entry.structured === 'side-query') {
+          const boxWidth = Math.max(32, Math.min(contentWidth, 100))
+          const markdownRows = renderMarkdownRows(entry.text, Math.max(24, boxWidth - 4), ANSI.answer, ANSI)
+          const tagText = truncateWidth(` ✦ Side Query · ${safe(entry.model || 'model')} (not saved to session) `, Math.max(10, boxWidth - 8))
+          const ruleLen = Math.max(2, boxWidth - 3 - widthOf(tagText))
+          rows.push(`  ${ANSI.blueSoft}╭─${ANSI.bold}${tagText}${ANSI.reset}${ANSI.blueSoft}${'─'.repeat(ruleLen)}╮${ANSI.reset}`)
+          logicalLines.push(`Side Query · ${entry.model || 'model'}\n${entry.query || ''}\n${entry.text}`)
+          for (const row of markdownRows) {
+            if (row === null) {
+              rows.push(`  ${ANSI.blueSoft}│${ANSI.reset}${' '.repeat(boxWidth - 2)}${ANSI.blueSoft}│${ANSI.reset}`)
+              continue
+            }
+            const lineText = row[1]
+            const pad = ' '.repeat(Math.max(0, boxWidth - 4 - widthOf(visibleOf(lineText))))
+            rows.push(`  ${ANSI.blueSoft}│${ANSI.reset} ${lineText}${pad} ${ANSI.blueSoft}│${ANSI.reset}`)
+          }
+          rows.push(`  ${ANSI.blueSoft}╰${'─'.repeat(boxWidth - 2)}╯${ANSI.reset}`)
+        } else if (entry.structured === 'compaction-result') {
+          const title = entry.alreadyCompacted
+            ? 'Conversation is already compacted'
+            : 'Conversation compacted successfully'
+          const elapsed = entry.duration ? ` (in ${entry.duration}s)` : ''
+          const doc = renderMarkdownDocument(entry.text, Math.max(20, contentWidth - 4), ANSI.answer, ANSI)
+          rows.push(`  ${ANSI.teal}✓${ANSI.reset} ${ANSI.bold}${title}${ANSI.reset}${ANSI.dim}${elapsed}${ANSI.reset}`)
+          logicalLines.push(`${title}${elapsed}`)
+          for (const row of doc.rows) {
+            rows.push(row ? `    ${row}` : '')
+          }
+          logicalLines.push(...doc.plainText.split('\n'))
+          if (entry.contextChange) {
+            rows.push(`    ${ANSI.dim}${safe(entry.contextChange)} · Context window freed for new tasks${ANSI.reset}`)
+            logicalLines.push(`${entry.contextChange} · Context window freed for new tasks`)
+          }
+        } else if (entry.isRecapResponse) {
           const wrapWidth = Math.max(20, contentWidth - 4)
           const wrapped = wrap(entry.text, wrapWidth)
           for (const line of wrapped) {

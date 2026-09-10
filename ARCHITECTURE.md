@@ -55,7 +55,7 @@ dsh-omc-tui/
 │   ├── index.js                # TUI 核心控制器：PTY 输入循环、事件派发、调度渲染与生命周期
 │   ├── renderer/               # 纯 ANSI 终端排版与渲染引擎
 │   │   ├── ansi.js             # CJK 视觉宽度计算 (widthOf/visibleOf)、安全截断与字符清洗 (safe)
-│   │   ├── markdown.js         # Claude Code 级别原生 Markdown 渲染器（代码卡片、Unicode 表格）
+│   │   ├── markdown.js         # 原生 Markdown 渲染器（代码围栏、Unicode 表格）
 │   │   ├── themes.js           # 四阶语义化灰度与主题体系（claude / deepseek / mono / light）
 │   │   ├── transcript.js       # 会话历史投影（User 气泡、Thinking 折叠、Tool Call、Diff 块）
 │   │   ├── statusline.js       # claude-hud 风格全景状态栏（Token 进度、权限、Git 联动、响应速度）
@@ -101,7 +101,7 @@ dsh-omc-tui/
   - 中文字符、全角符号、Emoji 在终端占用 2 个列宽，通过自研的 `widthOf()` 与 `visibleOf()` 精确测量视觉宽度，严禁使用 `.length` 直接对齐。
   - `wrap()` 算法在东亚宽字符边界自动处理折行，避免终端硬折行导致的边框撕裂。
 * **高阶 Markdown 解析 ([`markdown.js`](file:///Users/yy0812024/work/dsh-plugin/dsh-omc-tui/src/renderer/markdown.js))**：
-  - **闭合代码卡片**：自动绘制顶部标题栏、带行号与语法的四边闭合卡片；
+  - **代码围栏**：保留语言标记的 fenced-code 展示，并按终端列宽安全换行；
   - **Unicode 表格网格**：支持 `┌┬┐├┼┤└┴┘` Unicode 连续表格绘制；
   - **行内语法**：加粗、斜体、行内代码、多级列表嵌套支持。
 * **四阶灰度护眼主题体系 ([`themes.js`](file:///Users/yy0812024/work/dsh-plugin/dsh-omc-tui/src/renderer/themes.js))**：
