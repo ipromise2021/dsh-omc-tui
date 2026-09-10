@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { safe, textOf, widthOf } from '../renderer/ansi.js'
+import { safe, textOf, truncateWidth, widthOf } from '../renderer/ansi.js'
 import { userMessage } from '../core/events.js'
 import { renderMarkdownRows } from '../renderer/markdown.js'
 import { ANSI } from '../renderer/themes.js'
@@ -83,12 +83,15 @@ export async function handleBtw(app, line) {
 
     if (fullResponse) {
       const columns = Math.max(60, process.stdout.columns || 100)
-      const contentWidth = Math.max(24, columns - 4)
-      const mdRows = renderMarkdownRows(fullResponse, contentWidth, ANSI.answer, ANSI)
-      
       const boxWidth = Math.max(32, Math.min(columns - 2, 100))
-      const tagText = ` ✦ Side Query · ${safe(selection.model)} (not saved to session) `
-      const ruleLen = Math.max(2, boxWidth - 4 - widthOf(tagText))
+      // The card body is `boxWidth + 2` columns wide including the 2-space
+      // indent, so the markdown budget must follow the card rather than the
+      // terminal, or wide terminals tear the right border open.
+      const contentWidth = Math.max(24, boxWidth - 4)
+      const mdRows = renderMarkdownRows(fullResponse, contentWidth, ANSI.answer, ANSI)
+
+      const tagText = truncateWidth(` ✦ Side Query · ${safe(selection.model)} (not saved to session) `, Math.max(10, boxWidth - 8))
+      const ruleLen = Math.max(2, boxWidth - 3 - widthOf(tagText))
 
       const cardLines = [
         `  ${ANSI.blueSoft}╭─${ANSI.bold}${tagText}${ANSI.reset}${ANSI.blueSoft}${'─'.repeat(ruleLen)}╮${ANSI.reset}`

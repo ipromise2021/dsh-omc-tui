@@ -88,11 +88,12 @@ export async function downscaleImageBuffer(data, mediaType = PNG_MEDIA_TYPE, max
   const execFileAsync = promisify(execFile)
 
   const ext = isJpeg ? 'jpg' : 'png'
-  const tempFile = join(tmpdir(), `dsh-downscale-${Date.now()}-${Math.floor(Math.random() * 100000)}.${ext}`)
+  const { randomUUID } = await import('node:crypto')
+  const tempFile = join(tmpdir(), `dsh-downscale-${randomUUID()}.${ext}`)
   let resizedData = undefined
 
   try {
-    await writeFile(tempFile, bytes)
+    await writeFile(tempFile, bytes, { mode: 0o600, flag: 'wx' })
 
     if (process.platform === 'darwin') {
       await execFileAsync('sips', ['-Z', String(maxSide), tempFile], { timeout: 8000 })
@@ -187,7 +188,7 @@ export class ImageParser {
   }
 
   reset() {
-    this.state = 'idle' // idle | iterm-header | iterm-data | kitty-header | kitty-data
+    this.state = 'idle' // idle | iterm-header | iterm-ignore | iterm-data | kitty-header | kitty-data
     this.buffer = ''
     this.itermParams = {}
     this.kittyParams = {}
@@ -253,6 +254,8 @@ export class ImageParser {
     switch (this.state) {
       case 'iterm-header':
         return this.advanceItermHeader()
+      case 'iterm-ignore':
+        return this.advanceItermIgnore()
       case 'iterm-data':
         return this.advanceItermData()
       case 'kitty-header':
@@ -271,15 +274,36 @@ export class ImageParser {
       return undefined
     }
     const params = parseParams(this.buffer.slice(0, colon))
+    // iTerm2 may order the File parameters freely, so read `inline` by name.
+    const inline = params.File === 'inline=1' || params.inline === '1'
     this.buffer = this.buffer.slice(colon + 1)
-    if (params.File !== 'inline=1') {
-      const remainder = this.buffer
-      this.reset()
-      return { ignored: true, remainder }
+    if (!inline) {
+      // Unsupported File request: swallow its payload up to the terminator
+      // instead of replaying megabytes of base64 as keyboard input.
+      this.state = 'iterm-ignore'
+      return this.advance()
     }
     this.itermParams = params
     this.state = 'iterm-data'
     return this.advance()
+  }
+
+  advanceItermIgnore() {
+    const bel = this.buffer.indexOf(BEL)
+    const st = this.buffer.indexOf(ST)
+    const ends = [bel, st].filter((index) => index !== -1)
+    if (ends.length === 0) {
+      // The payload cannot contain BEL/ST (it is base64 or a filename), so the
+      // buffered bytes are safe to discard while the sequence stays open.
+      if (this.buffer.length > MAX_BUFFERED_BYTES) return this.drop('ignored image too large')
+      this.buffer = ''
+      return undefined
+    }
+    const end = Math.min(...ends)
+    const terminator = end === bel ? BEL : ST
+    const remainder = this.buffer.slice(end + terminator.length)
+    this.reset()
+    return { ignored: true, remainder }
   }
 
   advanceItermData() {

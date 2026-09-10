@@ -37,8 +37,12 @@ export function registerVisionRouter(app) {
 }
 
 export async function runVisionRoute(app, args, exec = {}) {
-  const initiator = app.ctx.agents.currentInitiator?.()
-  if (initiator && initiator !== app.agent) {
+  // Positive check: initiator attribution is not authorization, so a missing
+  // API or a missing initiator fails closed instead of falling through.
+  if (typeof app.ctx.agents.currentInitiator !== 'function') {
+    throw new Error('analyze_image cannot verify the calling session in this harness version')
+  }
+  if (app.ctx.agents.currentInitiator() !== app.agent) {
     throw new Error('analyze_image is only available to the active session')
   }
 

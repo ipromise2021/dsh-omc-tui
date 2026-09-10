@@ -25,7 +25,7 @@ export function renderProviderList(providerPanel, currentSelection, capacity, co
       const marker = isSelected ? `${ANSI.blue}>${ANSI.reset}` : ' '
       const isCurrent = entry.id === currentProviderId
       const isCustom = !!entry.custom
-      const hasKey = entry.hasKey !== false
+      const hasKey = entry.hasKey === true
 
       // Status indicator dot
       const dot = hasKey

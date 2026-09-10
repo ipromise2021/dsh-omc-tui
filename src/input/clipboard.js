@@ -47,6 +47,9 @@ export function copyToClipboard(text, stdout = process.stdout, options = {}) {
     if (cmd) {
       const child = spawn(cmd, args, { stdio: ['pipe', 'ignore', 'ignore'], detached: true })
       child.on('error', () => {})
+      // A missing helper closes the pipe before the write lands; without a
+      // listener that EPIPE would surface as an uncaught stream error.
+      child.stdin.on('error', () => {})
       child.stdin.write(text)
       child.stdin.end()
       child.unref()

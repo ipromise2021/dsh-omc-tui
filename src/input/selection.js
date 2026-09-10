@@ -71,15 +71,22 @@ function getBlockSourceTextAndRowMap(block) {
   // Construct clean sourceText from visible lines, joining soft wraps with ' ' and hard breaks with '\n'
   const rowSpans = []
   let fullSource = ''
+  // Rows emitted by wrapping fill the available width, while complete logical
+  // lines are shorter. The old `!raw.endsWith('\n')` test was always true
+  // because a rendered row never carries a newline.
+  const maxRowWidth = rows.reduce((max, row) => Math.max(max, widthOf(visibleOf(row))), 0)
   for (let r = 0; r < rows.length; r++) {
     const raw = rows[r]
     const vis = visibleOf(raw)
+    const prevVis = r > 0 ? visibleOf(rows[r - 1]) : ''
     const nextRaw = r + 1 < rows.length ? rows[r + 1] : null
     const nextVis = nextRaw ? visibleOf(nextRaw) : ''
 
     const isCodeOrTable = vis.includes('│') || vis.includes('┌') || vis.includes('└') || vis.includes('├') || vis.includes('┼') || vis.includes('┤') || vis.includes('─')
     const isBlank = vis.trim().length === 0
-    const isSoftWrap = !isCodeOrTable && !isBlank && nextVis.trim().length > 0 && !nextVis.includes('│') && !nextVis.includes('┌') && !nextVis.includes('└') && !raw.endsWith('\n')
+    const isSoftWrap = !isCodeOrTable && !isBlank && nextVis.trim().length > 0 &&
+      !nextVis.includes('│') && !nextVis.includes('┌') && !nextVis.includes('└') &&
+      maxRowWidth >= 20 && widthOf(prevVis) >= maxRowWidth - 1
 
     const sep = isSoftWrap ? ' ' : (r === rows.length - 1 ? '' : '\n')
     const startOffset = fullSource.length
@@ -391,6 +398,15 @@ export class SelectionController {
     const allRows = viewport.document?.rows ?? viewport.allRows ?? []
     const layoutMap = viewport.document?.layoutMap ?? viewport.layoutMap ?? []
 
+    // Same rule as the single-block path: only a row that fills its block's
+    // widest row continues onto the next one.
+    const blockRowWidth = new Map()
+    for (let r = 0; r < allRows.length; r++) {
+      const key = layoutMap[r]?.blockKey
+      if (key === undefined) continue
+      blockRowWidth.set(key, Math.max(blockRowWidth.get(key) ?? 0, widthOf(visibleOf(allRows[r]))))
+    }
+
     const extracted = []
     for (let r = from.row; r <= to.row; r++) {
       if (r < 0 || r >= allRows.length) continue
@@ -415,7 +431,11 @@ export class SelectionController {
       const currentEntry = layoutMap[r]
       const nextEntry = layoutMap[r + 1]
       const isCardBorder = rawRow.includes('│') || rawRow.includes('╭') || rawRow.includes('╰') || rawRow.includes('┌') || rawRow.includes('└')
-      const isSoftWrap = Boolean(currentEntry && nextEntry && currentEntry.blockKey === nextEntry.blockKey && !isCardBorder && !lineSlice.endsWith('\n'))
+      const blockWidth = currentEntry ? (blockRowWidth.get(currentEntry.blockKey) ?? 0) : 0
+      const isSoftWrap = Boolean(
+        currentEntry && nextEntry && currentEntry.blockKey === nextEntry.blockKey && !isCardBorder &&
+        blockWidth >= 20 && widthOf(visible) >= blockWidth - 1
+      )
 
       extracted.push({ text: lineSlice, isSoftWrap })
     }

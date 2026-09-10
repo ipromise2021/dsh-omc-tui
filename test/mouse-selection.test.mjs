@@ -120,8 +120,9 @@ const beforeViewport = {
   viewportHeight: 10,
   document: beforeResizeDoc,
   allRows: [
-    'Line 1 paragraph with text',
-    'that soft wraps across visual rows'
+    // A real wrap only splits when the row is full, so the fixture fills it too.
+    'Line 1 paragraph with text that soft',
+    'wraps across visual rows'
   ]
 }
 controller.clear()
@@ -432,5 +433,30 @@ const styledRow = styledDoc.rows.find((r) => r.includes('bold text'))
 assert.ok(styledRow, 'Rendered row must exist')
 assert.ok(styledRow.includes(ANSI.bold), 'Row must contain ANSI.bold escape code')
 assert.ok(styledRow.includes(ANSI.blueSoft), 'Row must contain ANSI.blueSoft escape code for inline code and link')
+
+// 21. CR-106: short logical lines keep their line break; wrapped rows still join
+const genericLogDoc = {
+  blocks: [{ key: 'log-1', startRow: 0, rowCount: 2, logicalLines: ['● Bash(ls)', '● Bash(pwd)'] }],
+  layoutMap: [{ blockKey: 'log-1', blockRowIndex: 0 }, { blockKey: 'log-1', blockRowIndex: 1 }],
+  rows: ['  ● Bash(ls)', '  ● Bash(pwd)']
+}
+const genericLogVp = { scrollTop: 0, viewportHeight: 4, document: genericLogDoc, allRows: genericLogDoc.rows, maxScroll: () => 0 }
+controller.clear()
+controller.handleMouseDown({ row: 0, col: 3 }, genericLogVp)
+controller.handleMouseMove({ row: 1, col: 12 }, genericLogVp)
+const genericLogText = controller.getSelectedText(genericLogVp)
+assert.ok(genericLogText.includes('\n'), `Short logical lines must keep their line break: ${JSON.stringify(genericLogText)}`)
+
+const wrappedDoc = {
+  blocks: [{ key: 'ans-1', startRow: 0, rowCount: 2, logicalLines: ['wrapped answer'] }],
+  layoutMap: [{ blockKey: 'ans-1', blockRowIndex: 0 }, { blockKey: 'ans-1', blockRowIndex: 1 }],
+  rows: ['x'.repeat(60), 'tail']
+}
+const wrappedVp = { scrollTop: 0, viewportHeight: 4, document: wrappedDoc, allRows: wrappedDoc.rows, maxScroll: () => 0 }
+controller.clear()
+controller.handleMouseDown({ row: 0, col: 2 }, wrappedVp)
+controller.handleMouseMove({ row: 1, col: 4 }, wrappedVp)
+const wrappedText = controller.getSelectedText(wrappedVp)
+assert.ok(wrappedText.includes('tail') && !wrappedText.includes('\n'), `A wrapped continuation still joins with a space: ${JSON.stringify(wrappedText)}`)
 
 console.log('✓ mouse selection & clipboard unit tests passed')

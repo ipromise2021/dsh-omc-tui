@@ -4,16 +4,23 @@ const graphemeSegmenter = typeof Intl !== 'undefined' && typeof Intl.Segmenter =
   ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
   : undefined
 
-export function graphemeEntries(text) {
+/** Lazy grapheme iterator: callers that stop early must not pay for the tail. */
+function* graphemeSegments(text) {
   const value = String(text ?? '')
-  if (graphemeSegmenter) return Array.from(graphemeSegmenter.segment(value), ({ segment, index }) => ({ segment, index }))
-  const entries = []
+  if (!value) return
+  if (graphemeSegmenter) {
+    for (const entry of graphemeSegmenter.segment(value)) yield { segment: entry.segment, index: entry.index }
+    return
+  }
   let index = 0
   for (const segment of value) {
-    entries.push({ segment, index })
+    yield { segment, index }
     index += segment.length
   }
-  return entries
+}
+
+export function graphemeEntries(text) {
+  return Array.from(graphemeSegments(text))
 }
 
 function isCombining(codePoint) {
@@ -28,6 +35,21 @@ function isCombining(codePoint) {
     (codePoint >= 0x1f3fb && codePoint <= 0x1f3ff)
 }
 
+// Emoji_Presentation code points outside the CJK blocks that terminals still
+// render two columns wide (✅ ⭐ ⚡ ❌ …). Only consulted for that narrow range.
+const EMOJI_WIDE_RANGES = [
+  [0x231a, 0x231b], [0x23e9, 0x23ec], [0x23f0, 0x23f0], [0x23f3, 0x23f3],
+  [0x25fd, 0x25fe], [0x2614, 0x2615], [0x2648, 0x2653], [0x267f, 0x267f],
+  [0x2693, 0x2693], [0x26a1, 0x26a1], [0x26aa, 0x26ab], [0x26bd, 0x26be],
+  [0x26c4, 0x26c5], [0x26ce, 0x26ce], [0x26d4, 0x26d4], [0x26ea, 0x26ea],
+  [0x26f2, 0x26f3], [0x26f5, 0x26f5], [0x26fa, 0x26fa], [0x26fd, 0x26fd],
+  [0x2705, 0x2705], [0x270a, 0x270b], [0x2728, 0x2728], [0x274c, 0x274c],
+  [0x274e, 0x274e], [0x2753, 0x2755], [0x2757, 0x2757], [0x2795, 0x2797],
+  [0x27b0, 0x27b0], [0x27bf, 0x27bf], [0x2b1b, 0x2b1c], [0x2b50, 0x2b50],
+  [0x2b55, 0x2b55], [0x1f004, 0x1f004], [0x1f0cf, 0x1f0cf],
+  [0x1f18e, 0x1f18e], [0x1f191, 0x1f19a], [0x1f200, 0x1f2ff]
+]
+
 function isWideCodePoint(codePoint) {
   return (codePoint >= 0x1100 && codePoint <= 0x115f) ||
     codePoint === 0x2329 || codePoint === 0x232a ||
@@ -38,7 +60,8 @@ function isWideCodePoint(codePoint) {
     (codePoint >= 0xff00 && codePoint <= 0xff60) ||
     (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
     (codePoint >= 0x1f300 && codePoint <= 0x1faff) ||
-    (codePoint >= 0x20000 && codePoint <= 0x3fffd)
+    (codePoint >= 0x20000 && codePoint <= 0x3fffd) ||
+    (codePoint >= 0x231a && codePoint <= 0x2b55 && EMOJI_WIDE_RANGES.some(([start, end]) => codePoint >= start && codePoint <= end))
 }
 
 function graphemeWidth(segment) {
@@ -93,8 +116,8 @@ export function safe(text) {
 export function truncateWidth(text, max) {
   let out = ''
   let width = 0
-  for (const { segment } of graphemeEntries(text)) {
-    const w = widthOf(segment)
+  for (const { segment } of graphemeSegments(text)) {
+    const w = graphemeWidth(segment)
     if (width + w > max) break
     out += segment
     width += w
@@ -184,12 +207,19 @@ export function wrapWithSpans(text, columns) {
       continue
     }
 
-    while (widthOf(line) > width) {
+    // The remaining width is tracked instead of re-measured: measuring and
+    // re-segmenting the whole tail on every iteration made this quadratic.
+    let lineWidth = widthOf(line)
+    while (lineWidth > width) {
       let cut = -1
       let acc = 0
-      for (const { segment, index } of graphemeEntries(line)) {
-        const w = widthOf(segment)
-        if (acc + w > width) break
+      let budgetEnd = line.length
+      for (const { segment, index } of graphemeSegments(line)) {
+        const w = graphemeWidth(segment)
+        if (acc + w > width) {
+          budgetEnd = index
+          break
+        }
         if (segment === ' ') cut = index
         acc += w
       }
@@ -204,12 +234,16 @@ export function wrapWithSpans(text, columns) {
         lines.push(head)
 
         // Skip whitespace between wrapped words in source string
-        const nextStartInLine = cut + (line.slice(cut).match(/^\s+/)?.[0]?.length || 0)
+        let skip = 0
+        while (cut + skip < line.length && /\s/.test(line[cut + skip])) skip += 1
+        const nextStartInLine = cut + skip
         lineSourceOffset += nextStartInLine
         line = line.slice(nextStartInLine)
+        lineWidth -= acc
       } else {
         // CJK / long word / unbreakable token: hard-wrap at width
-        const head = truncateWidth(line, width)
+        const head = line.slice(0, budgetEnd)
+        if (head.length === 0) break
         spans.push({
           sourceStart: lineSourceOffset,
           sourceEnd: lineSourceOffset + head.length,
@@ -218,6 +252,7 @@ export function wrapWithSpans(text, columns) {
         lines.push(head)
         lineSourceOffset += head.length
         line = line.slice(head.length)
+        lineWidth -= acc
       }
     }
 

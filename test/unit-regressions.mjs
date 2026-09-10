@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TuiApp, registerTuiSkillOverrides, registerBundledSkills, repeatedActionIntent, withTimeout, resolveModelVisionSupport } from '../src/index.js'
 import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
-import { pngDimensions, jpegDimensions, imageDimensions, MAX_SAFE_IMAGE_PIXELS, downscaleImageBuffer } from '../src/image-protocol.js'
+import { ImageParser, pngDimensions, jpegDimensions, imageDimensions, MAX_SAFE_IMAGE_PIXELS, downscaleImageBuffer } from '../src/image-protocol.js'
 import { stripImageAttachmentNotices } from '../src/core/events.js'
 import { alignCodePoint, moveCursorLine, moveWordLeft, moveWordRight } from '../src/input/editor.js'
 import { handleCompact } from '../src/commands/compact.js'
@@ -15,12 +15,13 @@ import { renderJobPanel } from '../src/panels/jobs-panel.js'
 import { renderExitConfirm } from '../src/panels/exit-confirm.js'
 import { renderExportConfirm } from '../src/panels/export-confirm.js'
 import { renderModelPicker, filterModelEntries } from '../src/panels/model-picker.js'
+import { renderProviderList } from '../src/panels/provider-panel.js'
 import { renderQuestionPanel } from '../src/panels/question-panel.js'
 import { renderSkillsPanel } from '../src/panels/skills-panel.js'
 import { formatEvents } from '../src/renderer/transcript.js'
 import { BrowserLease, chromeApprovalReason, chromeConnectionApprovalReason, chromeLaunchArgs, chromeToolRisk, isChromeTool, registerBrowserLease } from '../src/browser-lease.js'
 import { ANSI, applyTheme } from '../src/renderer/themes.js'
-import { safe, visibleOf, widthOf, formatDurationMs, formatTokens } from '../src/renderer/ansi.js'
+import { safe, visibleOf, widthOf, wrap, formatDurationMs, formatTokens } from '../src/renderer/ansi.js'
 import { ScreenRenderer } from '../src/renderer/screen.js'
 import { loadShellHistoryFile, loadSystemShellHistory } from '../src/input/history.js'
 import { listDir } from '../src/input/autocomplete.js'
@@ -5479,6 +5480,142 @@ inertDispose()
   }
   assert.deepEqual(failingApp.providerPanel.discoveredCandidates?.map((m) => m.id), ['probe-1'], 'endpoint probe still runs when official discovery fails')
   assert.ok(logs.some((line) => line.includes('model discovery failed')), 'official discovery failure is reported')
+}
+
+// ── CR-091..CR-106:全量审查后续修复回归 ─────────────────────────────────
+{
+  // CR-091: danger-tier browser tools keep their own approval under workspace-write
+  const dangerHooks = new Map()
+  const dangerLease = { options: { port: 9222 }, connectionApproved: true, async ensure() {}, async stop() {} }
+  const disposeDangerLease = registerBrowserLease({
+    permissionPresets: { current: () => 'workspace-write' },
+    on(name, handler) { dangerHooks.set(name, handler); return () => dangerHooks.delete(name) }
+  }, { endpointReady: async () => true, lease: dangerLease })
+  const dangerDecision = await dangerHooks.get('tools/pre-execute')(
+    { name: chromeDangerTool, agent: { session: { events: [] } } },
+    async () => ({ kind: 'allow' })
+  )
+  assert.equal(dangerDecision.kind, 'ask', 'danger browser tools still require approval under workspace-write')
+  assert.ok(String(dangerDecision.reason).includes(chromeApprovalReason(chromeDangerTool)), 'danger approval states its own reason')
+  await disposeDangerLease()
+}
+
+{
+  // CR-092/CR-102: a session commit releases compaction, animation and suggestion state
+  const lifecycleApp = {
+    compacting: true,
+    compactState: { phrase: 'compressing' },
+    harnessCompaction: { compactionId: 'cmp-1' },
+    compactRotationTimer: setInterval(() => {}, 50),
+    autoCompactTimer: setTimeout(() => {}, 50),
+    animationTimer: setInterval(() => {}, 50),
+    promptSuggestion: { text: 'stale ghost' },
+    clearPromptSuggestion() { this.promptSuggestion = undefined },
+    clearAutoRecapTimer() {},
+    scheduleRender: noop
+  }
+  TuiApp.prototype.commitSessionState.call(lifecycleApp, {
+    handle: { agent: { session: { events: [] } } },
+    presetName: 'deepseek',
+    permissionName: 'workspace-write'
+  })
+  assert.equal(lifecycleApp.compacting, false, 'compaction flag is released on session commit')
+  assert.equal(lifecycleApp.compactState, undefined, 'compaction rotation state is released')
+  assert.equal(lifecycleApp.harnessCompaction, undefined, 'harness compaction projection is released')
+  assert.equal(lifecycleApp.compactRotationTimer, undefined, 'compaction rotation timer is cleared')
+  assert.equal(lifecycleApp.autoCompactTimer, undefined, 'auto compact timer is cleared')
+  assert.equal(lifecycleApp.animationTimer, undefined, 'animation timer is cleared')
+  assert.equal(lifecycleApp.promptSuggestion, undefined, 'in-flight prompt suggestion is cancelled')
+}
+
+{
+  // CR-093: a switch already in flight refuses the next one instead of racing it
+  const switchLogs = []
+  const busySwitchApp = {
+    sessionSwitchPromise: Promise.resolve(),
+    scheduleRender: noop,
+    log(_kind, text) { switchLogs.push(text) }
+  }
+  await TuiApp.prototype.startNewSession.call(busySwitchApp, { source: '/new' })
+  assert.ok(switchLogs.some((line) => line.includes('already in progress')), 'concurrent session switch is refused')
+}
+
+{
+  // CR-094: a message whose session changed during the awaited expand is not delivered
+  let delivered = 0
+  const beforeAgent = { id: 'agent-before', session: { header: { id: 's1' } }, followup() { delivered += 1 } }
+  const afterAgent = { id: 'agent-after', session: { header: { id: 's2' } }, followup() { delivered += 1 } }
+  const raceApp = {
+    agent: beforeAgent,
+    input: '', cursor: 0, message: '', pendingImages: [], queuedSubmissions: [], pendingBashContext: undefined,
+    preferences: {},
+    scheduleRender: noop,
+    log() {},
+    expandFileReferences: async () => { raceApp.agent = afterAgent; return { text: 'hello', missing: [] } },
+    getModelCatalog: async () => []
+  }
+  await TuiApp.prototype.submitUserMessage.call(raceApp, 'hello', [], [])
+  assert.equal(delivered, 0, 'message must not be delivered into a session the user never typed it in')
+  assert.equal(raceApp.input, 'hello', 'the draft is restored instead of being lost')
+}
+
+{
+  // CR-095: unsupported OSC 1337 payloads are swallowed, not replayed as input
+  const payload = Buffer.from('A'.repeat(200)).toString('base64')
+  const parser = new ImageParser()
+  const ignored = parser.feed(Buffer.from('\x1b]1337;File=inline=0;size=200:' + payload + '\x07real-input'))
+  assert.equal(ignored?.ignored, true, 'unsupported File request is reported as ignored')
+  assert.equal(ignored?.remainder, 'real-input', 'only the bytes after the terminator come back')
+
+  const nameFirst = new ImageParser()
+  const parsed = nameFirst.feed(Buffer.from('\x1b]1337;File=name=dGVzdA==;size=1;inline=1:' + Buffer.from('iVBORw0KGgo=').toString('base64') + '\x07'))
+  assert.ok(parsed?.image || parsed?.error, 'inline is detected by parameter name, not position')
+}
+
+{
+  // CR-096/CR-099: wrapping stays linear and emoji occupy two columns
+  assert.equal(widthOf('✅'), 2, 'U+2705 is two columns wide')
+  assert.equal(widthOf('⭐'), 2, 'U+2B50 is two columns wide')
+  assert.equal(widthOf('中文'), 4, 'CJK stays two columns per character')
+  assert.equal(widthOf('abc'), 3, 'ASCII stays one column')
+  const longLines = wrap('x'.repeat(20000), 80)
+  assert.equal(longLines.length, 250, 'a 20000-char line wraps into 250 rows of 80')
+  assert.ok(longLines.every((line) => widthOf(line) <= 80), 'no wrapped row exceeds the width')
+}
+
+{
+  // CR-097: /context reports the active context window, not the session total
+  const contextLogs = []
+  handleLocalCommand({
+    usage: { contextWindow: 100000, input: 90000, output: 40000, cacheRead: 0, recentInput: 12000 },
+    contextTokens: 15000,
+    skills: [], mcpCount: 0, hookCount: 0,
+    scheduleRender: noop,
+    log(_kind, text) { contextLogs.push(text) }
+  }, 'context')
+  assert.match(contextLogs.join('\n'), /\(15%\)/, 'context percentage uses the active window')
+  assert.doesNotMatch(contextLogs.join('\n'), /130%/, 'cumulative in+out is no longer reported as context usage')
+}
+
+{
+  // CR-098: the provider list shows a missing key instead of a constant-true dot
+  const providerLines = renderProviderList({
+    view: 'list', selected: 0,
+    providers: [{ id: 'custom-env', name: 'Custom Env', custom: true, configured: true, hasKey: false, models: [] }]
+  }, { provider: 'custom-env' }, 10, 80, ANSI)
+  assert.match(visibleOf(providerLines.join('\n')), /○/, 'a provider without a key renders the empty dot')
+}
+
+{
+  // CR-103: analyze_image fails closed when the initiator cannot be established
+  await assert.rejects(
+    () => runVisionRoute({ agent: { id: 'main' }, preferences: {}, imageAttachments: new Map(), message: '', scheduleRender: noop, ctx: { agents: { currentInitiator: () => undefined } } }, { attachment_id: 'att-x' }),
+    /only available to the active session/
+  )
+  await assert.rejects(
+    () => runVisionRoute({ agent: { id: 'main' }, preferences: {}, imageAttachments: new Map(), message: '', scheduleRender: noop, ctx: { agents: {} } }, { attachment_id: 'att-x' }),
+    /cannot verify the calling session/
+  )
 }
 
 console.log('unit regressions: ok')

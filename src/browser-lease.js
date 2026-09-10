@@ -236,7 +236,11 @@ export function registerBrowserLease(ctx, options = {}) {
       workspaceWrite = currentPermissionPreset(ctx.permissionPresets, exec.agent?.session) === 'workspace-write'
     } catch {}
     const connectionNeeded = !lease.connectionApproved
-    const actionNeeded = chromeToolRisk(exec.name) !== 'read' && !workspaceWrite
+    // workspace-write covers ordinary page writes, but the danger tier can
+    // exfiltrate local files or run arbitrary JS in the user's logged-in
+    // browser, so it always keeps its own approval.
+    const risk = chromeToolRisk(exec.name)
+    const actionNeeded = risk === 'danger' || (risk === 'write' && !workspaceWrite)
     const reasons = [
       ...(actionNeeded ? [chromeApprovalReason(exec.name)] : []),
       ...(connectionNeeded ? [chromeConnectionApprovalReason()] : [])

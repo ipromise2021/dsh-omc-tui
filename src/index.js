@@ -465,6 +465,7 @@ export class TuiApp {
     this.autoCompactTimer = undefined
     this.harnessCompaction = undefined
     this.compactRotationTimer = undefined
+    this.sessionSwitchPromise = undefined
     this.autoRecapTimer = undefined
     this.lastRecappedSeq = undefined
     this.animationTimer = undefined
@@ -3029,6 +3030,7 @@ export class TuiApp {
   }
 
   async submitUserMessage(prompt, content = [], images = [], queuedSubmission) {
+    const sessionAgent = this.agent
     let text = prompt
     let missing = []
     try {
@@ -3116,6 +3118,22 @@ export class TuiApp {
         return imageAttachmentNotice(ref, configured)
       }).join('\n')
       fullText = fullText ? `${imageInfo}\n${fullText}` : imageInfo
+    }
+    // The awaited expands/uploads above can outlive a /new or /resume; never
+    // deliver this message into a session the user never typed it in.
+    if (this.agent !== sessionAgent) {
+      this.queuedSubmissions = (this.queuedSubmissions ?? []).filter((submission) => submission !== queuedSubmission)
+      this.pendingImages = [...images, ...(this.pendingImages ?? [])]
+      this.pendingBashContext = priorBashContext
+      if (prompt) {
+        this.input = this.input ? `${prompt}\n${this.input}` : prompt
+      }
+      this.cursor = this.input.length
+      this.message = ''
+      this.lastQueuedText = undefined
+      this.log('error', 'session changed while sending; message not delivered', 'submit')
+      this.scheduleRender()
+      return
     }
     if (fullText) content.push({ type: 'text', text: fullText })
     const message = userMessage(content)
@@ -4052,7 +4070,7 @@ export class TuiApp {
         const customEntry = customProvidersMap[p.id]
         const hasKey = Boolean(
           customEntry?.apiKeyEnv
-            ? (process.env[customEntry.apiKeyEnv] !== undefined || true)
+            ? process.env[customEntry.apiKeyEnv] !== undefined
             : (p.configured !== false && (p.id.includes('deepseek') || !!p.hasKey))
         )
         resultProviders.push({
@@ -4845,6 +4863,19 @@ export class TuiApp {
     this.localEventCounter = 0
     this.lastRecappedSeq = undefined
     this.clearAutoRecapTimer?.()
+    // The outgoing session no longer delivers lifecycle events, so its
+    // compaction projection, animation timer and in-flight suggestion must be
+    // released here or the new session inherits a spinner that never clears.
+    clearInterval(this.compactRotationTimer)
+    this.compactRotationTimer = undefined
+    this.harnessCompaction = undefined
+    this.compacting = false
+    this.compactState = undefined
+    clearTimeout(this.autoCompactTimer)
+    this.autoCompactTimer = undefined
+    clearInterval(this.animationTimer)
+    this.animationTimer = undefined
+    this.clearPromptSuggestion?.()
     this.expandedKeys = new Set()
     this.statuslinePlanExpanded = false
     this.statuslinePlanIdentity = undefined
@@ -4910,7 +4941,26 @@ export class TuiApp {
     }
   }
 
-  async startNewSession({ presetId, source = '/new' } = {}) {
+  // Session switches are single-flight: two concurrent switches can each read
+  // the same previous handle and strand the loser's agent, which then never
+  // disposes its loop, overrides or guards.
+  async startNewSession(options = {}) {
+    if (this.sessionSwitchPromise) {
+      this.log('ok', 'session switch already in progress…', options?.source ?? '/new')
+      this.scheduleRender()
+      return
+    }
+    // Resolve through the prototype so partial test doubles (which copy only the
+    // methods they exercise) still run the real switch implementation.
+    this.sessionSwitchPromise = TuiApp.prototype.performSessionSwitch.call(this, options)
+    try {
+      return await this.sessionSwitchPromise
+    } finally {
+      this.sessionSwitchPromise = undefined
+    }
+  }
+
+  async performSessionSwitch({ presetId, source = '/new' } = {}) {
     const isNewSession = source !== '/preset'
     const id = presetId ?? this.presetName ?? this.ctx.agentPresets.defaultId
     const permissionName = isNewSession ? this.permissionName : undefined
@@ -5493,9 +5543,12 @@ export class TuiApp {
       const previousOutput = this.jobOutputCache?.get(entry.id) ?? ''
       const snapshot = result?.snapshot ?? result?.job
       const job = snapshot ? this.normalizeJobSnapshot(snapshot) : undefined
-      // Shell reads are cursor-based deltas; completed non-shell jobs return
-      // their full final output on every read, so replace it instead of appending.
-      const replaceOutput = job && !isShellJob(entry) && !isRunningJob(job)
+      // Producers signal streaming through their own `readOutput` capability,
+      // which the snapshot does not expose, so decide by content: a settled
+      // stream still returns a consumed delta and a final-output job returns
+      // its whole output. Never let a read shrink the cached log.
+      const settled = job && !isRunningJob(job)
+      const replaceOutput = settled && outputText.length >= previousOutput.length
       let nextOutput
       if (replaceOutput && outputText) {
         if (!this.jobOutputCache) this.jobOutputCache = new Map()
@@ -5970,12 +6023,15 @@ export class TuiApp {
   }
 
   async refreshSkills() {
-    if (!this.agent) return
+    const agent = this.agent
+    if (!agent) return
     try {
       const skills = await (this.skillsService?.list?.({
-        cwd: this.agent.session.header.cwd ?? process.cwd(),
-        scope: this.agent
+        cwd: agent.session.header.cwd ?? process.cwd(),
+        scope: agent
       }) ?? [])
+      // A switch during the await makes this result belong to a dead scope.
+      if (this.agent !== agent) return
       const disabled = new Set(this.preferences.disabledSkills ?? [])
       this.skills = skills
         .filter((skill) => skill.invocation?.userInvocable !== false || disabled.has(skill.name))
@@ -5986,8 +6042,9 @@ export class TuiApp {
           enabled: !disabled.has(skill.name)
         }))
     } catch {
-      this.skills = []
+      if (this.agent === agent) this.skills = []
     }
+    if (this.agent !== agent) return
     if (this.menu) this.updateMenu()
     this.scheduleRender()
   }

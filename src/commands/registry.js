@@ -63,9 +63,11 @@ export function handleLocalCommand(app, commandName, line = '') {
       const inp = usage.input || 0
       const out = usage.output || 0
       const cache = usage.cacheRead || 0
-      const total = inp + out
-      const pct = Math.round((total / cw) * 100)
-      app.log('ok', `Context: ${formatTokens(inp)} / ${formatTokens(cw)} tokens (${pct}%) · in ${formatTokens(inp)} · out ${formatTokens(out)} · cache ${formatTokens(cache)}\nSkills: ${app.skills.length} · MCPs: ${app.mcpCount} · Hooks: ${app.hookCount}`, '/context')
+      const activeTokens = Number.isFinite(app.contextTokens)
+        ? app.contextTokens
+        : (Number.isFinite(usage.recentInput) ? usage.recentInput : inp)
+      const pct = Math.round((activeTokens / cw) * 100)
+      app.log('ok', `Context: ${formatTokens(activeTokens)} / ${formatTokens(cw)} tokens (${pct}%) · in ${formatTokens(inp)} · out ${formatTokens(out)} · cache ${formatTokens(cache)}\nSkills: ${app.skills.length} · MCPs: ${app.mcpCount} · Hooks: ${app.hookCount}`, '/context')
       break
     }
     case 'compact': {
