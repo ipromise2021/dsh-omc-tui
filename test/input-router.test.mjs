@@ -240,6 +240,126 @@ assert.deepEqual(tokenEvents, [
   '\x1b[1;3C'
 ], 'Alt and Meta sequences must be dispatched intact to app.handleToken')
 
+// 12. Terminal reports (device attributes, DEC private mode replies, OSC/DCS
+// answers) are delivered asynchronously — typically right after focus, resize,
+// wake or an external editor — and must never self-insert into the composer.
+tokenEvents = []
+router.processInput('\x1b[?1;2c')            // Primary device attributes
+router.processInput('\x1b[>0;95;0c')         // Secondary device attributes
+router.processInput('\x1b[?2004;1$y')        // DECRPM: bracketed paste enabled
+router.processInput('\x1b[?2026;2$y')        // DECRPM: synchronized output
+router.processInput('\x1b[>4;2m')            // modifyOtherKeys reply
+router.processInput('\x1b[?u')               // Kitty keyboard flags reply
+router.processInput('\x1b]11;rgb:0000/0000/0000\x07')       // OSC 11 background
+router.processInput('\x1b]10;rgb:ffff/ffff/ffff\x1b\\')     // OSC 10 with ST
+router.processInput('\x1bP1$r0m\x1b\\')                  // DECRQSS reply
+router.processInput('\x1b[12;34R')           // CPR stays one ignored token
+assert.deepEqual(tokenEvents, ['\x1b[12;34R'],
+  'DEC private, OSC and DCS reports must be consumed, never typed')
+
+// 12.1 A private-mode reply split across chunks must still be consumed whole.
+tokenEvents = []
+router.processInput('\x1b[?2004;')
+await new Promise((resolve) => setTimeout(resolve, 40))
+router.processInput('1$y')
+assert.deepEqual(tokenEvents, [], 'A split DEC private-mode reply must not leak')
+
+// 12.2 An abandoned private-mode prefix expires without eating later typing.
+tokenEvents = []
+router.processInput('\x1b[?2004;1')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('abc')
+assert.deepEqual(tokenEvents, ['a', 'b', 'c'], 'An expired private CSI prefix must not consume typing')
+
+// 12.3 A split OSC reply must be consumed across the chunk boundary.
+tokenEvents = []
+router.processInput('\x1b]11;rgb:00')
+await new Promise((resolve) => setTimeout(resolve, 40))
+router.processInput('00/0000/0000\x07')
+assert.deepEqual(tokenEvents, [], 'A split OSC reply must not leak into the composer')
+
+// 12.4 A focus report whose leading Escape was flushed early is still consumed.
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('[I')
+assert.deepEqual(tokenEvents, ['\x1b'], 'Only the early Escape may reach the app; focus-in is consumed')
+
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('[?1;2c')
+assert.deepEqual(tokenEvents, ['\x1b'], 'Only the early Escape may reach the app; a DEC reply is consumed')
+
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('P1$r0m\x1b\\')
+assert.deepEqual(tokenEvents, ['\x1b'], 'Only the early Escape may reach the app; a DCS reply is consumed')
+
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput(']11;rgb:0000/0000/0000\x07')
+assert.deepEqual(tokenEvents, ['\x1b'], 'Only the early Escape may reach the app; an OSC reply is consumed')
+
+// 12.5 Alt+] and Alt+P stay ordinary keys rather than being read as reports.
+// They share the bounded grace window because a reply may be split right after
+// the introducer, so they are released after the window instead of instantly.
+tokenEvents = []
+router.processInput('\x1b]')
+router.processInput('\x1bP')
+await new Promise((resolve) => setTimeout(resolve, 200))
+assert.deepEqual(tokenEvents, ['\x1b]', '\x1bP'], 'Alt+] and Alt+P must remain dispatches, not OSC/DCS starts')
+
+// 12.5.1 ESC, then a bare [, then the report body (the three-part VS Code
+// split) must still be consumed for every report shape.
+for (const body of ['<0;115;42M', '?2004;1$y', '?1;2c', '>0;95;0c', '12;34R', 'I', 'O']) {
+  tokenEvents = []
+  mouseEvents = []
+  router.processInput('\x1b')
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  router.processInput('[')
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  router.processInput(body)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  // A numeric CPR keeps its single-token dispatch (the app ignores it); every
+  // other report is consumed without reaching the app at all.
+  const expected = body === '12;34R' ? ['\x1b', '\x1b[12;34R'] : ['\x1b']
+  assert.deepEqual(tokenEvents, expected, 'Only the early Escape may reach the app for a three-part ' + body)
+  if (body === '<0;115;42M') assert.equal(mouseEvents.length, 1, 'A three-part SGR report must still dispatch as mouse input')
+}
+
+// 12.5.2 A bare [ after an early Escape must not swallow ordinary text.
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('[')
+await new Promise((resolve) => setTimeout(resolve, 10))
+router.processInput('text]')
+await new Promise((resolve) => setTimeout(resolve, 200))
+assert.deepEqual(tokenEvents, ['\x1b', '[', 't', 'e', 'x', 't', ']'], 'Text after a bare [ must stay typed')
+
+// 12.6 A reply split immediately after ESC ] / ESC P must still be consumed.
+tokenEvents = []
+router.processInput('\x1b]')
+await new Promise((resolve) => setTimeout(resolve, 40))
+router.processInput('11;rgb:0000/0000/0000\x07')
+assert.deepEqual(tokenEvents, [], 'An OSC reply split after the introducer must not leak')
+
+tokenEvents = []
+router.processInput('\x1bP')
+await new Promise((resolve) => setTimeout(resolve, 40))
+router.processInput('1$r0m\x1b\\')
+assert.deepEqual(tokenEvents, [], 'A DCS reply split after the introducer must not leak')
+
+// 12.7 A DCS reply split inside its ST terminator must not leak either.
+tokenEvents = []
+router.processInput('\x1bP1$r0m\x1b')
+await new Promise((resolve) => setTimeout(resolve, 40))
+router.processInput('\\')
+assert.deepEqual(tokenEvents, [], 'A DCS reply split before the ST final byte must not leak')
+
 router.dispose()
 
 console.log('✓ input router unit tests passed')
