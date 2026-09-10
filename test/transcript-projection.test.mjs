@@ -184,6 +184,35 @@ const cjkEvents = [
   { seq: 2, type: 'assistant/message', time: 1100, data: { message: { content: '### 中文标题测试\n\n| 表头1 | 表头2 | 表头3 |\n| :--- | :--- | :--- |\n| 数据一 | 数据二 | 数据三 |\n' } } }
 ]
 
+// 5.1. Status follows Claude Code's compact indented output and remains width-safe with CJK values.
+const statusEvent = [{
+  seq: 1,
+  type: 'local/log',
+  data: {
+    level: 'ok',
+    structured: 'status',
+    text: 'STATUS · session diagnostics\nRuntime\nTUI|dsh-omc-tui v0.2.14\nModel|local-cpa/gemini-3.8-flash · effort HIGH\nSession\nDirectory|/Users/example/包含中文的很长工作目录/and-a-long-project-name\nUsage\nContext|187k / 262k tokens · 71%'
+  }
+}]
+for (const cols of [30, 50, 80]) {
+  const statusDoc = projectTranscript(statusEvent, cols)
+  const statusText = visibleOf(statusDoc.rows.join('\n'))
+  assert.match(statusText, /◆ \/status/)
+  assert.match(statusText, /TUI\s{2,}dsh-omc-tui/)
+  assert.doesNotMatch(statusText, /Runtime/)
+  assert.match(statusText, /Directory/)
+  for (const row of statusDoc.rows) {
+    assert.ok(widthOf(visibleOf(row)) <= cols, `Status row exceeds ${cols} columns: "${visibleOf(row)}"`)
+  }
+}
+
+const legacyStatusDoc = projectTranscript([{
+  seq: 1,
+  type: 'local/log',
+  data: { level: 'ok', structured: 'status', text: 'STATUS · session diagnostics\n\nRuntime\n  TUI: dsh-omc-tui v0.2.12' }
+}], 80)
+assert.match(visibleOf(legacyStatusDoc.rows.join('\n')), /◆ \/status\n\s+TUI\s{2,}dsh-omc-tui v0\.2\.12/)
+
 for (const cols of [30, 50, 80, 120]) {
   const doc = projectTranscript(cjkEvents, cols)
   for (const row of doc.rows) {
@@ -386,5 +415,39 @@ assert.equal(twoTurnHeaders.length, 2, 'Two user messages must produce exactly 2
   const mergedHeadersFirst = mergedDocFirst.blocks.filter(b => b.kind === 'turn-header')
   assert.equal(mergedHeadersFirst.length, 1, 'Merged document has exactly 1 initial turn-header')
 }
+
+// Compaction checkpoints leave a durable, width-safe marker in the transcript
+// instead of a raw plugin user message.
+const compactionDoc = projectTranscript([{
+  seq: 7,
+  type: 'compaction/summary',
+  time: 5000,
+  data: {
+    compactionId: 'cmp-1',
+    shadowedSeqs: [1, 2, 3, 4],
+    shadowedTokenCount: 63200,
+    summary: [{ type: 'text', text: 'Checkpoint: earlier work condensed into a short account.' }]
+  }
+}], 60)
+const compactionText = visibleOf(compactionDoc.rows.join('\n'))
+assert.match(compactionText, /context compacted · 4 history items · ~63k tokens/)
+assert.match(compactionText, /Checkpoint: earlier work condensed into a short/)
+assert.ok(compactionDoc.blocks.some((block) => block.kind === 'compaction'))
+for (const row of compactionDoc.rows) {
+  assert.ok(widthOf(visibleOf(row)) <= 60, `Compaction row exceeds 60 columns: "${visibleOf(row)}"`)
+}
+
+// The compaction checkpoint itself is a plugin user/message and must not render
+// as something the human typed.
+const checkpointDoc = projectTranscript([{
+  seq: 8,
+  type: 'user/message',
+  time: 5100,
+  data: {
+    source: { kind: 'plugin', plugin: 'compact' },
+    content: [{ type: 'text', text: 'This is an automatically generated checkpoint.' }]
+  }
+}], 80)
+assert.doesNotMatch(visibleOf(checkpointDoc.rows.join('\n')), /automatically generated checkpoint/)
 
 console.log('✓ transcript projection unit tests passed')

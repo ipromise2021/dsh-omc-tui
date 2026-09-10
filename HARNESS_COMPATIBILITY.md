@@ -8,7 +8,7 @@
 2. 业务写入走官方 API：不要由 TUI 直接篡改 session log、权限状态、模型状态或 Harness 配置文件。
 3. durable event 是可重放状态的依据：恢复会话时，应由事件重建 UI，而不是使用未持久化的内存缓存猜测状态。
 4. 可选服务须 capability-detect：服务未挂载时显示明确提示或关闭该入口，不能静默伪造结果。
-5. Harness 仍为 developer preview：依赖基线为 [`@deepseek-ai/dsh@0.1.2-rc.1`](https://www.npmjs.com/package/@deepseek-ai/dsh)；截至 2026-09-03，该版本位于 npm `next`，默认 `latest` 仍是 `0.1.1-rc.2`。已复核 Session、权限、附件、Agent、Jobs、命令和 preset 源码契约。每次升级后，仍须复核 patch、注入服务、命令签名、事件 payload，并运行真实 Profile 的图片与 PTY 回归。
+5. Harness 仍为 developer preview：依赖基线为 [`@deepseek-ai/dsh@0.1.5-rc.1`](https://www.npmjs.com/package/@deepseek-ai/dsh)。该版本的 V3 会话格式由 Harness 负责迁移，TUI 只经 `snapshotEvents()` 和 `sessionQuery` 投影；持久化生命周期由 `ctx.agents.create/resume()` 返回的 handle 管理。每次升级后，仍须复核 patch、注入服务、命令签名、事件 payload，并运行真实 Profile 的图片与 PTY 回归。
 
 ## 已适配的 Harness 能力
 
@@ -20,6 +20,7 @@
 | Agent preset 与 plan/build | `agentPresets`、`planMode`、`subagentModelSelection` | preset mount/recompose 与 durable preset/plan 事件；Host 挂载官方 subagent model-selection settings 服务 |
 | 权限审批 | `permissionPresets`、`approval/request` | rc.1 `current(session)` / `set(session, name)`、审批回调、durable permission 事件 |
 | Slash 命令 | `ctx.commands` | 官方 command registry 的 find/list/execute |
+| 上下文压缩 | `ctx.compaction`（`compaction-basic`）与官方 `/compact` | 阈值压力压缩在 `agent/pre-step` 内自动执行并继续当前回合（`thresholdRatio` 默认 0.8，保留原文尾部）；TUI 只投影 `compaction/start`、`compaction/summary`、`compaction/end`，不自行改写会话历史 |
 | Skills | `ctx.skills` | 官方 skill registry；技能选择仅回填输入，由 Harness tool 注入 |
 | 图片附件 | `ctx.attachments` | 粘贴时 `validateImage`；普通消息提交时批量 `saveImages`，命令图片由 registry admission 负责；durable ref 不携带 base64/本地路径 |
 | 问卷 | `ctx.userQuestions` + `dsh-tool-ask-user` | TUI 注册 provider，支持选项、`custom` 自由文本和多行回答 |
@@ -43,6 +44,7 @@ Reasoning effort 必须来自具体模型的 `reasoning.efforts` 元数据。官
 ## 目前的边界与待验证项
 
 - `/settings` 只保存 TUI 偏好；模型、权限和 preset 均继续由各自的官方服务持久化，不应移入 TUI namespace。
+- 压缩阈值由 profile 的 `compaction-basic.thresholdRatio` 决定（本插件 patch 显式设为 0.8），TUI 的 `contextCriticalAt` 只控制状态栏告警配色；`autoCompact` 仅是未挂载官方压缩引擎时的回退开关。
 - `/jobs` 的流式输出读取会消费官方单一游标，因此只在用户显式选中任务后读取。
 - 插件市场/安装目前**未适配**：TUI 没有 `ctx.plugins` 或 catalog 服务，也不会直接修改 profile manifest。计划中的 `/plugins` 应只做市场发现与确认，并把安装/移除委托给官方 `dsh plugin --profile tui add/remove`；profile 重组后需重启 TUI。
 - `/fork`、`/rewind`、会话内全文检索等功能，只有在 Harness 提供稳定 session/checkpoint 合约后才能实现；不能通过截断 durable log 模拟。

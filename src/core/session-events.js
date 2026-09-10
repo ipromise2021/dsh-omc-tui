@@ -12,6 +12,16 @@ export function sessionEvents(session) {
 }
 
 /**
+ * Read the paired tool-call id from a tool/call or tool/result event across
+ * Harness releases. DSH v0.1.5 moved the result correlation from the
+ * event-data root into the result message source (`message.source.callId`);
+ * older logs keep it at the root as `callId` or `id`.
+ */
+export function toolCallId(data) {
+  return data?.callId ?? data?.id ?? data?.message?.source?.callId
+}
+
+/**
  * Read the current permission preset across the v0.1.1 and v0.1.2 APIs.
  * v0.1.1 accepts an event array; v0.1.2 accepts the Session itself.
  */

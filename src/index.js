@@ -41,6 +41,7 @@ import {
   approvalDiffLines,
   renderMarkdownRows,
   renderStatusRows,
+  renderStatusPanelRows,
   formatEvents,
   projectTranscript,
   mergeTranscriptDocuments,
@@ -63,6 +64,7 @@ function isSubagentSession(record) {
 const IMAGE_ATTACHMENT_NOTICE = /\[Image attachment ([^\s\]]+) \[ref: ([^,\]]+), (\d+) bytes, (\d+)×(\d+)\] is available\./g
 
 const VISION_ROUTE_OPTIONS = [
+  'deepseek-official/deepseek-flash',
   'deepseek-official/deepseek-v4-flash-vision-exp',
   'openai/gpt-5.6-luna',
   'opencode-go/qwen3.7-plus',
@@ -266,6 +268,7 @@ import {
   userMessage,
   foldUsage,
   permissionFromEvents,
+  toolCallId,
   getGitStatus,
   invalidateGitCache
 } from './core/index.js'
@@ -274,6 +277,8 @@ import {
   LOCAL_COMMANDS,
   handleLocalCommand,
   handleCompact,
+  COMPACT_PHRASES,
+  COMPACT_TIPS,
   handleRecap,
   buildSessionRecapSummary,
   handleStatus
@@ -459,6 +464,8 @@ export class TuiApp {
     this.dangerGuardDispose = undefined
     this.backgroundInitTimer = undefined
     this.autoCompactTimer = undefined
+    this.harnessCompaction = undefined
+    this.compactRotationTimer = undefined
     this.autoRecapTimer = undefined
     this.lastRecappedSeq = undefined
     this.animationTimer = undefined
@@ -968,6 +975,9 @@ export class TuiApp {
         this.backgroundInitTimer = undefined
         clearTimeout(this.autoCompactTimer)
         this.autoCompactTimer = undefined
+        clearInterval(this.compactRotationTimer)
+        this.compactRotationTimer = undefined
+        this.harnessCompaction = undefined
         clearTimeout(this.autoRecapTimer)
         this.autoRecapTimer = undefined
         clearTimeout(this.imageFlushTimer)
@@ -1091,6 +1101,10 @@ export class TuiApp {
 
   shouldAutoCompact() {
     if (this.preferences?.autoCompact === false || this.compacting || this.autoCompactTimer || !this.agent) return false
+    // The Harness compaction engine owns threshold pressure compaction between
+    // steps. Only fall back to a turn-end manual compaction when that service
+    // is not mounted in this profile.
+    if (typeof this.ctx?.get?.('compaction')?.compactNow === 'function') return false
     const contextWindow = this.usage?.contextWindow
     const threshold = this.preferences?.contextCriticalAt ?? 80
     return Number.isFinite(contextWindow) && contextWindow > 0 && Number.isFinite(this.contextTokens) && (this.contextTokens / contextWindow) * 100 >= threshold
@@ -1105,6 +1119,60 @@ export class TuiApp {
       this.log('ok', `Context reached ${percent}%; compacting automatically.`, 'auto compact')
       void handleCompact(this, '/compact')
     }, 0)
+  }
+
+  // ── Harness compaction lifecycle projection ────────────────────────────
+  // The official compaction engine emits compaction/start before summarizing
+  // and compaction/end after the surface commit; pressure compaction runs
+  // inside a live turn. Projecting these events shows the spinner while the
+  // model-visible surface is replaced and the turn keeps going afterwards.
+
+  beginHarnessCompaction(event) {
+    if (this.compacting || this.compactState || this.harnessCompaction) return
+    this.harnessCompaction = { compactionId: event?.data?.compactionId, startedAt: Date.now() }
+    this.compacting = true
+    this.message = 'compacting conversation…'
+    let phraseIndex = 0
+    let tipIndex = Math.floor(Math.random() * COMPACT_TIPS.length)
+    this.compactState = {
+      startedAt: Date.now(),
+      phrase: COMPACT_PHRASES[phraseIndex],
+      tip: COMPACT_TIPS[tipIndex]
+    }
+    let step = 0
+    this.compactRotationTimer = setInterval(() => {
+      if (!this.compactState || !this.harnessCompaction) return
+      step += 1
+      if (step % 18 === 0) {
+        phraseIndex = (phraseIndex + 1) % COMPACT_PHRASES.length
+        this.compactState.phrase = COMPACT_PHRASES[phraseIndex]
+      }
+      if (step % 45 === 0) {
+        tipIndex = (tipIndex + 1) % COMPACT_TIPS.length
+        this.compactState.tip = COMPACT_TIPS[tipIndex]
+      }
+      this.scheduleRender()
+    }, 100)
+    this.compactRotationTimer.unref?.()
+    this.scheduleRender()
+  }
+
+  endHarnessCompaction(event) {
+    if (!this.harnessCompaction) return
+    const compactionId = event?.data?.compactionId
+    if (compactionId !== undefined && this.harnessCompaction.compactionId !== undefined && compactionId !== this.harnessCompaction.compactionId) return
+    clearInterval(this.compactRotationTimer)
+    this.compactRotationTimer = undefined
+    this.harnessCompaction = undefined
+    this.compacting = false
+    this.compactState = undefined
+    this.message = ''
+    const failure = event?.data?.error
+    if (failure) {
+      const detail = typeof failure === 'string' ? failure : (failure.code ?? failure.message ?? 'error')
+      this.log('error', 'context compaction failed · ' + detail, 'auto compact')
+    }
+    this.scheduleRender()
   }
 
   scheduleAutoRecapTimer() {
@@ -1288,7 +1356,7 @@ export class TuiApp {
     const contentWidth = Math.max(20, columns - 2)
     const cwd = this.agent?.session?.header?.cwd ?? process.cwd()
     const workspace = truncateWidth(safe(cwd), Math.max(24, contentWidth - 24))
-    const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+    const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek-official', model: 'deepseek-flash' }
     const model = truncateWidth(`${selection.provider}/${selection.model}`, Math.max(20, contentWidth - 28))
     const welcome = welcomeCardRows(columns, workspace, model, (this.currentEffort?.() ?? 'DEFAULT').toUpperCase())
 
@@ -1630,12 +1698,12 @@ export class TuiApp {
         this.streamLoopStopped = false
         this.flushThinking(event.seq)
         this.flushStreamBuffer(true)
-        this.streaming.tool = { name: event.data.name, args: event.data.args, startTime: Date.now() }
+        this.streaming.tool = { name: event.data.name, args: event.data.args ?? event.data.arguments, startTime: Date.now() }
         this.message = `tool · ${event.data.name}`
         break
       case 'tool/result':
         {
-          const resultCallId = event.data?.callId ?? event.data?.id
+          const resultCallId = toolCallId(event.data)
           let toolName = event.data?.name
           if (!toolName && resultCallId !== undefined) {
             const toolCall = [...sessionEvents(session)].reverse().find((entry) => {
@@ -1660,6 +1728,12 @@ export class TuiApp {
       case 'agent-preset/selected':
         this.presetName = event.data.agentPreset
         break
+      case 'compaction/start':
+        this.beginHarnessCompaction(event)
+        break
+      case 'compaction/end':
+        this.endHarnessCompaction(event)
+        break
       case 'turn/end': {
         this.flushThinking(event.seq)
         this.streaming.text = ''
@@ -1677,7 +1751,7 @@ export class TuiApp {
       default:
         break
     }
-    if (['user/message', 'assistant/message', 'tool/call', 'tool/result', 'approval/asked', 'approval/decided', 'hook/invoked', 'hook/result', 'turn/end', 'compaction/summary', 'compaction/prune'].includes(event.type)) {
+    if (['user/message', 'assistant/message', 'tool/call', 'tool/result', 'approval/asked', 'approval/decided', 'hook/invoked', 'hook/result', 'turn/end', 'compaction/start', 'compaction/summary', 'compaction/end', 'compaction/prune'].includes(event.type)) {
       this.commitUnprintedEvents?.()
       this.refreshContextTokens?.()
       if (this.jobPanel) void this.refreshJobsPanel()
@@ -1686,6 +1760,9 @@ export class TuiApp {
   }
 
   onTurnEnd(reason) {
+    // A compaction bracket always closes before its owning turn ends; clearing
+    // here is a backstop against a missed compaction/end leaving the spinner up.
+    if (this.harnessCompaction) this.endHarnessCompaction(undefined)
     this.finishTurn()
     this.refreshContextTokens?.()
     this.scheduleAutoCompact?.()
@@ -2342,11 +2419,7 @@ export class TuiApp {
         lines.push('')
         lines.push(`${ANSI.blue}${ANSI.bold}❯ ${entry.command}${ANSI.reset}`)
         if (entry.structured === 'status' && entry.text) {
-          for (const line of String(entry.text).split('\n')) {
-            if (!line) lines.push('')
-            else if (!/^\s/.test(line)) lines.push(`  ${ANSI.teal}${ANSI.bold}${safe(line)}${ANSI.reset}`)
-            else lines.push(`    ${ANSI.ink}${safe(line.trimStart())}${ANSI.reset}`)
-          }
+          lines.push(...renderStatusPanelRows(entry.text, Math.max(20, (process.stdout.columns || 80) - 2), ANSI).rows)
         } else if (entry.text) {
           const isError = entry.kind === 'error'
           const prefix = isError ? `${ANSI.coral}✗${ANSI.reset}` : `${ANSI.blueSoft}·${ANSI.reset}`
@@ -5534,10 +5607,10 @@ export class TuiApp {
       toolDetails: (() => {
         const describeCall = (call) => {
           const callIndex = events.lastIndexOf(call)
-          const callId = call.data?.callId ?? call.data?.id
+          const callId = toolCallId(call.data)
           const result = events.slice(callIndex + 1).find((event) => {
             if (event.type !== 'tool/result') return false
-            const resultId = event.data?.callId ?? event.data?.id
+            const resultId = toolCallId(event.data)
             return callId === undefined || resultId === undefined || resultId === callId
           })
           const isError = result && result.data?.error
@@ -6644,7 +6717,10 @@ export class TuiApp {
 
   handlePaste(content) {
     if (!content) return
-    const safeContent = content.replace(/\r?\n/g, '\n')
+    // Terminals may encode pasted line breaks as CR, LF, or CRLF. Normalize
+    // every form before counting lines so multi-line content is folded
+    // consistently instead of being treated as one long line.
+    const safeContent = content.replace(/\r\n?|\n/g, '\n')
     this.insertPastedText(safeContent)
   }
 
@@ -7678,7 +7754,7 @@ export class TuiApp {
   statusRows(columns, options = {}) {
     if (!this.agent) {
       const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? {}
-      const liveModel = selection.model ?? 'deepseek-v4-flash'
+      const liveModel = selection.model ?? 'deepseek-flash'
       const cwdName = process.cwd().split('/').filter(Boolean).pop() || process.cwd()
       return [
         `  ${ANSI.blueSoft}BUILD${ANSI.reset} | ${ANSI.dim}[${liveModel}]${ANSI.reset} | ${ANSI.dim}${cwdName}${ANSI.reset} | ${ANSI.dim}initializing session…${ANSI.reset}`

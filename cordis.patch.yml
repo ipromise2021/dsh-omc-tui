@@ -3,7 +3,7 @@
 
 - id: system-prompt
   config:
-    persona: >-
+    personaPrefix: >-
       You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
 
 - id: tools
@@ -23,18 +23,21 @@
   disabled: true
 - id: tool-fs-search
   disabled: true
-- id: tool-str-replace-editor
-  disabled: true
 - id: skill-filesystem
   disabled: true
 - id: tool-skill
   disabled: true
 - id: tool-goal
   disabled: true
+# The Harness compaction engine owns threshold pressure compaction. Between
+# steps it condenses the oldest surface span above `thresholdRatio` and keeps a
+# verbatim recent tail, so a running turn continues with the thread intact.
+# The TUI only projects its lifecycle events; it must not compact by itself.
 - id: compaction-basic
-  disabled: true
-- id: command-compact
-  disabled: true
+  config:
+    thresholdRatio: 0.8
+# `command-compact` stays enabled so the TUI's /compact wrapper reaches the
+# official implementation through ctx.commands.
 - id: tool-result-pruner
   disabled: true
 - id: tool-subagent-control

@@ -4,7 +4,7 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-ipromise2021%2Fdsh--omc--tui-181717?style=flat-square&logo=github)](https://github.com/ipromise2021/dsh-omc-tui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![DeepSeek Harness](https://img.shields.io/badge/Harness-0.1.2--rc.1-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/Harness-0.1.5--rc.1-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-green?style=flat-square)](package.json)
 
 **DeepSeek Harness 的终端原生 TUI**
@@ -24,7 +24,7 @@
 个人比较喜欢 Claude Code 终端的交互方式，项目参考了它的交互习惯，在终端中运行 DSH 的同时，完整保留了原生滚轮回看、文本划选与自由复制等功能特性。
 
 > 📌 **项目说明与动态**：
-> - **版本基准与适配**：插件依赖基线已提升至 DSH `v0.1.2-rc.1`。截至 2026-09-03，该版本已发布到 npm 的 `next` dist-tag；默认 `latest` 仍是 `0.1.1-rc.2`，因此安装命令必须显式指定 rc.1。
+> - **版本基准与适配**：插件依赖基线已提升至 DSH `v0.1.5-rc.1`。该版本将会话日志升级至 V3，并使用 `SessionHandle` 管理持久化生命周期；安装命令必须显式指定该预发布版本。
 > - **验证状态**：已完成 rc.1 源码契约核对、真实隔离 Profile 启动、`/status`、权限切换、单元测试和模块导入验证。真实 Provider 对话、图片/压缩链路与 Windows PTY 仍列为发布前扩展验证项。
 > - **持续维护**：功能会按需扩展，Bug 也会持续修复。欢迎使用、点 Star 和反馈问题。
 
@@ -36,11 +36,17 @@
 
 完整上游差异、问题矩阵、代码映射、验证证据和后续风险见 [DSH v0.1.2-rc.1 适配与兼容性报告](DSH_V0.1.2_RC1_ADAPTATION.md)。
 
+## DSH `v0.1.5-rc.1` 适配记录
+
+`v0.1.5-rc.1` 将会话持久化升级为 V3/`SessionHandle`，移除插件环境中的 `ctx.agent`，并将系统 persona 配置拆分为 `personaPrefix` 与 `personaSuffix`。TUI 继续只通过 `ctx.agents.create/resume`、`dispose()`、`snapshotEvents()` 与 `sessionQuery` 使用官方生命周期；Profile patch 已迁移至 `personaPrefix`。
+
+DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支持文本、图片以及会话内系统提示词更新。TUI 的初始化兜底模型和 `/vision` 常用模型候选均已纳入该模型。
+
 | 范围 | 结果 | 验收 |
 | :--- | :--- | :--- |
 | Session 与权限 | 新旧事件读取集中到兼容薄层，权限读取使用 rc.1 Session 签名 | 双代契约单测、真实 `/status` 与权限轮换通过 |
 | Profile 与 preset | 补挂 subagent model-selection Host 服务，删除过期 patch 条目 | rc.1 `--dump-config` 无警告，standard preset 启动通过 |
-| 依赖 | 19 个 DSH peer dependency 对齐 `^0.1.2-rc.1` | rc.1 隔离安装和插件链接成功 |
+| 依赖 | 19 个 DSH peer dependency 对齐 `^0.1.5-rc.1` | 预发布依赖可被正确解析 |
 | 既有能力 | Agent、Jobs、附件、命令与模型能力调用签名保持兼容 | 源码级比对通过；真实 Provider/图片 E2E 待补 |
 
 适配期间不会为了同步上游而复制其 UI 功能，也不会提前移除本地安全保护；只处理 Harness API 与 durable event 契约产生的实际兼容问题。
@@ -67,7 +73,7 @@ deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片�
 - **主会话无缝协同**：视觉识别结果以标准工具结果形式返回给主 Agent，主模型保持原有的模型身份、推理链与上下文记忆继续处理任务，既享受了主模型的纯粹代码推理能力，又获得了强大的多模态感知。
 
 > **💡 视觉子代理模型与 API Key 配置提示**：
-> - **使用 DeepSeek API 订阅**：推荐直接配置 `deepseek-v4-flash-vision-exp` 模型（执行 `/vision deepseek-official/deepseek-v4-flash-vision-exp`）。此时子代理与主模型**共用同一套 DeepSeek API Key，无需额外更换或配置新的 Key**。
+> - **使用 DeepSeek API 订阅**：优先配置 DeepSeek-V41-Flash（执行 `/vision deepseek-official/deepseek-flash`）；也可继续使用 `deepseek-v4-flash-vision-exp`。子代理与主模型**共用同一套 DeepSeek API Key，无需额外更换或配置新的 Key**。
 > - **使用其他供应商视觉模型**：若子代理希望调用其他提供商（如 OpenAI `gpt-5.6-luna`、Qwen 等），只需在 DSH 中配置好对应供应商的 API Key，再执行 `/vision <provider>/<model>`（或直接输入 `/vision` 查看常用路由推荐）绑定子代理视觉模型即可。
 
 ### 行内审批与问题面板
@@ -91,6 +97,7 @@ deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片�
 - `@文件`：浏览并引用工作区文件
 - `/btw`：使用独立临时会话回答旁路问题
 - `/compact`：调用 Harness 压缩当前会话上下文
+- 自动压缩：上下文达到阈值（Harness `compaction-basic.thresholdRatio`，默认 80%）时，在回合内自动压缩并继续当前任务
 - `!命令`：执行本地 Shell 命令
 - `/tasks`：查看 Agent Plan，并切换查看后台任务
 - `/resume`：恢复历史会话
@@ -99,7 +106,7 @@ deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片�
 ## 环境要求
 
 - Node.js 20 或更高版本
-- DeepSeek Harness [`@deepseek-ai/dsh@0.1.2-rc.1`](https://www.npmjs.com/package/@deepseek-ai/dsh)（截至 2026-09-03 为 npm `next`；需显式指定版本）
+- DeepSeek Harness [`@deepseek-ai/dsh@0.1.5-rc.1`](https://www.npmjs.com/package/@deepseek-ai/dsh)（预发布版本，需显式指定）
 - 支持 ANSI 256 色的终端
 - 图片显示建议使用 iTerm2 或支持 Kitty Graphics 的终端
 
@@ -110,19 +117,19 @@ deepseek-v4-pro/flash等纯文本模型，不具备直接接收多模态图片�
 从 npm 安装到 `tui` profile（推荐，直接分发构建产物，无需 Git 依赖构建授权）：
 
 ```sh
-npx --yes @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile tui add dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.1.5-rc.1 plugin --profile tui add dsh-omc-tui
 ```
 
 也可以从 GitHub 安装（会拉取源码，首次需按 pnpm 提示授权 `prepare` 构建脚本）：
 
 ```sh
-npx --yes @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile tui add github:ipromise2021/dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.1.5-rc.1 plugin --profile tui add github:ipromise2021/dsh-omc-tui
 ```
 
 启动：
 
 ```sh
-npx --yes @deepseek-ai/dsh@0.1.2-rc.1 --profile tui
+npx --yes @deepseek-ai/dsh@0.1.5-rc.1 --profile tui
 ```
 
 如果已经全局安装 DSH，也可以直接运行：
@@ -155,8 +162,8 @@ omc
 
 ```sh
 export DSH_HOME=/private/tmp/dsh-tui-dev
-npx --yes @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile tui add /absolute/path/to/dsh-omc-tui
-npx --yes @deepseek-ai/dsh@0.1.2-rc.1 --profile tui
+npx --yes @deepseek-ai/dsh@0.1.5-rc.1 plugin --profile tui add /absolute/path/to/dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.1.5-rc.1 --profile tui
 ```
 
 ## 常用快捷键

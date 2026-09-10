@@ -3,7 +3,7 @@ import { ANSI } from '../renderer/themes.js'
 import { foldUsage } from '../core/events.js'
 import { sessionEvents } from '../core/session-events.js'
 
-const COMPACT_PHRASES = [
+export const COMPACT_PHRASES = [
   'Distilling key context and decisions',
   'Summarizing conversation thread memories',
   'Pruning obsolete message turns',
@@ -11,7 +11,7 @@ const COMPACT_PHRASES = [
   'Synthesizing final compacted summary'
 ]
 
-const COMPACT_TIPS = [
+export const COMPACT_TIPS = [
   'Tip: Say "fan out subagents" and Claude sends a team. Each one digs deep so nothing gets missed.',
   'Tip: Use @filename to inject specific file contents directly into conversation context.',
   'Tip: Press Shift+Tab to cycle permission presets (auto-read, workspace-write, unrestricted).',

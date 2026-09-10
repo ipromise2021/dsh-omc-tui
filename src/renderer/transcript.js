@@ -1,10 +1,47 @@
-import { widthOf, truncateWidth, safe, shorten, wrap, wrapWithSpans, formatTime, formatDurationMs, textOf, reasoningOf, visibleOf } from './ansi.js'
+import { widthOf, truncateWidth, safe, shorten, wrap, wrapWithSpans, formatTime, formatDurationMs, formatTokens, textOf, reasoningOf, visibleOf } from './ansi.js'
 import { formatImageBytes } from '../image-protocol.js'
 import { ANSI as defaultAnsi } from './themes.js'
 import { renderMarkdownRows, renderMarkdownDocument } from './markdown.js'
 import { renderDiffLines } from './diff.js'
 import { compactExpandedFileReferences } from '../core/events.js'
 import { groupActivitySpans, parseToolArgs, summarizeToolCall, toolResultText } from './activity.js'
+
+export function renderStatusPanelRows(text, contentWidth, ANSI = defaultAnsi) {
+  const sourceLines = safe(text).split(/\r?\n/).map((line) => {
+    const oldField = line.match(/^\s+([^:]+):\s*(.*)$/)
+    return oldField ? `${oldField[1].trim()}|${oldField[2]}` : line
+  })
+  const title = sourceLines.shift() || 'STATUS'
+  const labelWidth = Math.min(14, Math.max(8, ...sourceLines
+    .filter((line) => line.includes('|'))
+    .map((line) => widthOf(line.slice(0, line.indexOf('|')).trim()))))
+  const valueWidth = Math.max(8, contentWidth - labelWidth - 7)
+  const rows = []
+  const logicalLines = []
+  logicalLines.push(title)
+  rows.push(`  ${ANSI.teal}◆${ANSI.reset} ${ANSI.bold}/status${ANSI.reset}`)
+  for (const sourceLine of sourceLines) {
+    if (!sourceLine) continue
+    if (!sourceLine.includes('|')) {
+      logicalLines.push(sourceLine)
+      continue
+    }
+
+    const separator = sourceLine.indexOf('|')
+    const label = sourceLine.slice(0, separator).trim()
+    const value = sourceLine.slice(separator + 1).trim()
+    const wrapped = wrap(value, valueWidth)
+    for (const [index, part] of wrapped.entries()) {
+      const labelText = index === 0 ? label : ''
+      const labelPad = ' '.repeat(Math.max(0, labelWidth - widthOf(labelText)))
+      rows.push(`     ${ANSI.detail}${labelText}${labelPad}${ANSI.reset}  ${ANSI.ink}${part}${ANSI.reset}`)
+      logicalLines.push(index === 0 ? `${label}: ${part}` : part)
+    }
+  }
+
+  rows.push('')
+  return { rows, logicalLines }
+}
 
 /**
  * Pure projection from durable events + state to TranscriptDocument (blocks, rows, layoutMap).
@@ -535,6 +572,37 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
         // Hooks are rendered in activity tree or omitted in main stream
         break
 
+      case 'compaction/summary': {
+        // The official compaction engine replaces a span of the model-visible
+        // surface with one checkpoint. Keep a durable marker in the transcript
+        // so the visible history says why earlier messages left the context.
+        const data = event.data ?? {}
+        const count = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs.length : 0
+        const parts = []
+        if (count > 0) parts.push(`${count} history item${count > 1 ? 's' : ''}`)
+        if (Number.isFinite(data.shadowedTokenCount) && data.shadowedTokenCount > 0) {
+          parts.push(`~${formatTokens(data.shadowedTokenCount)} tokens`)
+        }
+        const detail = parts.length > 0 ? ` · ${parts.join(' · ')}` : ''
+        const rows = [`  ${ANSI.blueSoft}◈${ANSI.reset} ${ANSI.dim}context compacted${detail}${ANSI.reset}`]
+        const logicalLines = [`context compacted${detail}`]
+        const preview = shorten(textOf(data.summary).replace(/\s+/g, ' ').trim(), Math.max(20, contentWidth - 10))
+        if (preview) {
+          rows.push(`    ${ANSI.dim}└ ${preview}${ANSI.reset}`)
+          logicalLines.push(preview)
+        }
+        rows.push('')
+        addBlock({
+          key: `compaction-${event.seq || item.index}`,
+          kind: 'compaction',
+          startSeq: event.seq,
+          endSeq: event.seq,
+          rows,
+          logicalLines
+        })
+        break
+      }
+
       case 'session/title': {
         // Handled in statusline/header
         break
@@ -571,19 +639,9 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
           rows.push(`  ${color}${icon} ${safe(entry.badge)}: ${safe(entry.text)}${ANSI.reset}`)
           logicalLines.push(`${entry.badge}: ${entry.text}`)
         } else if (entry.structured === 'status') {
-          for (const line of String(entry.text).split('\n')) {
-            if (!line) {
-              rows.push('')
-              logicalLines.push('')
-            } else if (!/^\s/.test(line)) {
-              rows.push(`  ${ANSI.teal}${ANSI.bold}${safe(line)}${ANSI.reset}`)
-              logicalLines.push(line)
-            } else {
-              const detail = line.trimStart()
-              rows.push(`    ${ANSI.ink}${safe(detail)}${ANSI.reset}`)
-              logicalLines.push(detail)
-            }
-          }
+          const panel = renderStatusPanelRows(entry.text, contentWidth, ANSI)
+          rows.push(...panel.rows)
+          logicalLines.push(...panel.logicalLines)
         } else {
           for (const line of String(entry.text).split('\n')) {
             rows.push(`  ${color}${safe(line)}${ANSI.reset}`)

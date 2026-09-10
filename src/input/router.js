@@ -3,6 +3,14 @@ import { parseSgrMouse, parseX10Mouse } from './mouse.js'
 const SGR_MOUSE_SEQUENCE = /^(\x1b?\[<\d+;\d+;\d+[Mm])/
 const SGR_MOUSE_PREFIX = /^\x1b?\[<\d*(?:;\d*){0,2}$/
 const MAX_SGR_MOUSE_LENGTH = 64
+// A CSI introducer split from its body (`ESC [`, `ESC [12;3`). It needs a
+// longer grace window than a plain Escape, but must eventually expire: an
+// abandoned prefix otherwise absorbs the next character as a control sequence.
+const INCOMPLETE_CSI_PREFIX = /^\x1b\[[0-9;]*$/
+// Shorter prefixes stay ambiguous with real keys (Escape, Alt+O, Alt+Esc), so
+// they keep a bounded grace window and then flush as their own tokens. 150ms
+// covers the documented VS Code idle split without delaying those keys.
+const BOUNDED_ESCAPE_PREFIX = /^(?:\x1b|\x1bO|\x1b\x1b(?:\x1b?\[[0-9;]*)?)$/
 
 export class InputRouter {
   constructor(options = {}) {
@@ -161,11 +169,6 @@ export class InputRouter {
             i += seq.length
             continue
           }
-          if (/^\x1b\x1b\[[0-9;]*$/.test(tail)) {
-            this.buffer = tail
-            this.setFlushTimer()
-            return
-          }
         }
 
         // CSI / SS3 matches: \x1b[... or \x1bO...
@@ -182,6 +185,26 @@ export class InputRouter {
           continue
         }
 
+        // A split CSI introducer waits briefly for its final byte. SGR mouse
+        // reports keep their separate unbounded path above because they have a
+        // distinct terminator; generic CSI does not, so an abandoned prefix
+        // must be dropped before it can swallow normal typing.
+        if (INCOMPLETE_CSI_PREFIX.test(tail)) {
+          this.buffer = tail
+          this.bufferKind = 'escape-prefix'
+          this.bufferContinuation = ''
+          this.setFlushTimer(150)
+          return
+        }
+
+        // Escape, Alt+O, and Alt+Esc are real keys, so their prefixes keep a
+        // bounded grace window and then flush as tokens.
+        if (BOUNDED_ESCAPE_PREFIX.test(tail)) {
+          this.buffer = tail
+          this.setFlushTimer(150)
+          return
+        }
+
         // 2-byte Alt/Option key combinations: \x1bb, \x1bf, \x1bd, \x1b\x7f, \x1b\x08, etc.
         const altMatch = tail.match(/^(\x1b[\x20-\x7e\x7f\x08])/)
         if (altMatch) {
@@ -189,16 +212,6 @@ export class InputRouter {
           this.app?.handleToken?.(seq)
           i += seq.length
           continue
-        }
-
-        // Incomplete CSI / SS3 sequence prefix at the end of input chunk
-        if (tail === '\x1b' || /^\x1b\[[0-9;]*$/.test(tail) || tail === '\x1bO' || tail === '\x1b\x1b' || /^\x1b\x1b\[[0-9;]*$/.test(tail)) {
-          this.buffer = tail
-          // VS Code may deliver the Escape at the start of an SGR mouse
-          // report separately after an idle period. A slightly longer grace
-          // window avoids treating that byte as a task-cancelling Escape.
-          this.setFlushTimer(tail === '\x1b' ? 150 : 40)
-          return
         }
       }
 
@@ -220,8 +233,12 @@ export class InputRouter {
         this.bufferContinuation = ''
         this.flushTimer = null
         if (kind === 'x10-mouse') return
-        if (buf === '\x1b') {
-          this.app?.handleToken?.('\x1b')
+        if (kind === 'escape-prefix') return
+        // Escape and Alt+O are single keys, so an expired prefix flushes as
+        // one token; everything else (notably a double Escape) keeps the
+        // original character-by-character delivery.
+        if (buf === '\x1b' || buf === '\x1bO') {
+          this.app?.handleToken?.(buf)
         } else {
           for (const char of buf) {
             this.app?.handleToken?.(char)

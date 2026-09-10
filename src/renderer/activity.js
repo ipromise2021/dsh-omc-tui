@@ -1,4 +1,5 @@
 import { safe, shorten, formatDurationMs, textOf } from './ansi.js'
+import { toolCallId } from '../core/session-events.js'
 
 export function isToolEvent(type) {
   return type === 'tool/call' ||
@@ -289,9 +290,9 @@ export function groupActivitySpans(events) {
     currentSpan.state = state
     if (endTime) currentSpan.endTime = endTime
     currentSpan.summary = computeActivitySummary(currentSpan)
-    const completedResultIds = new Set(currentSpan.results.map((result) => result.data?.callId ?? result.data?.id))
+    const completedResultIds = new Set(currentSpan.results.map((result) => toolCallId(result.data)))
     for (const call of currentSpan.calls) {
-      const callId = call.data?.callId ?? call.data?.id
+      const callId = toolCallId(call.data)
       if (callId !== undefined && !completedResultIds.has(callId)) completedCalls.set(callId, currentSpan)
     }
     if (currentSpan.calls.length === 1 && currentSpan.results.length === 0) {
@@ -309,7 +310,7 @@ export function groupActivitySpans(events) {
     const type = event.type
 
     if (type === 'tool/result' && !currentSpan) {
-      const callId = event.data?.callId ?? event.data?.id
+      const callId = toolCallId(event.data)
       const completedSpan = (callId === undefined ? undefined : completedCalls.get(callId))
         ?? unresolvedSingleCallSpans.at(-1)
       if (completedSpan) {
@@ -318,7 +319,7 @@ export function groupActivitySpans(events) {
         completedSpan.endSeq = event.seq
         completedSpan.endTime = Number(event.time) || completedSpan.endTime
         completedSpan.summary = computeActivitySummary(completedSpan)
-        const completedCallId = completedSpan.calls[0]?.data?.callId ?? completedSpan.calls[0]?.data?.id
+        const completedCallId = toolCallId(completedSpan.calls[0]?.data)
         if (callId !== undefined) completedCalls.delete(callId)
         if (completedCallId !== undefined) completedCalls.delete(completedCallId)
         const unresolvedIndex = unresolvedSingleCallSpans.lastIndexOf(completedSpan)
@@ -329,7 +330,7 @@ export function groupActivitySpans(events) {
 
     if (isToolEvent(type)) {
       if (!currentSpan) {
-        const firstCallId = event.data?.callId || event.data?.id
+        const firstCallId = toolCallId(event.data)
         currentSpan = {
           key: `activity-${firstCallId || event.seq}`,
           startSeq: event.seq,

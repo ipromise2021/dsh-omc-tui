@@ -24,7 +24,8 @@ import { ScreenRenderer } from '../src/renderer/screen.js'
 import { loadShellHistoryFile, loadSystemShellHistory } from '../src/input/history.js'
 import { listDir } from '../src/input/autocomplete.js'
 import { createDangerGuard, checkDangerCommand, compileDangerRules, DEFAULT_DANGER_RULES } from '../src/core/danger-guard.js'
-import { currentPermissionPreset, sessionEvents } from '../src/core/session-events.js'
+import { currentPermissionPreset, sessionEvents, toolCallId } from '../src/core/session-events.js'
+import { groupActivitySpans } from '../src/renderer/activity.js'
 
 const noop = () => {}
 
@@ -2139,6 +2140,7 @@ const visionModelsApp = {
 }
 await TuiApp.prototype.showVisionModels.call(visionModelsApp)
 assert.match(visionModelsLog, /\/vision deepseek-official\/deepseek-v4-flash-vision-exp/)
+assert.match(visionModelsLog, /\/vision deepseek-official\/deepseek-flash/)
 assert.match(visionModelsLog, /\/vision openai\/gpt-5\.6-luna/)
 assert.match(visionModelsLog, /\/vision opencode-go\/qwen3\.7-plus/)
 assert.match(visionModelsLog, /\/vision opencode-go\/deepseek-v4-flash-vision-exp/)
@@ -2249,11 +2251,65 @@ const autoCompactApp = {
   autoCompactTimer: undefined,
   agent: {},
   usage: { contextWindow: 100000 },
-  contextTokens: 80000
+  contextTokens: 80000,
+  ctx: { get: () => undefined }
 }
 assert.equal(TuiApp.prototype.shouldAutoCompact.call(autoCompactApp), true)
 autoCompactApp.preferences.autoCompact = false
 assert.equal(TuiApp.prototype.shouldAutoCompact.call(autoCompactApp), false)
+autoCompactApp.preferences.autoCompact = true
+
+// When the Harness compaction engine is mounted it owns threshold pressure
+// compaction, so the TUI's turn-end fallback must stay out of the way.
+autoCompactApp.ctx = { get: (name) => name === 'compaction' ? { compactNow() {} } : undefined }
+assert.equal(TuiApp.prototype.shouldAutoCompact.call(autoCompactApp), false)
+autoCompactApp.ctx = { get: () => ({}) }
+assert.equal(TuiApp.prototype.shouldAutoCompact.call(autoCompactApp), true)
+
+// DSH v0.1.5 moved tool-result correlation into message.source.callId.
+assert.equal(toolCallId({ callId: 'root' }), 'root')
+assert.equal(toolCallId({ id: 'legacy' }), 'legacy')
+assert.equal(toolCallId({ message: { source: { kind: 'tool', callId: 'source' } } }), 'source')
+assert.equal(toolCallId(undefined), undefined)
+
+// A late multi-call result must rejoin its original activity span through the
+// v0.1.5 message-source correlation, not spawn a standalone result block.
+const lateResultSpans = groupActivitySpans([
+  { seq: 1, time: 1, type: 'tool/call', data: { callId: 'c1', name: 'bash', arguments: '{}' } },
+  { seq: 2, time: 2, type: 'tool/call', data: { callId: 'c2', name: 'bash', arguments: '{}' } },
+  { seq: 3, time: 3, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'done' }] } } },
+  { seq: 4, time: 4, type: 'tool/result', data: { message: { source: { kind: 'tool', callId: 'c1' }, content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'ok' }] }] } } }
+])
+const activityItems = lateResultSpans.filter((item) => item.kind === 'activity')
+assert.equal(activityItems.length, 1, 'A late tool result must not create a second activity span')
+assert.equal(activityItems[0].span.results.length, 1)
+assert.equal(activityItems[0].span.results[0].seq, 4)
+
+// Harness compaction lifecycle drives (and clears) the TUI compact animation.
+let compactRenderCount = 0
+const harnessCompactApp = {
+  compacting: false,
+  compactState: undefined,
+  harnessCompaction: undefined,
+  compactRotationTimer: undefined,
+  message: '',
+  scheduleRender() { compactRenderCount += 1 },
+  log: noop,
+  beginHarnessCompaction: TuiApp.prototype.beginHarnessCompaction,
+  endHarnessCompaction: TuiApp.prototype.endHarnessCompaction
+}
+TuiApp.prototype.beginHarnessCompaction.call(harnessCompactApp, { data: { compactionId: 'cmp-1' } })
+assert.equal(harnessCompactApp.compacting, true)
+assert.ok(harnessCompactApp.compactState, 'harness compaction must surface the compact progress state')
+assert.equal(harnessCompactApp.harnessCompaction.compactionId, 'cmp-1')
+TuiApp.prototype.endHarnessCompaction.call(harnessCompactApp, { data: { compactionId: 'cmp-other' } })
+assert.equal(harnessCompactApp.compacting, true, 'an unrelated compaction/end must not clear the active animation')
+TuiApp.prototype.endHarnessCompaction.call(harnessCompactApp, { data: { compactionId: 'cmp-1' } })
+assert.equal(harnessCompactApp.compacting, false)
+assert.equal(harnessCompactApp.compactState, undefined)
+assert.equal(harnessCompactApp.compactRotationTimer, undefined)
+assert.equal(harnessCompactApp.message, '')
+assert.ok(compactRenderCount >= 2)
 
 const percentContext = renderStatusRows({
   columns: 120,
@@ -4619,21 +4675,21 @@ inertDispose()
   const { handleStatus } = await import('../src/commands/status.js')
   handleStatus(testStatusApp)
   assert.match(statusLogOutput, /STATUS · session diagnostics/)
-  assert.match(statusLogOutput, /Runtime\n  TUI:/)
-  assert.match(statusLogOutput, /Session\n  Directory:/)
-  assert.match(statusLogOutput, /Usage\n  Context:/)
-  assert.match(statusLogOutput, /TUI:\s+dsh-omc-tui v0\.2\.13/)
-  assert.ok(statusLogOutput.includes('0 / 100.0k tokens (0%)') || statusLogOutput.includes('0 / 100k tokens (0%)') || statusLogOutput.includes('0 tokens (0%)'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
+  assert.match(statusLogOutput, /Runtime\nTUI\|/)
+  assert.match(statusLogOutput, /Session\nDirectory\|/)
+  assert.match(statusLogOutput, /Usage\nContext\|/)
+  assert.match(statusLogOutput, /TUI\|dsh-omc-tui v0\.2\.14/)
+  assert.ok(statusLogOutput.includes('0 / 100.0k tokens · 0%') || statusLogOutput.includes('0 / 100k tokens · 0%') || statusLogOutput.includes('0 tokens · 0%'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
 
   const structuredStatusRows = TuiApp.prototype.formatLogEntry.call({}, {
     kind: 'ok',
     command: '/status',
     structured: 'status',
-    text: 'STATUS · session diagnostics\n\nRuntime\n  TUI: dsh-omc-tui v0.2.13'
+    text: 'STATUS · session diagnostics\n\nRuntime\n  TUI: dsh-omc-tui v0.2.14'
   })
   const structuredStatusText = visibleOf(structuredStatusRows.join('\n'))
-  assert.match(structuredStatusText, /STATUS · session diagnostics\n\n  Runtime\n    TUI:/)
-  assert.doesNotMatch(structuredStatusText, /·\s*\n/, 'structured status blank lines must remain blank')
+  assert.match(structuredStatusText, /◆ \/status\n\s+TUI\s{2,}dsh-omc-tui v0\.2\.14/)
+  assert.doesNotMatch(structuredStatusText, /\n  Runtime/)
 
   const replayedStatusText = visibleOf(formatEvents([{
     seq: 1,
@@ -4641,12 +4697,12 @@ inertDispose()
     type: 'local/log',
     data: {
       structured: 'status',
-      text: 'STATUS · session diagnostics\n\nRuntime\n  TUI: dsh-omc-tui v0.2.13',
+      text: 'STATUS · session diagnostics\n\nRuntime\n  TUI: dsh-omc-tui v0.2.14',
       level: 'ok'
     }
   }], 100).join('\n'))
-  assert.match(replayedStatusText, /STATUS · session diagnostics\n\n  Runtime\n    TUI:/)
-  assert.doesNotMatch(replayedStatusText, /·\s*\n/, 'replayed status blank lines must remain blank')
+  assert.match(replayedStatusText, /◆ \/status\n\s+TUI\s{2,}dsh-omc-tui v0\.2\.14/)
+  assert.doesNotMatch(replayedStatusText, /\n  Runtime/)
 }
 
 // ── Session Recap Summary & Auto-Recap after 15m idle gap ────────────────
@@ -5036,6 +5092,19 @@ inertDispose()
   dollarTestApp.submit()
   assert.equal(submittedPrompt, dollarScript, 'Pasted text with $, $&, $\', $`, $1, $$ must be preserved 100% identically without tampering')
   assert.equal(dollarTestApp.pastedTexts.size, 0, 'pastedTexts map cleared after successful submit')
+
+  // Some terminals deliver pasted line breaks as carriage returns only.
+  // They must still be recognized as a multi-line paste and folded.
+  dollarTestApp.input = ''
+  dollarTestApp.cursor = 0
+  dollarTestApp.pastedTexts.clear()
+  dollarTestApp.pastedTextCounter = 0
+  const carriageReturnScript = 'first\rsecond\rthird\rfourth'
+  dollarTestApp.handlePaste(carriageReturnScript)
+  assert.equal(dollarTestApp.input, '[Pasted text #1 +4 lines]', 'CR-only pasted text must be folded as multi-line content')
+  submittedPrompt = ''
+  dollarTestApp.submit()
+  assert.equal(submittedPrompt, 'first\nsecond\nthird\nfourth', 'CR-only pasted text must preserve its line breaks on submit')
 }
 
 // ── CR-061: Placeholder atomic editing and corruption detection ──────────────

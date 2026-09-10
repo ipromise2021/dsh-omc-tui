@@ -49,10 +49,9 @@ export function handleLocalCommand(app, commandName, line = '') {
         app.log('error', 'usage: /rename <new title>', '/rename')
       } else {
         if (app.agent?.session) {
+          // The durable session/title event is the one official write path;
+          // DSH v0.1.5 sessionQuery exposes title reads only.
           app.agent.session.append('session/title', { title })
-          if (app.ctx.sessionQuery?.writeTitle) {
-            void app.ctx.sessionQuery.writeTitle(app.agent.session.id, title).catch(() => {})
-          }
         }
         app.log('ok', `session renamed to: ${title}`, '/rename')
       }

@@ -127,6 +127,74 @@ assert.equal(mouseEvents[0].type, 'wheel')
 assert.equal(mouseEvents[0].deltaY, 2)
 assert.deepEqual(tokenEvents, [], 'The delayed Escape must remain part of the mouse report')
 
+// 8.4 A CSI or SGR mouse report split after the ESC [ introducer must survive
+// an arbitrary idle gap. Terminals write the introducer and the report body
+// separately, and consuming the introducer as Alt+[ leaks the body as text.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b[')
+await new Promise((resolve) => setTimeout(resolve, 80))
+router.processInput('<64;20;10M')
+assert.equal(mouseEvents.length, 1, 'SGR wheel split after ESC [ must still parse as mouse input')
+assert.equal(mouseEvents[0].type, 'wheel')
+assert.deepEqual(tokenEvents, [], 'The split SGR body must never leak into the composer')
+
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b[1;3')
+await new Promise((resolve) => setTimeout(resolve, 80))
+router.processInput('D')
+assert.deepEqual(tokenEvents, ['\x1b[1;3D'], 'A split modified arrow key must be delivered intact')
+
+mouseEvents = []
+tokenEvents = []
+navEvents = []
+router.processInput('\x1b[1;6')
+await new Promise((resolve) => setTimeout(resolve, 80))
+router.processInput('A')
+assert.deepEqual(navEvents, [-1], 'A split user-message navigation key must dispatch once')
+
+mouseEvents = []
+tokenEvents = []
+pageEvents = []
+router.processInput('\x1b[5')
+await new Promise((resolve) => setTimeout(resolve, 80))
+router.processInput('~')
+assert.deepEqual(pageEvents, ['up'], 'A split PageUp sequence must dispatch once')
+
+// 8.5 A lone Escape must still flush after the grace window: the incomplete
+// prefix wait must never swallow the Escape key itself.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+assert.deepEqual(tokenEvents, ['\x1b'], 'A lone Escape must reach the composer after the grace window')
+
+// 8.6 Alt+O stays a real key: its SS3-shaped byte pair must flush after the
+// bounded grace window instead of waiting forever for a continuation.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1bO')
+await new Promise((resolve) => setTimeout(resolve, 220))
+assert.deepEqual(tokenEvents, ['\x1bO'], 'Alt+O must flush as its own token after the grace window')
+
+// 8.7 A rapid double Escape must still deliver two separate Escape keys.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b')
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 220))
+assert.deepEqual(tokenEvents, ['\x1b', '\x1b'], 'A double Escape must not collapse into one token')
+
+// 8.8 An abandoned generic CSI prefix must expire before later typing arrives.
+// SGR reports retain their separate unbounded path because they have a final M/m.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b[1;6')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('a')
+assert.deepEqual(tokenEvents, ['a'], 'An expired CSI prefix must not consume the next typed character')
+
 // 9. Split Bracketed Paste across chunks
 pasteEvents = []
 router.processInput('\x1b[200~function test() {')

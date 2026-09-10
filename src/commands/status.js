@@ -39,24 +39,20 @@ export function handleStatus(app) {
 
   const lines = [
     'STATUS · session diagnostics',
-    '',
     'Runtime',
-    `  TUI: ${packageName} v${packageVersion}`,
-    `  Model: ${modelStr} · effort ${effortStr}`,
-    `  Mode: ${modeStr} · preset ${presetStr}`,
-    '',
+    `TUI|${packageName} v${packageVersion}`,
+    `Model|${modelStr} · effort ${effortStr}`,
+    `Mode|${modeStr} · preset ${presetStr}`,
     'Session',
-    `  Directory: ${cwd}`,
-    `  ID: ${sessionId} · "${sessionTitle}"`,
-    `  Activity: ${turns} turns · ${events.length} events · permission ${perm}`,
-    '',
+    `Directory|${cwd}`,
+    `Session|${sessionId} · ${sessionTitle}`,
+    `Activity|${turns} turns · ${events.length} events · permission ${perm}`,
     'Usage',
-    `  Context: ${formatTokens(activeTokens)} / ${formatTokens(cw)} tokens (${pct}%)`,
-    `  Session total: ${formatTokens(total)} (in ${formatTokens(inp)}, out ${formatTokens(out)}, cache ${formatTokens(cache)})`,
-    `  Extensions: ${skillCount} skills · ${mcpCount} MCPs · ${hookCount} hooks · ${runningJobs} active jobs`,
-    '',
+    `Context|${formatTokens(activeTokens)} / ${formatTokens(cw)} tokens · ${pct}%`,
+    `Session total|${formatTokens(total)} · in ${formatTokens(inp)} · out ${formatTokens(out)} · cache ${formatTokens(cache)}`,
+    `Extensions|${skillCount} skills · ${mcpCount} MCPs · ${hookCount} hooks · ${runningJobs} active jobs`,
     'Preferences',
-    `  Theme: ${app.preferences?.theme ?? 'claude'} · history ${app.preferences?.persistHistory !== false ? 'on' : 'off'}`
+    `Theme|${app.preferences?.theme ?? 'claude'} · history ${app.preferences?.persistHistory !== false ? 'on' : 'off'}`
   ]
   app.log('ok', lines.join('\n'), '/status', { structured: 'status' })
 }
