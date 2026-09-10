@@ -21,6 +21,8 @@ export class InputRouter {
     this.inPaste = false
     this.pasteBuffer = ''
     this.flushTimer = null
+    this.awaitingBareSgrIntroducer = false
+    this.sgrIntroducerTimer = null
   }
 
   /**
@@ -38,6 +40,20 @@ export class InputRouter {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer)
       this.flushTimer = null
+    }
+
+    // Some terminal bridges deliver a mouse report as ESC, then [, then its
+    // SGR body. Only preserve a bare [ when it immediately follows an Escape
+    // that has already taken its normal idle-timeout path; a normal [ remains
+    // ordinary input in every other case.
+    if (this.awaitingBareSgrIntroducer) {
+      this.clearBareSgrIntroducer()
+      if (str === '[') {
+        this.buffer = str
+        this.bufferKind = 'bare-sgr-introducer'
+        this.setFlushTimer(150)
+        return
+      }
     }
 
     // A truncated SGR report has an explicit M/m terminator. If later input
@@ -239,6 +255,7 @@ export class InputRouter {
         // original character-by-character delivery.
         if (buf === '\x1b' || buf === '\x1bO') {
           this.app?.handleToken?.(buf)
+          if (buf === '\x1b') this.rememberBareSgrIntroducer()
         } else {
           for (const char of buf) {
             this.app?.handleToken?.(char)
@@ -253,9 +270,24 @@ export class InputRouter {
       clearTimeout(this.flushTimer)
       this.flushTimer = null
     }
+    this.clearBareSgrIntroducer()
     this.buffer = ''
     this.bufferKind = undefined
     this.bufferContinuation = ''
+  }
+
+  rememberBareSgrIntroducer() {
+    this.awaitingBareSgrIntroducer = true
+    if (this.sgrIntroducerTimer) clearTimeout(this.sgrIntroducerTimer)
+    this.sgrIntroducerTimer = setTimeout(() => this.clearBareSgrIntroducer(), 150)
+  }
+
+  clearBareSgrIntroducer() {
+    if (this.sgrIntroducerTimer) {
+      clearTimeout(this.sgrIntroducerTimer)
+      this.sgrIntroducerTimer = null
+    }
+    this.awaitingBareSgrIntroducer = false
   }
 
   dispatchMouseEvent(event) {

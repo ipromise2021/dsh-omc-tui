@@ -127,6 +127,19 @@ assert.equal(mouseEvents[0].type, 'wheel')
 assert.equal(mouseEvents[0].deltaY, 2)
 assert.deepEqual(tokenEvents, [], 'The delayed Escape must remain part of the mouse report')
 
+// 8.3.1 Some terminal bridges split the delayed bare remainder one byte
+// further: ESC times out, then [ arrives before the rest of the SGR report.
+// The report body must not leak into the composer.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 180))
+router.processInput('[')
+router.processInput('<0;115;42M')
+assert.equal(mouseEvents.length, 1, 'A three-part SGR mouse report must be parsed')
+assert.equal(mouseEvents[0].type, 'mouse')
+assert.deepEqual(tokenEvents, ['\x1b'], 'Only the independently expired Escape may reach the app')
+
 // 8.4 A CSI or SGR mouse report split after the ESC [ introducer must survive
 // an arbitrary idle gap. Terminals write the introducer and the report body
 // separately, and consuming the introducer as Alt+[ leaks the body as text.
