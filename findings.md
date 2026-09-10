@@ -1013,3 +1013,215 @@
 - npm 官方 registry 已接受 `dsh-omc-tui@0.2.13`，回查 `version` 与 `dist-tags.latest` 均为 `0.2.13`。
 - GitHub 正式 Release `v0.2.13` 已创建，状态为非草稿、非预发布。
 - 首次外网预检曾同时对 npm/GitHub 返回 `SSL_ERROR_SYSCALL`；确认无残留 Git/系统代理与本地代理监听后，网络自行恢复，后续推送和发布均一次成功。
+
+## 全量代码审查（2026-09-10）：CR-084 ~ CR-106
+
+审查范围：全部 53 个源文件（17,256 行）、DSH 0.1.5-rc.1 上游契约（`dsh-*/lib/types/*.d.ts`）、真实 v3 会话日志与 npm 包内容。
+方法：四个分区并行深审 + 主审独立复现（danger-guard 直调用例、selection 复现、wrap 基准、会话日志解压、npm pack）。
+基线：基线为提交 `d66626d`；CR-001 ~ CR-083 视为已关闭，本表不含重复项。
+
+| ID | 优先级 | 状态 | 模块 | 摘要 |
+|----|--------|------|------|------|
+| CR-084 | P1 | resolved | 流式投影 | 实时流事件已迁移为 `agent/assistant-stream`，插件仍只监听废弃的 `assistant/chunk`，打字机/思考抽屉/流式工具预览/重复输出熔断全部失效 |
+| CR-085 | P1 | resolved | Provider | `credentials.set/unset` 用对象参数调用位置参数契约：保存密钥必抛 TypeError，删除提供方静默不删密钥 |
+| CR-086 | P1 | resolved | Provider | `llm.discoverModels` 用对象调用位置参数契约且按 `{models}` 取值，官方探测必失败并连带跳过 fetch 回退 |
+| CR-087 | P1 | resolved | Danger Guard | PowerShell 参数前缀缩写（`-enc`/`-en`/`-comm`）与脚本块 `& { … }` 包裹可绕过破坏性删除拦截 |
+| CR-088 | P1 | resolved | Danger Guard | 管道 stdin 传参（`\| xargs rm -rf`、`printf 'rm -rf /' \| bash`）完全未覆盖 |
+| CR-089 | P2 | resolved | Danger Guard | `~/..`（macOS 即 /Users）与 `~user` 家目录逃逸被放行 |
+| CR-090 | P1 | resolved | 转写投影 | 用户消息含图片时 `rows` 与 `rowSpans` 长度不等，鼠标拖选提示词复制为空串 |
+| CR-091 | P1 | open | Browser Lease | workspace-write 档位下 `DANGER_TOOLS` 与普通写操作等价，upload_file/evaluate_script 免审批 |
+| CR-092 | P2 | open | 会话生命周期 | 会话切换不重置压缩生命周期，新会话可能永久卡在 "compacting" 且拒绝所有输入 |
+| CR-093 | P2 | open | 会话生命周期 | `startNewSession` 无重入/代次守卫，并发切换会遗弃 live agent handle，永不 dispose |
+| CR-094 | P2 | open | 消息提交 | 在途 `submitUserMessage` 不校验会话身份，带 `@文件`/图片的消息可能写入切换后的新会话 |
+| CR-095 | P2 | open | 图片协议 | 未识别的 OSC 1337 序列把整段图片 base64 回灌成键盘输入进 composer |
+| CR-096 | P2 | open | 渲染引擎 | `wrap()` 对超长单行超线性（1k→78ms、8k→2279ms、10k→5405ms），可冻结渲染 |
+| CR-097 | P2 | open | 命令 | `/context` 仍用累计 in+out 计算上下文占比，可显示 >100%（CR-066 只修了 `/status`） |
+| CR-098 | P2 | open | Provider 面板 | `hasKey` 恒真表达式 `… !== undefined \|\| true`，声明了 apiKeyEnv 的提供方永远显示已配置 |
+| CR-099 | P3 | open | 渲染宽度 | EAW=W 的 emoji（✅⭐⚡❌）按 1 列计算，卡片与表格右边框错位 |
+| CR-100 | P3 | open | `/btw` | 结果卡片上边框少 1 列，`columns > 102` 时正文冲出边框 |
+| CR-101 | P3 | open | 剪贴板 | 回退命令的 `child.stdin` 未监听 error，缺 xclip/wl-copy 时可能未捕获 EPIPE |
+| CR-102 | P3 | open | 会话生命周期 | 切换未清 `animationTimer`、未取消在途 prompt suggestion、`refreshSkills` 无代次校验 |
+| CR-103 | P3 | open | Vision 路由 | `analyze_image` 的 initiator 检查 fail-open（取不到 initiator 即放行） |
+| CR-104 | P3 | open | 图片协议 | 图片缩放临时文件名可预测、默认权限且非排他创建 |
+| CR-105 | P3 | open | Jobs | 终态"覆盖 vs 追加"按 kind 猜测，而非契约的 `readOutput` 能力（当前上游不触发） |
+| CR-106 | P3 | open | 选择器 | 通用路径的软换行判断恒真，跨行复制被空格拼成一行 |
+
+### 已修复（resolved）
+
+#### CR-084：实时流事件已迁移，插件仍监听废弃的 `assistant/chunk`
+- **优先级：** P1　**状态：** resolved
+- **位置：** `src/index.js`（原 `onSessionEvent` 的 `case 'assistant/chunk'`）
+- **现象：** `assistant/chunk` 仅存在于 `dsh-session-format-v0-to-v1`（v0→v1 迁移包）；0.1.5-rc.1 的实时流是 `agent/assistant-stream`（`dsh-agent-loop/lib/index.js:1032`，frame `{type:'start'|'chunk'|'end', chunk: StreamChunk}`）。插件全仓库未订阅该事件，`streaming.text` 只在废弃分支被累加。
+- **影响：** 打字机文本、思考抽屉、流式工具调用预览、`stopRepetitiveStream` 熔断全部失效，assistant 文本只在 step 提交时整块出现；`HARNESS_COMPATIBILITY.md` 也记录了同一过时假设。真实 v3 会话日志（1,487 事件）中 `assistant/chunk` 计数为 0。
+- **修复：** 抽出 `handleAssistantChunk(chunk, seq)` 共享处理器；新增 `agent/assistant-stream` 订阅（按当前 agent 过滤、只处理 `chunk` 帧）；旧 `assistant/chunk` 分支保留用于 v0/v1 日志回放。
+- **关闭验证：** 新增 `CR-085`…见测试节：`TuiApp.prototype.handleAssistantChunk` 的 text/reasoning/tool-call 累加断言通过；`npm test` 全绿。
+
+#### CR-085：凭据服务调用签名错误
+- **优先级：** P1　**状态：** resolved
+- **位置：** `src/index.js:4291`（原 `credService.set({ ref, value })`）、`src/index.js:4331`（原 `unset({ ref })`）
+- **现象：** 上游契约是位置参数 `set(ref: CredentialRef, value: string)` / `unset(ref)`（`dsh-credentials/lib/types/index.d.ts:145,152`）。`dsh-credentials-local` 的 `set` 首行执行 `value.length`，传对象时 `value` 为 undefined 直接抛 TypeError；`unset` 传对象时 `values.get(ref)` 命中不了真实键，`value === undefined && existing === undefined` 直接 return（静默 no-op）。
+- **影响：** 任何填写了新 API Key 的 `/provider` 保存都会回滚并显示一条 TypeError；删除提供方后 API Key 仍留在凭据文件中，而确认弹窗声称已删除密钥。
+- **修复：** 改为位置参数调用；新增严格 mock 回归测试（`set`/`unset` 参数类型与调用形状断言）。
+- **关闭验证：** 新增测试块 "CR-086" 断言 `set('POSITIONAL_PROVIDER_API_KEY','secret_value')` 与 `unset('POSITIONAL_PROVIDER_API_KEY')` 的调用形状；修复前该断言会因参数为对象而失败。
+
+#### CR-086：`llm.discoverModels` 签名与返回形态错误
+- **优先级：** P1　**状态：** resolved
+- **位置：** `src/index.js:4361`（原调用）
+- **现象：** 契约是 `discoverModels(settingsNs: string, request, signal?): Promise<LlmDiscoveredModel[]>`（`dsh-llm/lib/types/index.d.ts:303`），实现首行 `this.discoveries.get(settingsNs)` 取不到即抛 `NO_DISCOVERY`。原代码传对象并把结果当 `{models}` 读取。
+- **影响：** 官方探测必然抛错，且原生 fetch 回退位于同一 `try` 内被一并跳过，`[F]` 探测只剩一条错误日志，用户只能手工录入模型。
+- **修复：** 位置参数 + 数组返回值；官方探测与 fetch 回退拆成两个独立 `try/catch`，官方失败不再吞掉回退。
+- **关闭验证：** 新增测试块 "CR-087"：断言 `discoverModels('llm-pi-ai', {…})` 的实参形状与官方结果直接采纳；第二个用例让官方探测抛错并断言 fetch 回退仍产出候选，且官方失败被记录为 `model discovery failed`。
+
+#### CR-087：PowerShell 参数前缀与脚本块绕过
+- **优先级：** P1　**状态：** resolved
+- **位置：** `src/core/danger-guard.js:1013,1021`（原 `checkShellExecCommand` 的 PowerShell 分支）
+- **现象：** 只识别 `-command`/`-c` 与 `-encodedcommand`/`-e` 两种精确拼写，PowerShell 允许任意无歧义前缀，且 `-Command "& { … }"` 的脚本块形式会让递归解析把 `&` 当命令名。
+- **影响：** `powershell -enc`、`powershell -en`、`pwsh -enc`、`powershell -comm`、`-Command "& {Remove-Item -Recurse -Force C:\}"` 全部放行，CR-051/CR-060 的 Windows 加固被绕过。
+- **修复：** 用 `'command'.startsWith(name)` / `'encodedcommand'.startsWith(name)` 匹配整个参数族，支持 `-Switch:value` 内联形式；新增 `unwrapScriptBlock()` 剥离调用运算符与多层外层花括号后再递归检查。
+- **关闭验证：** 新增表驱动用例（see CR-084 测试块）：`-enc`/`-en`/`-e`/`pwsh -enc`/`-comm`/`-Command:`/`& {…}`/嵌套 `& { & {…} }` 全部 BLOCK，`Get-Process` 等安全命令仍放行。
+
+#### CR-088：管道 stdin 传参未覆盖
+- **优先级：** P1　**状态：** resolved
+- **位置：** `src/core/danger-guard.js`（保守 token 回退只扫描同段 token）
+- **现象：** `echo / | xargs rm -rf` 被切成两段，`rm` 的目标来自 stdin 不在 token 里；`printf 'rm -rf /\n' | bash` 的脚本同样在管道另一侧。
+- **影响：** 三条真实会删除根目录的命令（xargs、`-0` 变体、管道喂 shell）全部 ALLOW。
+- **修复：** `checkDangerCommand` 新增 4b 步：存在真实管道（排除 `||`）且整行未被 allow 规则豁免时，`| xargs` + 破坏性动词立即拦截；`| sh|bash|…` 且无 `-c/--command` 载荷时按"脚本来自 stdin"保守拦截。
+- **关闭验证：** `echo / | xargs rm -rf`、`find / -print0 | xargs -0 rm -rf`、`printf 'rm -rf /\n' | bash`、`curl … | sh` 均 BLOCK；`printf 'rm -rf /' | bash -c 'cat'`、`git status | grep x`、`true || bash` 仍 ALLOW。
+
+#### CR-089：`~/..` 与 `~user` 家目录逃逸
+- **优先级：** P2　**状态：** resolved
+- **位置：** `src/core/danger-guard.js:481-513`（`isRootOrHomeTarget`）
+- **现象：** 只匹配 `~`、`~/`、`$HOME` 字面形态；`~/..` 的 `..` 被按普通路径段计数（depth 0），`~root` 不匹配任何模式。
+- **影响：** `rm -rf ~/..`（macOS 即 /Users）、`rm -rf ~/../..`、`rm -rf ~root` 实测放行。
+- **修复：** 任意 `~` 前缀目标：`~user` 直接判危险；其余按去掉 `~/` 后的路径归一化，结果为 `..` 或以 `../` 开头即判危险。
+- **关闭验证：** 上述三条 BLOCK；`rm -rf ~/foo/../bar`（归一化后仍在主目录内）仍 ALLOW，无误报。
+
+#### CR-090：图片用户消息 rows/rowSpans 错位导致复制为空
+- **优先级：** P1　**状态：** resolved
+- **位置：** `src/renderer/transcript.js:307-312`（`pushImageRow`）、`! 命令` 分支
+- **现象：** `rows.push` 与 `rowSpans.push` 不配对：图片行与 `!` 命令行只推 rows。实测 `rows=6 rowSpans=5`，图片行之后每行错位一格，内容行映射到 `{29,29}`。
+- **影响：** 含图片（原生块或降级 notice）的用户消息，鼠标拖选提示词得到空串；高亮因双向映射对称而看起来正常。
+- **修复：** 新增 `pushPlaceholderSpan()`，图片行、`!` 标题行与每行命令输出都补零长度占位 span，保持 rows/rowSpans 一一对应。
+- **关闭验证：** 新增三条不变式用例（image block / routing notice / bash command）；实测 image+text 与 notice+text 的 `selected` 由 `""` 变为 `"hello world this is "`。
+
+### 待修复（open）
+
+#### CR-091：workspace-write 下浏览器高危工具免审批
+- **优先级：** P1　**状态：** open
+- **位置：** `src/browser-lease.js:239`（`chromeToolRisk(exec.name) !== 'read' && !workspaceWrite`）、`DANGER_TOOLS` 定义在 `:21-30`
+- **现象：** danger 与 write 在决策上完全等价，`DANGER_TOOLS` 只影响审批文案。
+- **影响：** 权限为 workspace-write 且连接已批准后，`upload_file`（可上传本机任意路径文件）、`evaluate_script`（在已登录浏览器执行任意 JS）、`install_extension` 不再弹审批。
+- **建议：** `const risk = chromeToolRisk(name); const needsApproval = risk === 'danger' || (risk === 'write' && !workspaceWrite)`。
+
+#### CR-092：会话切换不重置压缩生命周期
+- **优先级：** P2　**状态：** open
+- **位置：** `src/index.js` 的 `commitSessionState`（`compacting/compactState/harnessCompaction/compactRotationTimer` 均未复位）、`onSessionEvent` 的会话过滤、`submit()` 的 `compacting` 早退
+- **现象：** 切换只清 `autoRecapTimer`；旧会话随后的 `compaction/end` 被会话过滤丢弃，`compacting` 永久为 true。
+- **影响：** 新会话拒绝一切提交（只提示"正在压缩"），footer 一直显示压缩进度，只能重启进程。
+- **建议：** 在 `commitSessionState` 中与 `clearAutoRecapTimer` 一起清理压缩状态与 `compactRotationTimer`。
+
+#### CR-093：会话切换无重入守卫
+- **优先级：** P2　**状态：** open
+- **位置：** `src/index.js` 的 `startNewSession`
+- **现象：** 无 in-flight 标志/代次校验；两次切换会在 `await agents.create` 后各自读取同一个旧 handle 并无条件覆盖 `this.handle`。
+- **影响：** 被挤掉的候选 agent 与 session 永不 `dispose()`，其 skill override / request override / danger guard 一并泄漏。
+- **建议：** 增加 `sessionSwitchPromise` 或 generation token，commit 前校验代次，被超越则释放本次候选资源。
+
+#### CR-094：在途消息跨会话投递
+- **优先级：** P2　**状态：** open
+- **位置：** `src/index.js` 的 `submitUserMessage`（await `expandFileReferences`/`persistImageDrafts`/`getModelCatalog` 之后直接 `this.agent.followup`）
+- **现象：** 只检查显式取消，不校验发起时的 agent/session 身份。
+- **影响：** 带 `@文件` 或图片的消息（I/O 窗口可达数百毫秒到数秒）可能被投递到刚切换出来的新会话。
+- **建议：** 入口捕获 `agent`，发送前校验 `this.agent === agent`，否则回填草稿与图片并报错。
+
+#### CR-095：未识别 OSC 1337 载荷回灌输入框
+- **优先级：** P2　**状态：** open
+- **位置：** `src/image-protocol.js:275-279`、`src/index.js:6748`
+- **现象：** `params.File !== 'inline=1'` 时把整个 buffer 作为 remainder 交回，调用方无差别回灌到输入流程。
+- **影响：** 首参数非 `inline=1`（如 `inline=0`、`name=…;size=…;inline=1`）时，数 MB base64 被当键盘输入灌入 composer，界面卡顿且图片永远不会被识别。
+- **建议：** ignored 分支只返回终止符之后的字节；`inline` 按参数名而非位置识别。
+
+#### CR-096：`wrap()` 超线性
+- **优先级：** P2　**状态：** open
+- **位置：** `src/renderer/ansi.js:187-195`（`wrapWithSpans` 的 while 循环）
+- **现象：** 每轮对剩余整行重新 `graphemeEntries` + `widthOf` + `truncateWidth`。
+- **影响：** 实测 1k→78ms、2k→214ms、4k→642ms、8k→2279ms、10k→5405ms；minified JSON / base64 / 单行长代码会冻结渲染（markdown 代码块、reasoning、log、用户框都走这里）。
+- **建议：** 循环外一次性取分段表，每轮按列预算切片复用。
+
+#### CR-097：`/context` 上下文占比失真
+- **优先级：** P2　**状态：** open
+- **位置：** `src/commands/registry.js:60-68`
+- **现象：** `total = inp + out` 是整会话累计值，不是当前上下文占用。
+- **影响：** 多轮会话下可显示 >100%，与 statusline、`/status` 的数字互相矛盾（CR-066 只修了 `/status`）。
+- **建议：** 与 `/status` 共用 `activeTokens` 计算。
+
+#### CR-098：`hasKey` 恒真
+- **优先级：** P2　**状态：** open
+- **位置：** `src/index.js:4042-4046`、`src/panels/provider-panel.js:28`
+- **现象：** `process.env[customEntry.apiKeyEnv] !== undefined || true` 恒为 true；`p.id.includes('deepseek')` 也一律视为有密钥；面板 `entry.hasKey !== false` 再次把 undefined 当已配置。
+- **影响：** 缺密钥的提供方在列表里显示为已配置，用户只能在调用鉴权失败时才发现。
+- **建议：** 删除恒真分支，按 `apiKeyEnv` 实际取值与 Profile 引用状态判定。
+
+#### CR-099：emoji 宽度按 1 列
+- **优先级：** P3　**状态：** open
+- **位置：** `src/renderer/ansi.js:31-42`（`isWideCodePoint`）
+- **现象：** 实测 `widthOf('✅') === 1`（⭐⚡❌ 同）。EAW=W 且 Emoji_Presentation 的 U+2705、U+2B50、U+26A1 等位于 0x2190-0x2BFF，不在区间表内，也无 VS16 兜底。
+- **影响：** 卡片/表格右边框右移，`truncateAnsi` 截断点偏后可能触发终端软换行。
+- **建议：** 补 Emoji_Presentation 区间或按 `\p{Emoji_Presentation}` 判定，并补宽度测试。
+
+#### CR-100：`/btw` 卡片宽度错位
+- **优先级：** P3　**状态：** open
+- **位置：** `src/commands/btw.js:89-107`
+- **现象：** 上边框可见宽 `boxWidth-1`、正文与下边框 `boxWidth`；`columns > 102` 时 `boxWidth` 被钉在 100，而 `renderMarkdownRows(…, columns-4)` 的行宽可达 `columns-4`。
+- **影响：** 120/160 列终端下正文冲出卡片右边框。
+- **建议：** markdown 宽度预算与盒子统一（`boxWidth - 4`）或对正文行 `truncateWidth`；上边框按 `boxWidth - 2 - widthOf(tagText)` 校正。
+
+#### CR-101：剪贴板回退未监听 stdin error
+- **优先级：** P3　**状态：** open
+- **位置：** `src/input/clipboard.js:47-53`
+- **现象：** 只挂 `child.on('error')`，随后立即 `child.stdin.write(text)`；命令不存在时写入可能以 EPIPE 在 stdin 上触发 error 事件而无人监听。
+- **影响：** Linux 缺少 xclip/wl-copy 时一次复制可能引发未捕获异常，而不是静默降级（待实机复现）。
+- **建议：** `child.stdin.on('error', () => {})` 或在 child error 后停止写入。
+
+#### CR-102：会话切换的资源与投影清理缺口
+- **优先级：** P3　**状态：** open
+- **位置：** `src/index.js` 的 `commitSessionState`、`refreshSkills`、`schedulePromptSuggestion`
+- **现象：** 切换未 `clearInterval(this.animationTimer)`（旧 agent 状态被过滤后仍空转 10fps 重绘整轮）；未取消在途 prompt suggestion（旧会话上下文生成的建议可进入新会话输入框）；`refreshSkills` await 后无代次校验（旧 agent scope 的技能集合覆盖新会话）。
+- **建议：** 在 `commitSessionState` 中清理定时器、调用 `clearPromptSuggestion()`，并给 `refreshSkills` 加 `this.agent` 身份校验。
+
+#### CR-103：`analyze_image` 权限校验 fail-open
+- **优先级：** P3　**状态：** open
+- **位置：** `src/vision-router.js:40-43`
+- **现象：** `if (initiator && initiator !== app.agent) throw` —— 取不到 initiator 时放行，`?.` 还会在 API 缺失/改名时静默跳过整段校验。
+- **影响：** 无 initiator 上下文的调用方可使用用户配置的 vision 路由起 sidecar，与"仅活动会话可用"的意图不符（上游明确 initiator 只用于归因，不是授权）。
+- **建议：** 改为正向校验（`initiator === app.agent` 才放行），API 缺失时显式报错。
+
+#### CR-104：图片缩放临时文件权限
+- **优先级：** P3　**状态：** open
+- **位置：** `src/image-protocol.js:91-95`
+- **现象：** 文件名由时间戳 + 小随机数拼接，`writeFile` 未指定 mode/flag。
+- **影响：** 共享临时目录下图片可被其他本地用户读取，且存在同名符号链接跟随写入的可能。
+- **建议：** 使用 `mkdtemp()`，或至少 `{ mode: 0o600, flag: 'wx' }`。
+
+#### CR-105：Jobs 终态覆盖/追加按 kind 猜测
+- **优先级：** P3　**状态：** open
+- **位置：** `src/index.js` 的 `replaceOutput = job && !isShellJob(entry) && !isRunningJob(job)`
+- **现象：** 契约以 producer 是否提供 `readOutput` 区分流式/终态输出，而不是 job kind。
+- **影响：** 当前 bash/pwsh/subagent 三类 producer 下不会丢行；一旦有插件注册非 shell 的流式 job，其终态读取会被当成"完整输出"覆盖，先前日志丢失。
+- **建议：** 不以 kind 推断，改为按 `readOutput` 能力或"首次终态读取为空即视为流式消费完毕"判定。
+
+#### CR-106：软换行判断恒真
+- **优先级：** P3　**状态：** open
+- **位置：** `src/input/selection.js:82`、`:84-86`、`:418`
+- **现象：** `isSoftWrap = … && !raw.endsWith('\n')`，但 renderer 产出的 row 永远是单行 ANSI 串，条件恒真。
+- **影响：** activity 展开区、local/log、`!` 用户块内跨行拖选复制时，多个逻辑行被空格拼成一行。
+- **建议：** 由投影层显式标记软换行（span 连续性/softWrap 字段），不要靠 row 尾字符推断。
+
+### 本轮验证记录
+
+- 修复范围：CR-084 ~ CR-090（7 项），改动 `src/index.js`、`src/core/danger-guard.js`、`src/renderer/transcript.js` 与两个测试文件。
+- `npm test`（transcript-projection / screen-viewport / input-router / mouse-selection / unit-regressions）全部通过；`npm run verify` 模块导入通过；53 个源文件 `node --check` 通过。
+- 新增回归：danger-guard 15 条绕过用例 + 5 条对照用例；`handleAssistantChunk` 三类增量；凭据位置参数形状；discovery 位置参数/数组采纳/回退隔离；rows/rowSpans 三条不变式。
+- 独立复核证据：真实 v3 会话日志解压（`assistant/chunk` 计数 0）、`checkDangerCommand` 直调 24 例、selection 复现（修复前后 `selected` 对比）、`wrap()` 基准、`npm pack --dry-run`（65 文件、`.agents/skills` 随包发布）。
+- 未覆盖：PTY 端到端套件（fixture 缺 `profiles/tui`）、`statusline.js`/`themes.js`/`welcome.js` 未深读、vision sidecar 无真实 provider 端到端验证。
+

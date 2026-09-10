@@ -304,11 +304,19 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
           rowSpans.push({ sourceStart: 0, sourceEnd: 0, prefixCols: 0, text: 'YOU' })
         }
 
+        // Every row must have a matching span: selection maps rows to source
+        // offsets positionally, so an unpaired row shifts the whole block and
+        // dragging over the prompt then copies an empty slice.
+        const pushPlaceholderSpan = () => {
+          rowSpans.push({ sourceStart: userPromptText.length, sourceEnd: userPromptText.length, prefixCols: 0, text: '' })
+        }
+
         const pushImageRow = (ref) => {
           const size = formatImageBytes(ref?.bytes ?? 0)
           const dimensions = ref?.width && ref?.height ? ` · ${ref.width}×${ref.height}` : ''
           rows.push(`${ANSI.dim}◱ image · ${size}${dimensions}${ANSI.reset}`)
           logicalLines.push(`[image ${size}${dimensions}]`)
+          pushPlaceholderSpan()
         }
 
         for (const block of contentBlocks) {
@@ -323,12 +331,14 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
               const cmdName = safe(firstLine.slice(1).trim())
               rows.push(`${ANSI.bash}${ANSI.bold}! ${cmdName}${ANSI.reset}`)
               logicalLines.push(`! ${cmdName}`)
+              pushPlaceholderSpan()
               if (restLines.length > 0) {
                 const textLines = restLines.join('\n').trimEnd().split('\n').slice(0, 30)
                 for (const [i, line] of textLines.entries()) {
                   const prefix = i === 0 ? `${ANSI.dim}└${ANSI.reset} ` : `  `
                   rows.push(`${prefix}${ANSI.answer}${safe(line)}${ANSI.reset}`)
                   logicalLines.push(line)
+                  pushPlaceholderSpan()
                 }
               }
             } else if (rawText) {

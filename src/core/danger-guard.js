@@ -486,6 +486,14 @@ function isRootOrHomeTarget(target) {
   // Home patterns: ~, ~/, ~/*, $HOME, $HOME/, $HOME/*, ${HOME}, ${HOME}/*
   if (/^(?:~|\$\{?HOME\}?)(?:\/|\/\*|\/\.\*?)?$/.test(t)) return true
 
+  // Any other ~-prefixed target: ~user names another account's home, and a
+  // normalizing escape (e.g. ~/.. on macOS is /Users) leaves the home tree.
+  if (t.startsWith('~')) {
+    if (/^~[^/\\]/.test(t)) return true
+    const normalized = normalize(t.replace(/^~\/?/, '') || '.')
+    if (normalized === '..' || normalized.startsWith('../')) return true
+  }
+
   // Direct root patterns: /, /*, /., /.., /./, /./*, //, ///
   if (/^\/+(?:\*|\.\*?|\.\.|\.\/|\.\/\*)?$/.test(t)) return true
 
@@ -988,6 +996,23 @@ function checkWindowsCmdCommand(cmdName, args, rawCmd) {
   return null
 }
 
+/**
+ * Strip the PowerShell call operator and outer script-block braces so the
+ * payload behind `-Command "& { ... }"` reaches the normal command checks.
+ * @param {string} payload
+ * @returns {string}
+ */
+function unwrapScriptBlock(payload) {
+  let text = String(payload ?? '').trim()
+  for (let i = 0; i < 4; i++) {
+    const withoutOperator = text.replace(/^&\s*/, '').trim()
+    const unwrapped = /^\{[\s\S]*\}$/.test(withoutOperator) ? withoutOperator.slice(1, -1).trim() : withoutOperator
+    if (unwrapped === text) break
+    text = unwrapped
+  }
+  return text
+}
+
 function checkShellExecCommand(cmdName, args, rawCmd, rules, depth = 0) {
   const norm = cmdName.toLowerCase()
   if (!SHELL_INTERPRETERS.has(norm)) return null
@@ -1008,23 +1033,28 @@ function checkShellExecCommand(cmdName, args, rawCmd, rules, depth = 0) {
   // Windows PowerShell / pwsh
   if (norm === 'powershell' || norm === 'powershell.exe' || norm === 'pwsh' || norm === 'pwsh.exe') {
     for (let i = 0; i < args.length; i++) {
-      const arg = args[i]
-      const lower = arg.toLowerCase()
-      if (lower === '-command' || lower === '-c') {
-        const payload = args.slice(i + 1).join(' ')
+      const match = /^-([a-z]+)(?::(.*))?$/i.exec(args[i])
+      if (!match) continue
+      const name = match[1].toLowerCase()
+      const inline = match[2]
+      // PowerShell binds any unambiguous parameter prefix and also accepts an
+      // inline `-Switch:value`, so match the whole family rather than the two
+      // canonical spellings.
+      if ('command'.startsWith(name)) {
+        const payload = inline ? inline : args.slice(i + 1).join(' ')
         if (payload) {
-          const hit = checkDangerCommand(payload, rules, depth + 1)
+          const hit = checkDangerCommand(unwrapScriptBlock(payload), rules, depth + 1)
           if (hit) return hit
         }
         continue
       }
-      if (lower === '-encodedcommand' || lower === '-e') {
-        const b64 = args[i + 1]
+      if ('encodedcommand'.startsWith(name)) {
+        const b64 = inline ? inline : args[i + 1]
         if (b64) {
           try {
             const decoded = Buffer.from(b64, 'base64').toString('utf16le')
             if (decoded) {
-              const hit = checkDangerCommand(decoded, rules, depth + 1)
+              const hit = checkDangerCommand(unwrapScriptBlock(decoded), rules, depth + 1)
               if (hit) return hit
             }
           } catch {}
@@ -1228,6 +1258,13 @@ function evaluateSegment(segment, rules, depth = 0) {
   return null
 }
 
+/** A pipe whose consumer is `xargs` invoking a destructive command. */
+const PIPE_XARGS_DESTRUCTIVE = /(?<!\|)\|(?!\|)[^|;]*?\bxargs\b[^|;]*?\b(?:rm|ri|del|erase|rd|rmdir|unlink|shred|dd|mkfs|chmod|chown)\b/i
+/** A pipe whose consumer is a shell interpreter reading its script from stdin. */
+const PIPE_INTERPRETER = /(?<!\|)\|(?!\|)\s*(?:[^\s|;&]*\/)?(?:sh|bash|dash|zsh|ksh|fish|csh|tcsh)\b([^|;]*)/i
+/** A pipe that actually connects two commands (skips `||`). */
+const REAL_PIPE = /(?<!\|)\|(?!\|)/
+
 /**
  * Pure rule check against a raw command line (supports compound commands & subshell recursion).
  * @param {string} command
@@ -1267,6 +1304,20 @@ export function checkDangerCommand(command, rules = compileDangerRules(), depth 
     for (const segment of segments) {
       const hit = evaluateSegment(segment, rules, depth)
       if (hit) return hit
+    }
+
+    // 4b. Pipe-fed consumers carry the destructive payload on stdin, so
+    // segment-local token scanning cannot see it (`echo / | xargs rm -rf`,
+    // `printf 'rm -rf /' | bash`). Both forms are statically undecidable; fail
+    // closed unless the user explicitly allowed the whole command line.
+    if (REAL_PIPE.test(uncommented) && !rules.allow?.some((allow) => allow.test(uncommented))) {
+      if (PIPE_XARGS_DESTRUCTIVE.test(uncommented)) {
+        return { rule: '管道向 xargs 传入破坏性命令，已保守拦截', command: uncommented.slice(0, 200) }
+      }
+      const interpreter = PIPE_INTERPRETER.exec(uncommented)
+      if (interpreter && !/(?:^|\s)(?:-c|--command)(?:\s|=|$)/.test(interpreter[1] ?? '')) {
+        return { rule: '管道向 Shell 解释器输入脚本，已保守拦截', command: uncommented.slice(0, 200) }
+      }
     }
 
     return null

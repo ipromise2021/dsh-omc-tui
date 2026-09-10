@@ -692,6 +692,10 @@ export class TuiApp {
         if (changed !== this.agent) return
         this.onStatus(status)
       }))
+      this.disposers.push(this.ctx.on('agent/assistant-stream', ({ agent: changed, frame }) => {
+        if (changed !== this.agent || frame?.type !== 'chunk') return
+        this.handleAssistantChunk(frame.chunk, this.lastCommittedSeq)
+      }))
       this.disposers.push(this.ctx.on('approval/request', (request, next) => {
         if (request.agent !== this.agent) return next()
         return this.requestApproval(request)
@@ -1619,52 +1623,59 @@ export class TuiApp {
     }
   }
 
+  // Live assistant deltas. DSH v0.1.5 publishes these as transient
+  // `agent/assistant-stream` frames; only v0/v1 session logs still carry them as
+  // durable `assistant/chunk` events, so both paths share this handler.
+  handleAssistantChunk(chunk, seq) {
+    if (chunk?.type === 'text-delta') {
+      this.flushThinking(seq)
+      this.stopRepetitiveStream(chunk.text)
+      if (!this.turnHeaderCommitted && !this.screenRenderer?.isAltScreen) {
+        this.turnHeaderCommitted = true
+        this.streamHeaderCommitted = true
+        const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
+        const headerLines = [
+          `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`,
+          ''
+        ]
+        this.commitToScrollback(headerLines)
+      }
+      this.streaming.text += chunk.text
+      if (this.screenRenderer?.isAltScreen) {
+        this.markLiveStreamDirty()
+      } else {
+        this.streamBuffer += chunk.text
+        this.flushStreamBuffer(false)
+      }
+    }
+    else if (chunk?.type === 'reasoning-delta') {
+      if (this.streaming.reasoning === '') {
+        this.reasoningAt = Date.now()
+      }
+      this.streaming.reasoning += chunk.text
+      this.markLiveStreamDirty()
+    }
+    else if (chunk?.type === 'tool-call-delta') {
+      this.streamActionText = ''
+      this.streamLoopStopped = false
+      this.flushThinking(seq)
+      if (!this.screenRenderer?.isAltScreen) {
+        this.flushStreamBuffer(true)
+      }
+      const draft = this.streaming.tool ?? { name: '', args: '', startTime: Date.now() }
+      if (chunk.name) draft.name = chunk.name
+      draft.args += chunk.argumentsDelta ?? ''
+      this.streaming.tool = draft
+      this.scheduleRender()
+    }
+  }
+
   onSessionEvent(session, event) {
     if (session !== this.agent?.session) return
     switch (event.type) {
       case 'assistant/chunk': {
-        const chunk = event.data.chunk
-        if (chunk.type === 'text-delta') {
-          this.flushThinking(event.seq)
-          this.stopRepetitiveStream(chunk.text)
-          if (!this.turnHeaderCommitted && !this.screenRenderer?.isAltScreen) {
-            this.turnHeaderCommitted = true
-            this.streamHeaderCommitted = true
-            const modelName = this.activeModel?.model ?? this.agent?.options?.model ?? ''
-            const headerLines = [
-              `${ANSI.blueSoft}DSH  ${ANSI.muted}${modelName} · ${formatTime(Date.now())}${ANSI.reset}`,
-              ''
-            ]
-            this.commitToScrollback(headerLines)
-          }
-          this.streaming.text += chunk.text
-          if (this.screenRenderer?.isAltScreen) {
-            this.markLiveStreamDirty()
-          } else {
-            this.streamBuffer += chunk.text
-            this.flushStreamBuffer(false)
-          }
-        }
-        else if (chunk.type === 'reasoning-delta') {
-          if (this.streaming.reasoning === '') {
-            this.reasoningAt = Date.now()
-          }
-          this.streaming.reasoning += chunk.text
-          this.markLiveStreamDirty()
-        }
-        else if (chunk.type === 'tool-call-delta') {
-          this.streamActionText = ''
-          this.streamLoopStopped = false
-          this.flushThinking(event.seq)
-          if (!this.screenRenderer?.isAltScreen) {
-            this.flushStreamBuffer(true)
-          }
-          const draft = this.streaming.tool ?? { name: '', args: '', startTime: Date.now() }
-          if (chunk.name) draft.name = chunk.name
-          draft.args += chunk.argumentsDelta ?? ''
-          this.streaming.tool = draft
-          this.scheduleRender()
-        }
+        // Legacy v0/v1 logs embed the live stream as durable chunk events.
+        this.handleAssistantChunk(event.data.chunk, event.seq)
         break
       }
       case 'user/message': {
@@ -4277,7 +4288,7 @@ export class TuiApp {
       if (isNewKey) {
         const credService = this.ctx.get('credentials')
         try {
-          await credService.set({ ref: finalKeyRef, value: newKeyVal })
+          await credService.set(finalKeyRef, newKeyVal)
           process.env[finalKeyRef] = newKeyVal
         } catch (credErr) {
           if (this.ctx.settings?.mutate) {
@@ -4317,7 +4328,7 @@ export class TuiApp {
       }
       const keyRef = `${id.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`
       if (this.ctx.get('credentials')?.unset) {
-        await this.ctx.get('credentials').unset({ ref: keyRef })
+        await this.ctx.get('credentials').unset(keyRef)
       }
       delete process.env[keyRef]
       this.log('ok', `provider "${id}" removed`, '/provider')
@@ -4344,20 +4355,27 @@ export class TuiApp {
     this.scheduleRender()
 
     let models = []
-    try {
-      const llm = this.llmService
-      if (llm?.discoverModels) {
-        const resp = await llm.discoverModels({
-          settingsNs: 'llm-pi-ai',
+    const llm = this.llmService
+    if (llm?.discoverModels) {
+      try {
+        // Official discovery takes positional arguments and returns the model
+        // array directly; a failure here must not skip the endpoint probe below.
+        const discovered = await llm.discoverModels('llm-pi-ai', {
           provider: draft.id || undefined,
           baseURL,
           api: draft.api || 'openai',
           apiKey: draft.apiKey?.trim() || undefined
         })
-        if (resp?.models) models = resp.models
+        if (Array.isArray(discovered)) {
+          models = discovered.filter((m) => m && typeof m.id === 'string' && m.id.trim())
+        }
+      } catch (err) {
+        this.log('error', `model discovery failed: ${err instanceof Error ? err.message : String(err)}`, '/provider')
       }
+    }
 
-      if (models.length === 0) {
+    if (models.length === 0) {
+      try {
         let endpoint = baseURL.replace(/\/+$/, '')
         if (!endpoint.endsWith('/models')) {
           endpoint = endpoint.endsWith('/v1') ? `${endpoint}/models` : `${endpoint}/v1/models`
@@ -4383,9 +4401,9 @@ export class TuiApp {
             }
           }).filter((m) => !!m.id)
         }
+      } catch (err) {
+        this.log('error', `model endpoint probe failed: ${err instanceof Error ? err.message : String(err)}`, '/provider')
       }
-    } catch (err) {
-      this.log('error', `discovery failed: ${err instanceof Error ? err.message : String(err)}`, '/provider')
     }
 
     this.providerPanel.discovering = false

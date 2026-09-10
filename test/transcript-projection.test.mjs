@@ -484,4 +484,17 @@ const noticeOnlyText = visibleOf(noticeOnlyDoc.rows.join('\n'))
 assert.match(noticeOnlyText, /◱ image · 70B · 1×1/)
 assert.doesNotMatch(noticeOnlyText, /analyze_image|╭/)
 
+// rows and rowSpans must stay index-aligned: selection maps rows to source
+// offsets positionally, so an unpaired row (image or `!` rows) shifts the whole
+// block and dragging over the prompt then copies an empty slice.
+for (const [label, content] of [
+  ['image block', [{ type: 'image', attachment: { attachmentId: 'a1', mediaType: 'image/png', bytes: 2048, width: 64, height: 32 } }, { type: 'text', text: 'prompt text' }]],
+  ['routing notice', [{ type: 'text', text: '[Image attachment att-9 [ref: image/png, 2048 bytes, 64×32] is available. Use analyze_image with attachment_id="att-9" when visual inspection is needed.]\nprompt text' }]],
+  ['bash command', [{ type: 'text', text: '!ls -la\nfile one\nfile two' }]]
+]) {
+  const invariantDoc = projectTranscript([{ seq: 21, type: 'user/message', time: 5400, data: { source: { kind: 'user' }, content } }], 80)
+  const userBlock = invariantDoc.blocks.find((b) => b.kind === 'user')
+  assert.equal(userBlock.rows.length, userBlock.rowSpans.length, `rows/rowSpans must stay aligned for ${label}`)
+}
+
 console.log('✓ transcript projection unit tests passed')
