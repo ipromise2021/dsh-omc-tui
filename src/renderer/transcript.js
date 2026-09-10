@@ -3,7 +3,7 @@ import { formatImageBytes } from '../image-protocol.js'
 import { ANSI as defaultAnsi } from './themes.js'
 import { renderMarkdownRows, renderMarkdownDocument } from './markdown.js'
 import { renderDiffLines } from './diff.js'
-import { compactExpandedFileReferences } from '../core/events.js'
+import { compactExpandedFileReferences, stripImageAttachmentNotices } from '../core/events.js'
 import { groupActivitySpans, parseToolArgs, summarizeToolCall, toolResultText } from './activity.js'
 
 export function renderStatusPanelRows(text, contentWidth, ANSI = defaultAnsi) {
@@ -304,15 +304,20 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
           rowSpans.push({ sourceStart: 0, sourceEnd: 0, prefixCols: 0, text: 'YOU' })
         }
 
+        const pushImageRow = (ref) => {
+          const size = formatImageBytes(ref?.bytes ?? 0)
+          const dimensions = ref?.width && ref?.height ? ` · ${ref.width}×${ref.height}` : ''
+          rows.push(`${ANSI.dim}◱ image · ${size}${dimensions}${ANSI.reset}`)
+          logicalLines.push(`[image ${size}${dimensions}]`)
+        }
+
         for (const block of contentBlocks) {
           if (block.type === 'image') {
-            const ref = block.attachment
-            const size = formatImageBytes(ref?.bytes ?? 0)
-            const dimensions = ref?.width && ref?.height ? ` · ${ref.width}×${ref.height}` : ''
-            rows.push(`${ANSI.dim}◱ image · ${size}${dimensions}${ANSI.reset}`)
-            logicalLines.push(`[image ${size}${dimensions}]`)
+            pushImageRow(block.attachment)
           } else if (block.type === 'text') {
-            const rawText = block.text ?? ''
+            const { text: promptText, images: routedImages } = stripImageAttachmentNotices(block.text ?? '')
+            for (const ref of routedImages) pushImageRow(ref)
+            const rawText = promptText
             if (rawText.startsWith('!') && !rawText.startsWith('!!')) {
               const [firstLine, ...restLines] = rawText.split('\n')
               const cmdName = safe(firstLine.slice(1).trim())
@@ -326,7 +331,7 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
                   logicalLines.push(line)
                 }
               }
-            } else {
+            } else if (rawText) {
               const displayText = compactExpandedFileReferences(rawText)
               userPromptText = displayText
               const blockWidth = Math.max(10, contentWidth)

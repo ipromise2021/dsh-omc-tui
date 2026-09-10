@@ -450,4 +450,38 @@ const checkpointDoc = projectTranscript([{
 }], 80)
 assert.doesNotMatch(visibleOf(checkpointDoc.rows.join('\n')), /automatically generated checkpoint/)
 
+// Image-routing notices for text-only models stay in the model context but must
+// not leak into the rendered user bubble; the image renders as its own row.
+const routedImageDoc = projectTranscript([{
+  seq: 9,
+  type: 'user/message',
+  time: 5200,
+  data: {
+    source: { kind: 'user' },
+    content: [{
+      type: 'text',
+      text: '[Image attachment att-9 [ref: image/png, 2048 bytes, 64×32] is available. Use analyze_image with attachment_id="att-9" when visual inspection is needed.]\ninspect the layout'
+    }]
+  }
+}], 80)
+const routedImageText = visibleOf(routedImageDoc.rows.join('\n'))
+assert.match(routedImageText, /◱ image · 2KB · 64×32/)
+assert.match(routedImageText, /inspect the layout/)
+assert.doesNotMatch(routedImageText, /analyze_image/)
+assert.doesNotMatch(routedImageText, /Image attachment att-9/)
+
+// A pure-image fallback submit (notice only) renders the image row and no empty box
+const noticeOnlyDoc = projectTranscript([{
+  seq: 10,
+  type: 'user/message',
+  time: 5300,
+  data: {
+    source: { kind: 'user' },
+    content: [{ type: 'text', text: '[Image attachment att-10 [ref: image/png, 70 bytes, 1×1] is available. Use analyze_image with attachment_id="att-10" when visual inspection is needed.]' }]
+  }
+}], 80)
+const noticeOnlyText = visibleOf(noticeOnlyDoc.rows.join('\n'))
+assert.match(noticeOnlyText, /◱ image · 70B · 1×1/)
+assert.doesNotMatch(noticeOnlyText, /analyze_image|╭/)
+
 console.log('✓ transcript projection unit tests passed')

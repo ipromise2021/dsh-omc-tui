@@ -53,4 +53,34 @@ export function compactFileReferenceTitle(text) {
   return compactExpandedFileReferences(text).replace(/@([^\s@:]+):\s*```.*$/g, '@$1')
 }
 
+export const IMAGE_ATTACHMENT_NOTICE = /\[Image attachment ([^\s\]]+) \[ref: ([^,\]]+), (\d+) bytes, (\d+)×(\d+)\] is available\./g
+
+const IMAGE_ATTACHMENT_NOTICE_LINE = /^\[Image attachment .*\]$/
+const IMAGE_ATTACHMENT_NOTICE_META = /^\[Image attachment ([^\s\]]+) \[ref: ([^,\]]+), (\d+) bytes, (\d+)×(\d+)\] is available\./
+
+/**
+ * Split the leading image-routing notices (prepended by `submitUserMessage`
+ * for text-only models) off a user prompt, so the transcript renders their
+ * images as rows instead of exposing internal routing instructions to the user.
+ */
+export function stripImageAttachmentNotices(text) {
+  const lines = String(text ?? '').split('\n')
+  const images = []
+  let index = 0
+  while (index < lines.length && IMAGE_ATTACHMENT_NOTICE_LINE.test(lines[index])) {
+    const match = IMAGE_ATTACHMENT_NOTICE_META.exec(lines[index])
+    if (match) {
+      images.push({
+        attachmentId: match[1],
+        mediaType: match[2],
+        bytes: Number(match[3]),
+        width: Number(match[4]),
+        height: Number(match[5])
+      })
+    }
+    index += 1
+  }
+  return { text: lines.slice(index).join('\n'), images }
+}
+
 

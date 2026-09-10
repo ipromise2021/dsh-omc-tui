@@ -61,8 +61,6 @@ function isSubagentSession(record) {
   return record?.header?.origin === 'subagent' || /^(?:vision|side)-/.test(sessionId)
 }
 
-const IMAGE_ATTACHMENT_NOTICE = /\[Image attachment ([^\s\]]+) \[ref: ([^,\]]+), (\d+) bytes, (\d+)×(\d+)\] is available\./g
-
 const VISION_ROUTE_OPTIONS = [
   'deepseek-official/deepseek-flash',
   'deepseek-official/deepseek-v4-flash-vision-exp',
@@ -270,7 +268,8 @@ import {
   permissionFromEvents,
   toolCallId,
   getGitStatus,
-  invalidateGitCache
+  invalidateGitCache,
+  IMAGE_ATTACHMENT_NOTICE
 } from './core/index.js'
 
 import {

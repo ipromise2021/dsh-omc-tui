@@ -84,12 +84,14 @@ export async function runVisionRoute(app, args, exec = {}) {
       let timeout
       let removeEvent
       let removeStatus
+      let removeError
       const finish = (error) => {
         if (settled) return
         settled = true
         clearTimeout(timeout)
         removeEvent?.()
         removeStatus?.()
+        removeError?.()
         if (exec.signal) exec.signal.removeEventListener('abort', onAbort)
         if (error) reject(error)
         else resolve(response)
@@ -102,9 +104,14 @@ export async function runVisionRoute(app, args, exec = {}) {
         if (text) response = text
       })
       removeStatus = app.ctx.on('agent/status', ({ agent: changed, status }) => {
-        if (changed === agent && (status === 'idle' || status === 'error')) {
-          finish(status === 'error' ? new Error('vision model request failed') : undefined)
-        }
+        if (changed === agent && status === 'idle') finish(undefined)
+      })
+      // The harness reports failed steps through agent/error; agent/status only
+      // ever reports 'idle' | 'running', so a failed request would otherwise be
+      // indistinguishable from an empty sidecar response.
+      removeError = app.ctx.on('agent/error', ({ agent: changed, error }) => {
+        if (changed !== agent) return
+        finish(new Error(`vision model request failed: ${error instanceof Error ? error.message : String(error)}`))
       })
       timeout = setTimeout(() => finish(new Error('vision analysis timed out')), VISION_TIMEOUT_MS)
       if (exec.signal?.aborted) return onAbort()
@@ -116,7 +123,7 @@ export async function runVisionRoute(app, args, exec = {}) {
       ]))).catch(finish)
     })
 
-    if (!analysis) throw new Error('vision model returned no analysis')
+    if (!analysis) throw new Error(`vision model ${provider}/${model} returned no analysis`)
     return { model: `${provider}/${model}`, analysis }
   } finally {
     try { await dispose?.() } catch {}

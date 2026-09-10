@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { TuiApp, registerTuiSkillOverrides, registerBundledSkills, repeatedActionIntent, withTimeout, resolveModelVisionSupport } from '../src/index.js'
 import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
 import { pngDimensions, jpegDimensions, imageDimensions, MAX_SAFE_IMAGE_PIXELS, downscaleImageBuffer } from '../src/image-protocol.js'
+import { stripImageAttachmentNotices } from '../src/core/events.js'
 import { alignCodePoint, moveCursorLine, moveWordLeft, moveWordRight } from '../src/input/editor.js'
 import { handleCompact } from '../src/commands/compact.js'
 import { handleLocalCommand, LOCAL_COMMANDS } from '../src/commands/registry.js'
@@ -1288,6 +1289,16 @@ assert.deepEqual(restoredImageApp.imageAttachments.get('att-route'), {
   attachmentId: 'att-route', mediaType: 'image/png', bytes: pngHeader.length, width: 16, height: 8
 })
 
+// The routing notice stays in the model-facing text but is stripped for display
+const strippedNotice = stripImageAttachmentNotices(routedImageMessage.content[0].text)
+assert.equal(strippedNotice.text, 'check the layout')
+assert.deepEqual(strippedNotice.images, [{
+  attachmentId: 'att-route', mediaType: 'image/png', bytes: pngHeader.length, width: 16, height: 8
+}])
+const unconfiguredNotice = '[Image attachment att-2 is available, but no vision route is configured. Ask the user to run /vision <provider>/<model>.]'
+assert.deepEqual(stripImageAttachmentNotices(unconfiguredNotice), { text: '', images: [] })
+assert.deepEqual(stripImageAttachmentNotices('plain prompt'), { text: 'plain prompt', images: [] })
+
 let registeredEvent
 let registeredStatus
 let sidecarInput
@@ -1343,6 +1354,40 @@ assert.deepEqual(sidecarInput.content[1].attachment, {
 })
 assert.deepEqual(routedResult, { model: 'deepseek/deepseek-v4-vision-exp', analysis: 'The button is disabled.' })
 assert.equal(visionDisposed, true)
+
+// A failed vision request must surface the adapter failure, not an empty analysis
+let registeredError
+const failingVisionApp = {
+  agent: mainAgent,
+  preferences: { visionProvider: 'deepseek', visionModel: 'deepseek-v4-vision-exp' },
+  imageAttachments: new Map([['att-route', routedImageSubmitApp.imageAttachments.get('att-route')]]),
+  message: '',
+  scheduleRender: noop,
+  ctx: {
+    agents: {
+      currentInitiator: () => mainAgent,
+      async create(options) {
+        await options.setup({ tools: { restrict() {}, guard() {} } })
+        const failingSidecar = {
+          followup() {
+            registeredError({ agent: failingSidecar, error: new Error('401 invalid api key') })
+          }
+        }
+        return { agent: failingSidecar, dispose: async () => {} }
+      }
+    },
+    on(event, handler) {
+      if (event === 'session/event') registeredEvent = handler
+      if (event === 'agent/status') registeredStatus = handler
+      if (event === 'agent/error') registeredError = handler
+      return noop
+    }
+  }
+}
+await assert.rejects(
+  () => runVisionRoute(failingVisionApp, { attachment_id: 'att-route' }),
+  /vision model request failed: 401 invalid api key/
+)
 
 const failedImageSubmitApp = {
   activeModel: { provider: 'deepseek', model: 'deepseek-v4-vision' },
