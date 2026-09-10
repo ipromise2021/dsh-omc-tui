@@ -1771,7 +1771,7 @@ export class TuiApp {
       default:
         break
     }
-    if (['user/message', 'assistant/message', 'tool/call', 'tool/result', 'approval/asked', 'approval/decided', 'hook/invoked', 'hook/result', 'turn/end', 'compaction/start', 'compaction/summary', 'compaction/end', 'compaction/prune'].includes(event.type)) {
+    if (['user/message', 'assistant/message', 'tool/call', 'tool/result', 'todo/write', 'approval/asked', 'approval/decided', 'hook/invoked', 'hook/result', 'turn/end', 'compaction/start', 'compaction/summary', 'compaction/end', 'compaction/prune'].includes(event.type)) {
       this.commitUnprintedEvents?.()
       this.refreshContextTokens?.()
       if (this.jobPanel) void this.refreshJobsPanel()
@@ -5211,7 +5211,19 @@ export class TuiApp {
     const cached = this.taskPlanCache
     if (cached?.session === session && cached.length === events.length && cached.lastSeq === last?.seq) return cached.plan
     let latest = { seen: false, available: false, tasks: [] }
+    let durable = { seen: false, available: false, tasks: [] }
     for (const event of events) {
+      // `todo/write` is the Harness-owned, whole-list snapshot. Prefer it to
+      // source-code parsing so status changes update the statusline and Tasks
+      // panel as soon as the tool writes its durable event.
+      if (event.type === 'todo/write' && Array.isArray(event.data?.todos)) {
+        durable = {
+          seen: true,
+          available: true,
+          tasks: event.data.todos.map((todo) => ({ content: todo.content, status: todo.status }))
+        }
+        continue
+      }
       if (event.type !== 'tool/call' || !/^run_?code$/i.test(String(event.data?.name ?? ''))) continue
       const rawArgs = event.data?.arguments ?? event.data?.args
       let args = {}
@@ -5223,8 +5235,9 @@ export class TuiApp {
       const plan = todoPlanFromRunCode(args?.code ?? args?.script ?? args?.source)
       if (plan.seen) latest = plan
     }
-    this.taskPlanCache = { session, length: events.length, lastSeq: last?.seq, plan: latest }
-    return latest
+    const plan = durable.seen ? durable : latest
+    this.taskPlanCache = { session, length: events.length, lastSeq: last?.seq, plan }
+    return plan
   }
 
   runningExitJobs() {

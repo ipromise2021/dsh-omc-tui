@@ -2721,6 +2721,26 @@ assert.deepEqual(TuiApp.prototype.taskPlanSnapshots.call(taskPlanApp), {
     { content: 'Finish', status: 'pending' }
   ]
 })
+const durableTaskPlanEvents = [
+  { seq: 1, type: 'tool/call', data: { name: 'run_code', arguments: JSON.stringify({ code: "await tools.todo_write({ todos: [{ content: 'Legacy', status: 'pending' }] })" }) } },
+  { seq: 2, type: 'todo/write', data: { todos: [{ content: 'Deploy', status: 'in_progress' }, { content: 'Verify', status: 'pending' }] } }
+]
+const durableTaskPlanApp = {
+  agent: { session: { snapshotEvents: () => durableTaskPlanEvents } }
+}
+assert.deepEqual(TuiApp.prototype.taskPlanSnapshots.call(durableTaskPlanApp), {
+  seen: true,
+  available: true,
+  tasks: [
+    { content: 'Deploy', status: 'in_progress' },
+    { content: 'Verify', status: 'pending' }
+  ]
+}, 'The Harness todo/write snapshot must override the legacy run_code fallback')
+durableTaskPlanEvents.push({ seq: 3, type: 'todo/write', data: { todos: [{ content: 'Deploy', status: 'completed' }, { content: 'Verify', status: 'in_progress' }] } })
+assert.deepEqual(TuiApp.prototype.taskPlanSnapshots.call(durableTaskPlanApp).tasks, [
+  { content: 'Deploy', status: 'completed' },
+  { content: 'Verify', status: 'in_progress' }
+], 'A later todo/write snapshot must immediately replace task statuses')
 const cachedTaskPlanEvents = [
   { seq: 1, type: 'tool/call', data: { name: 'run_code', arguments: JSON.stringify({ code: "await tools.todo_write({ todos: [{ content: 'Cached', status: 'pending' }] })" }) } }
 ]
