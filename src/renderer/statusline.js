@@ -97,8 +97,8 @@ export function renderStatusRows(options) {
     ? Math.round((sessionContextTokens / usage.contextWindow) * 100)
     : 0
 
-  let barColor = ANSI.barFill ?? ANSI.contextFill ?? ANSI.teal ?? ANSI.bash
-  let percentColor = ANSI.barFill ?? ANSI.contextFill ?? ANSI.blueSoft ?? ANSI.teal
+  let barColor = ANSI.contextFill ?? ANSI.barFill ?? ANSI.teal ?? ANSI.bash
+  let percentColor = ANSI.contextFill ?? ANSI.barFill ?? ANSI.blueSoft ?? ANSI.teal
   let percentAlert = ''
   if (percent >= contextCriticalAt) {
     barColor = ANSI.contextCritical ?? ANSI.coral ?? '\x1b[38;5;167m'

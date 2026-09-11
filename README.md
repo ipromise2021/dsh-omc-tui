@@ -9,9 +9,12 @@
 
 **DeepSeek Harness 的终端原生 TUI**
 
+> **当前适配：DeepSeek Harness `v0.1.5-rc.1`（npm `latest`）**
+> **v0.2.15：任务状态实时更新、终端回执防乱码、工具输出层级优化与 Markdown 代码块呈现修复。**
+
 保留终端 Scrollback，提供自主决策视觉 Subagent、多模态图片直贴、行内审批、Plan/Jobs、模型选择和上下文状态栏。
 
-[架构与全功能实现](ARCHITECTURE.md) · [界面与设计说明](PRODUCT_SHOWCASE.md) · [rc.1 适配报告](DSH_V0.1.2_RC1_ADAPTATION.md) · [兼容性契约](HARNESS_COMPATIBILITY.md) · [变更日志](CHANGELOG.md)
+[架构与全功能实现](ARCHITECTURE.md) · [界面与设计说明](PRODUCT_SHOWCASE.md) · [兼容性契约](HARNESS_COMPATIBILITY.md) · [变更日志](CHANGELOG.md)
 
 </div>
 
@@ -23,20 +26,9 @@
 
 个人比较喜欢 Claude Code 终端的交互方式，项目参考了它的交互习惯，在终端中运行 DSH 的同时，完整保留了原生滚轮回看、文本划选与自由复制等功能特性。
 
-> 📌 **项目说明与动态**：
-> - **版本基准与适配**：插件依赖基线已提升至 DSH `v0.1.5-rc.1`。该版本将会话日志升级至 V3，并使用 `SessionHandle` 管理持久化生命周期；安装命令必须显式指定该预发布版本。
-> - **验证状态**：已完成 rc.1 源码契约核对、真实隔离 Profile 启动、`/status`、权限切换、单元测试和模块导入验证。真实 Provider 对话、图片/压缩链路与 Windows PTY 仍列为发布前扩展验证项。
-> - **持续维护**：功能会按需扩展，Bug 也会持续修复。欢迎使用、点 Star 和反馈问题。
+> 📌 **当前版本**：`v0.2.15` 面向 DSH `v0.1.5-rc.1`；已完成源码契约核对、隔离 Profile 启动、`/status`、权限切换、单元测试和模块导入验证。欢迎使用、点 Star 和反馈问题。
 
-## DSH `v0.1.2-rc.1` 适配记录
-
-`v0.1.2-rc.1` 是一次大规模预发布更新，覆盖 Session 按需事件读取、子代理双向通信与模型选择、图片后台压缩/上传、preset 健康诊断、会话日志尾部修复、PTC 命名以及 Web/Headless 体验优化。[查看官方发布说明](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.2-rc.1)
-
-本次修复了两个会直接影响 TUI 的契约变化：`Session.events` 被 `snapshotEvents()` / `eventAt()` / `seq` 取代，`permissionPresets.current(events)` 改为 `current(session)`。同时按 rc.1 官方 host 组合挂载 subagent 模型选择服务，并移除已不存在的 `tool-subagent-report` patch 项。
-
-完整上游差异、问题矩阵、代码映射、验证证据和后续风险见 [DSH v0.1.2-rc.1 适配与兼容性报告](DSH_V0.1.2_RC1_ADAPTATION.md)。
-
-## DSH `v0.1.5-rc.1` 适配记录
+## 当前 Harness 适配：DSH `v0.1.5-rc.1`
 
 `v0.1.5-rc.1` 将会话持久化升级为 V3/`SessionHandle`，移除插件环境中的 `ctx.agent`，并将系统 persona 配置拆分为 `personaPrefix` 与 `personaSuffix`。TUI 继续只通过 `ctx.agents.create/resume`、`dispose()`、`snapshotEvents()` 与 `sessionQuery` 使用官方生命周期；Profile patch 已迁移至 `personaPrefix`。
 

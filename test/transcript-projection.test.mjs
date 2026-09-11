@@ -130,6 +130,17 @@ for (const row of expandedRunCodeDoc.rows) {
   assert.ok(widthOf(visibleOf(row)) <= 80, `Expanded run_code row exceeds terminal width: "${visibleOf(row)}"`)
 }
 
+const fencedMarkdownDoc = projectTranscript([{
+  seq: 1,
+  type: 'assistant/message',
+  time: 1000,
+  data: { message: { content: '```sql\nSELECT * FROM deployments;\n```' } }
+}], 80)
+const fencedMarkdownText = visibleOf(fencedMarkdownDoc.rows.join('\n'))
+assert.match(fencedMarkdownText, /^  sql$/m, 'Fenced code should show its language label')
+assert.match(fencedMarkdownText, /^  SELECT \* FROM deployments;$/m, 'Fenced code should retain its indented body')
+assert.doesNotMatch(fencedMarkdownText, /```/, 'Fenced code delimiters must not leak into the transcript')
+
 // PTC wraps ordinary tools in run_code. Keep the wrapper available on expand,
 // but use the nested tool intent for the default activity summary.
 const ptcCode = `const status = await tools.bash({
@@ -162,6 +173,22 @@ assert.match(expandedPtcText, /Read\(src\/scheduler\.js\)/)
 assert.match(expandedPtcText, /Plan updated/)
 assert.match(expandedPtcText, /run_code \(javascript · 6 lines\)/)
 assert.match(expandedPtcText, /Kibana is green/)
+
+const indentedDiffEvents = [
+  { seq: 1, type: 'tool/call', time: 1000, data: { callId: 'diff-1', name: 'bash', arguments: JSON.stringify({ command: 'git diff' }) } },
+  { seq: 2, type: 'tool/result', time: 1200, data: { callId: 'diff-1', output: 'diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n-old\n+new' } }
+]
+const indentedDiffCollapsed = projectTranscript(indentedDiffEvents, 72)
+const indentedDiffDoc = projectTranscript(indentedDiffEvents, 72, {
+  expandedKeys: new Set([indentedDiffCollapsed.blocks.find((block) => block.kind === 'activity').key])
+})
+for (const row of indentedDiffDoc.rows) {
+  const visible = visibleOf(row)
+  if (/^(?:diff |--- |\+\+\+ |[-+]old|[-+]new)/.test(visible.trimStart())) {
+    assert.match(visible, /^  /, 'Expanded diff output must stay indented under its tool call')
+  }
+  assert.ok(widthOf(visible) <= 72, `Indented diff row exceeds terminal width: "${visible}"`)
+}
 
 const emptyPtcResultDoc = projectTranscript([
   { seq: 1, type: 'tool/call', time: 1000, data: { callId: 'ptc-empty', name: 'run_code', arguments: JSON.stringify({ code: "await tools.read({ path: 'a.js' })" }) } },

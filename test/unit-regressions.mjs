@@ -2260,7 +2260,7 @@ assert.match(hudText, /git:\(main\* ↑1\)/)
 assert.match(hudText, /48\.5 tok\/s/)
 assert.match(hudText, /⏱️ 2\.2s/)
 assert.match(hudText, /Context.*85k \/ 100k · 85% ⚠️ \| session in 12k · out 2\.5k/)
-assert.match(hudText, /\[░{14}\]/, 'Context meter uses one glyph for filled and remaining capacity')
+assert.match(hudText, /\[░{14}]/, 'Context meter uses one glyph for filled and remaining capacity')
 assert.match(hudText, /Read: index\.js/)
 assert.match(hudText, /Edit: statusline\.js/)
 
@@ -4837,7 +4837,7 @@ inertDispose()
   assert.match(statusLogOutput, /Runtime\nTUI\|/)
   assert.match(statusLogOutput, /Session\nDirectory\|/)
   assert.match(statusLogOutput, /Usage\nContext\|/)
-  assert.match(statusLogOutput, /TUI\|dsh-omc-tui v0\.2\.14/)
+  assert.match(statusLogOutput, /TUI\|dsh-omc-tui v0\.2\.15/)
   assert.ok(statusLogOutput.includes('0 / 100.0k tokens · 0%') || statusLogOutput.includes('0 / 100k tokens · 0%') || statusLogOutput.includes('0 tokens · 0%'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
 
   const structuredStatusRows = TuiApp.prototype.formatLogEntry.call({}, {

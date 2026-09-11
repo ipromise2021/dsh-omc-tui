@@ -260,8 +260,8 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
             detailRows.push(`${indent}${ANSI.coral}└ ✗ ${safe(event.data.error.code ?? 'error')} · ${shorten(detail, Math.max(20, contentWidth - 24))}${ANSI.reset}`)
             logicalLines.push(`error: ${detail}`)
           } else if (diffText || (/^diff |\n(---|\+\+\+)/.test(`\n${resultText}`) && /^[+-]/.test(resultText.split('\n').find((l) => l.startsWith('+') || l.startsWith('-')) ?? ''))) {
-            const diffLines = renderDiffLines(diffText || resultText, contentWidth, ANSI)
-            for (const line of diffLines) detailRows.push(line)
+            const diffLines = renderDiffLines(diffText || resultText, contentWidth - widthOf(indent), ANSI)
+            for (const line of diffLines) detailRows.push(`${indent}${line}`)
             logicalLines.push(diffText || resultText)
           } else if (resultText) {
             const resultLines = safe(resultText).split(/\r?\n/).filter((l) => l.trim().length > 0)

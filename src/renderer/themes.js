@@ -20,8 +20,8 @@ export const THEMES = {
     pink: '\x1b[38;5;213m',       // Bright lavender pink for active option #ff87ff
     bash: '\x1b[1;38;5;214m',     // Warm golden amber #ffaf00 (bold)
     bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds #626262
-    barFill: '\x1b[38;5;108m',    // Deeper sage green meter fill
-    contextFill: '\x1b[38;5;65m', // Muted green for normal context pressure
+    barFill: '\x1b[38;5;35m',     // Rich emerald green meter fill #00af5f
+    contextFill: '\x1b[38;5;35m', // Rich emerald green for normal context pressure #00af5f
     contextWarning: '\x1b[38;5;172m', // Deep amber for elevated context pressure
     contextCritical: '\x1b[38;5;167m', // Deep red for critical context pressure
     selectionBg: '\x1b[48;5;239m\x1b[38;5;255m',
@@ -47,7 +47,7 @@ export const THEMES = {
     pink: '\x1b[38;5;213m',       // Bright lavender pink
     bash: '\x1b[1;38;5;220m',     // Lighter golden amber (bold)
     bar: '\x1b[38;5;241m',        // Crisp visible track on dark backgrounds
-    barFill: '\x1b[38;5;80m',     // Lighter blue fill
+    barFill: '\x1b[38;5;31m',     // DeepSeek cyan-blue fill
     contextFill: '\x1b[38;5;31m',
     contextWarning: '\x1b[38;5;130m',
     contextCritical: '\x1b[38;5;124m',
@@ -73,7 +73,7 @@ export const THEMES = {
     coral: '\x1b[38;5;203m',
     bash: '\x1b[1;38;5;214m',     // Warm golden amber (bold)
     bar: '\x1b[38;5;238m',
-    barFill: '\x1b[38;5;249m',
+    barFill: '\x1b[38;5;246m',
     contextFill: '\x1b[38;5;246m',
     contextWarning: '\x1b[38;5;245m',
     contextCritical: '\x1b[1;37m',
@@ -110,7 +110,22 @@ export const THEMES = {
   }
 }
 
-export const defaultTheme = Object.hasOwn(THEMES, process.env.DSH_TUI_THEME) ? process.env.DSH_TUI_THEME : 'claude'
+export function detectTerminalTheme() {
+  if (process.env.DSH_TUI_THEME && Object.hasOwn(THEMES, process.env.DSH_TUI_THEME)) {
+    return process.env.DSH_TUI_THEME
+  }
+  const colorfgbg = process.env.COLORFGBG
+  if (colorfgbg) {
+    const parts = colorfgbg.trim().split(';')
+    const bg = Number.parseInt(parts[parts.length - 1], 10)
+    if (bg === 15 || bg === 7 || bg === 11 || bg === 14) {
+      return 'light'
+    }
+  }
+  return 'claude'
+}
+
+export const defaultTheme = detectTerminalTheme()
 
 export let ANSI = { reset: '\x1b[0m', bold: '\x1b[1m', ...THEMES[defaultTheme] }
 

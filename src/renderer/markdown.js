@@ -144,7 +144,7 @@ export function renderMarkdownDocument(text, contentWidth, base = '', ANSI = def
       if (i < rawLines.length) i++ // consume closing ```
 
       pushBlank()
-      pushRow(ANSI.dim, `  \`\`\`${lang}`)
+      pushRow(ANSI.dim, `  ${lang || 'code'}`)
       for (const cl of codeLines) {
         const clStart = appendLogicalSegment(cl)
         const { lines: wrappedLines, spans } = wrapWithSpans(cl, contentWidth - 4)
@@ -159,7 +159,6 @@ export function renderMarkdownDocument(text, contentWidth, base = '', ANSI = def
           })
         }
       }
-      pushRow(ANSI.dim, `  \`\`\``)
       pushBlank()
       continue
     }
