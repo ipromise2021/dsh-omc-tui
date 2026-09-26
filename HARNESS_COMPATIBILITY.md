@@ -8,13 +8,13 @@
 2. 业务写入走官方 API：不要由 TUI 直接篡改 session log、权限状态、模型状态或 Harness 配置文件。
 3. durable event 是可重放状态的依据：恢复会话时，应由事件重建 UI，而不是使用未持久化的内存缓存猜测状态。
 4. 可选服务须 capability-detect：服务未挂载时显示明确提示或关闭该入口，不能静默伪造结果。
-5. Harness 仍为 developer preview：依赖基线为 [`@deepseek-ai/dsh@0.1.5-rc.1`](https://www.npmjs.com/package/@deepseek-ai/dsh)。该版本的 V3 会话格式由 Harness 负责迁移，TUI 只经 `snapshotEvents()` 和 `sessionQuery` 投影；持久化生命周期由 `ctx.agents.create/resume()` 返回的 handle 管理。每次升级后，仍须复核 patch、注入服务、命令签名、事件 payload，并运行真实 Profile 的图片与 PTY 回归。
+5. Harness 仍为 developer preview：依赖基线为 [`@deepseek-ai/dsh@0.1.7-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)。Session V4 的迁移由 Harness 负责，TUI 只经 `snapshotEvents()` 和 `sessionQuery` 投影；工具失败兼容读取 `message.isError` 与 `error.reason`，持久化生命周期由 `ctx.agents.create/resume()` 返回的 handle 管理。每次升级后，仍须复核 patch、注入服务、命令签名、事件 payload，并运行真实 Profile 的图片与 PTY 回归。
 
 ## 已适配的 Harness 能力
 
 | TUI 功能 | Harness 适配 | 状态来源 / 写路径 |
 | --- | --- | --- |
-| 创建、恢复和提交对话 | `ctx.agents`、`ctx.sessions`、`sessionQuery` | `agents.create/resume`、`agent.followup`、durable `session/event`；读取优先使用 rc.1 `snapshotEvents()`，不直接持有 persistence service |
+| 创建、恢复和提交对话 | `ctx.agents`、`ctx.sessions`、`sessionQuery` | `agents.create/resume`、`agent.followup`、durable `session/event`；读取使用官方 `snapshotEvents()`，不直接持有 persistence service |
 | 流式输出、reasoning、工具调用、usage | `session/event`、`agent/status` | durable 消息/工具/usage 事件与 agent 状态 |
 | 模型与 effort | `ctx.llm`、`agentDefaultModel` | `inputModalities` 视觉能力、动态 reasoning efforts、request override、通过 `saveSelection()` 持久化完整默认模型与 effort 选择 |
 | Agent preset 与 plan/build | `agentPresets`、`planMode`、`subagentModelSelection` | preset mount/recompose 与 durable preset/plan 事件；Host 挂载官方 subagent model-selection settings 服务 |

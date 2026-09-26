@@ -1,5 +1,22 @@
 # 代码审查优化进度日志
 
+## 会话：2026-09-26
+
+### 阶段 36：DSH v0.1.7-rc.2 本地升级
+- **状态：** complete
+- 执行的操作：
+  - 记录用户对直接升级的授权；保留现有未提交的输入/视口改动，不纳入本次迁移范围。
+  - 启用文件化计划，下一步读取上游 tag 与本地依赖/patch 的精确差异。
+  - 确认新版 registry 保持 TUI 所用 preset API；确认 PTC runtime/workflow 已改为 `ptc-runtime` 与 `workflow-ptc`。
+  - 首轮完整测试发现升级补丁重复导入既有的 `toolCallId`，已定位为本地 `core/index.js` 再导出造成的 ESM 重名；合并导入后重跑验证。
+  - 将 TUI 设置从已移除的 `settings.register()` 迁移到 `Config` schema、SettingsForms 和 live Config 引用；修正 Schemastery 的 `natural()` 数值约束与 volatile `get()` 解引用。
+  - 新增 V4 tool failure 投影回归，并完成 `npm test`、`npm run verify`、`git diff --check`。
+  - 在隔离 `DSH_HOME` 安装最终本地 tarball；`--dump-config` 确认 registry/PTC/scoped standard preset，实际启动进入可输入会话界面（11 skills）。
+- 创建/修改的文件：
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
 ## 会话：2026-09-03
 
 ## 会话：2026-09-06

@@ -4,6 +4,7 @@ import { ANSI as defaultAnsi } from './themes.js'
 import { renderMarkdownRows, renderMarkdownDocument } from './markdown.js'
 import { renderDiffLines } from './diff.js'
 import { compactExpandedFileReferences, stripImageAttachmentNotices } from '../core/events.js'
+import { toolResultError, toolResultFailure } from '../core/session-events.js'
 import { groupActivitySpans, parseToolArgs, summarizeToolCall, toolResultText } from './activity.js'
 
 function metaDiffText(meta) {
@@ -255,9 +256,10 @@ export function projectTranscript(events = [], columns = 80, options = {}) {
           const resultText = toolResultText(event.data)
           const diffText = metaDiffText(event.data?.meta)
           const summary = metaSummary(event.data?.meta)
-          if (event.data?.error) {
-            const detail = event.data.error.message ?? resultText
-            detailRows.push(`${indent}${ANSI.coral}└ ✗ ${safe(event.data.error.code ?? 'error')} · ${shorten(detail, Math.max(20, contentWidth - 24))}${ANSI.reset}`)
+          if (toolResultFailure(event.data)) {
+            const failure = toolResultError(event.data)
+            const detail = failure.detail ?? resultText ?? 'failed'
+            detailRows.push(`${indent}${ANSI.coral}└ ✗ ${safe(failure.code)} · ${shorten(detail, Math.max(20, contentWidth - 24))}${ANSI.reset}`)
             logicalLines.push(`error: ${detail}`)
           } else if (diffText || (/^diff |\n(---|\+\+\+)/.test(`\n${resultText}`) && /^[+-]/.test(resultText.split('\n').find((l) => l.startsWith('+') || l.startsWith('-')) ?? ''))) {
             const diffLines = renderDiffLines(diffText || resultText, contentWidth - widthOf(indent), ANSI)

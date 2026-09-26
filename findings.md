@@ -1,5 +1,16 @@
 # 代码审查发现与跟踪
 
+## DSH v0.1.7-rc.2 升级（2026-09-26）
+
+- 用户已授权将本地 TUI 直接迁移至 `@deepseek-ai/dsh@0.1.7-rc.2`，不再维持 `v0.1.5-rc.1` 运行时基线。
+- 已知迁移边界：旧 `dsh-agent-presets`/worker-thread runtime 需要替换为新版 preset registry 与 PTC runtime；Session V4 tool result 需要同时识别 `message.isError` 和 `error.reason`。
+- 必须在隔离 `DSH_HOME` 中完成实际 Profile 安装与启动验证，不能仅以本地 mock/unit test 声称兼容。
+- 上游 tag 的 base layer 已提供 `ptc-runtime` (`@deepseek-ai/dsh-ptc-runtime-node`) 和 `workflow-ptc` (`@deepseek-ai/dsh-workflow-ptc`)；TUI patch 只需禁用 host 层的 `workflow-ptc`，由所选 preset 再挂载它。
+- 新 `@deepseek-ai/dsh-agent-preset-registry` 保留 `defaultId`、`list()`、`mount()`、`composedPreset()` 与 `recompose()`，因此 `src/index.js` 的预设选择逻辑可不改接口，仅需替换 Host patch 与依赖。
+- TUI 仍有旧 V3 error 投影假设：`src/renderer/activity.js`、`src/renderer/transcript.js` 和 `src/index.js` 主要检查 `data.error`；需要统一兼容 `data.message.isError` / `data.error.reason`。
+- `ctx.settings.register()` 已由 SettingsForms/Config schema 取代；volatile 配置项在运行时是 `get()` 引用，TUI 必须先解引用再用于渲染和 skill override。
+- 完整验证已通过：隔离 `DSH_HOME` 的 `--dump-config` 解析出 registry、PTC 与 scoped standard preset；实际 TUI 进入可输入的会话界面并加载 11 个 skills。
+
 ## 终端回执泄漏为输入框乱码（2026-09-11）
 
 - **现象：** 终端切到后台再切回、窗口 resize、系统休眠唤醒或外部编辑器返回后，输入框偶尔多出 `?1;2c`、`?2004;1$y`、`11;rgb:...` 之类的可见乱码。
@@ -1248,4 +1259,3 @@
 - 新增回归：danger-guard 15 条绕过用例 + 5 条对照用例；`handleAssistantChunk` 三类增量；凭据位置参数形状；discovery 位置参数/数组采纳/回退隔离；rows/rowSpans 三条不变式；浏览器 danger 工具审批；会话切换生命周期复位/单飞/在途消息；OSC 1337 ignore 状态；wrap 线性度与 emoji 宽度；`/context` activeTokens；provider 密钥圆点；vision initiator fail-closed；软换行分行。
 - 独立复核证据：真实 v3 会话日志解压（`assistant/chunk` 计数 0）、`checkDangerCommand` 直调 24 例、selection 复现（修复前后 `selected` 对比）、`wrap()` 基准、`npm pack --dry-run`（65 文件、`.agents/skills` 随包发布）。
 - 未覆盖：PTY 端到端套件（fixture 缺 `profiles/tui`）、`statusline.js`/`themes.js`/`welcome.js` 未深读、vision sidecar 无真实 provider 端到端验证。
-

@@ -1,5 +1,5 @@
 import { safe, shorten, formatDurationMs, textOf } from './ansi.js'
-import { toolCallId } from '../core/session-events.js'
+import { toolCallId, toolResultFailure } from '../core/session-events.js'
 
 export function isToolEvent(type) {
   return type === 'tool/call' ||
@@ -238,7 +238,7 @@ export function computeActivitySummary(span) {
 
   let errorCount = 0
   for (const res of results) {
-    if (res.data?.error || res.data?.isError) errorCount += 1
+    if (toolResultFailure(res.data)) errorCount += 1
   }
   for (const h of span.hooks || []) {
     if (h.type === 'hook/result' && h.data?.decision === 'block') errorCount += 1

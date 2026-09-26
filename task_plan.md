@@ -4,7 +4,14 @@
 完成 `v0.2.7` 的版本固化、验证、Git/npm/GitHub 发布，并保留历史审查与 rc.2 兼容验证记录。
 
 ## 当前阶段
-阶段 35（v0.2.13 正式发布，完成）
+阶段 36（DSH v0.1.7-rc.2 本地升级，已完成）
+
+### 阶段 36：DSH v0.1.7-rc.2 本地升级
+- [x] 固化上游 v0.1.7-rc.2 的 package、Cordis patch 与事件契约
+- [x] 迁移插件依赖、preset/PTC 配置及 V4 工具结果投影
+- [x] 补充兼容回归测试与更新兼容性文档
+- [x] 在隔离 DSH Home 安装插件并执行真实启动验证
+- **状态：** complete
 
 ## 各阶段
 
@@ -315,6 +322,7 @@
 | PTY 测试缺少 `DSH_HOME` 或 `DSH_TEST_FIXTURE_HOME` | 1 | 记录为环境阻塞；准备 Harness fixture 后补跑 |
 | 首次同步阶段 14 记录时补丁上下文格式错误 | 1 | 拆分为标准多文件 patch 后成功写入 |
 | 第二次同步阶段 14 记录时多文件 patch hunk 格式错误 | 1 | 分为两个独立 apply_patch 调用后写入 |
+| v0.1.7 V4 适配首轮测试中 `toolCallId` ESM 重复声明 | 1 | 保留 `core/index.js` 的既有导入，仅从 session-events 新增 V4 error helpers。 |
 | 第三次同步阶段 14 记录时多文件 patch hunk 格式错误 | 1 | 后续固定使用单文件独立 patch |
 | 阶段 25 首次测试仍按旧的 7 行列表输出预算断言 `log 1` | 1 | 按新容量契约更新为 5 行预算，验证首行 `log 3` 且末行 `log 7` |
 | 阶段 25 取消排序测试桩缺少 `orderJobEntries` | 1 | 为测试对象绑定真实实例方法后重跑 |

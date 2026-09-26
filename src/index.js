@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import z from '@deepseek-ai/schemastery'
 import { spawn, spawnSync } from 'node:child_process'
 import { constants, existsSync, readdirSync, readFileSync } from 'node:fs'
 import { access, appendFile, mkdir, readdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises'
@@ -9,7 +10,7 @@ import { ImageParser, formatImageBytes, pngDimensions, jpegDimensions, imageDime
 import { registerVisionRouter } from './vision-router.js'
 import { registerBrowserLease } from './browser-lease.js'
 import { createDangerGuard } from './core/danger-guard.js'
-import { currentPermissionPreset, sessionEvents } from './core/session-events.js'
+import { currentPermissionPreset, sessionEvents, toolResultError, toolResultFailure } from './core/session-events.js'
 import {
   THEMES,
   defaultTheme,
@@ -18,7 +19,6 @@ import {
   STATUSLINE_MODES,
   CONTEXT_DISPLAY_MODES,
   DEFAULT_DISABLED_SKILLS,
-  tuiSettingsSchema,
   activityWords,
   idleWords,
   explorationWords,
@@ -55,6 +55,34 @@ import {
 
 export const name = 'dsh-omc-tui'
 export const inject = ['agentDefaultModel', 'agentPresets', 'agents', 'permissionPresets', 'commands', 'sessionQuery', 'settings', 'systemPrompt', 'tools']
+
+// DSH v0.1.7 derives live settings from each Loader entry's Config schema.
+// Mark fields volatile so SettingsForms can persist them without remounting the TUI.
+export const Config = z.object({
+  theme: z.union(Object.keys(THEMES)).default(defaultTheme).volatile(),
+  statusline: z.union(STATUSLINE_MODES).default('detailed').volatile(),
+  contextMode: z.union(CONTEXT_DISPLAY_MODES).default('both').volatile(),
+  contextWarnAt: z.natural().min(1).max(99).default(60).volatile(),
+  contextCriticalAt: z.natural().min(2).max(100).default(80).volatile(),
+  visionProvider: z.string().min(1).volatile(),
+  visionModel: z.string().min(1).volatile(),
+  persistHistory: z.boolean().default(true).volatile(),
+  importSystemShellHistory: z.boolean().default(false).volatile(),
+  hudGit: z.boolean().default(true).volatile(),
+  hudSpeed: z.boolean().default(true).volatile(),
+  hudTools: z.boolean().default(true).volatile(),
+  autoCompact: z.boolean().default(true).volatile(),
+  autoRecap: z.boolean().default(true).volatile(),
+  promptSuggestions: z.boolean().default(false).volatile(),
+  disabledSkills: z.array(z.string().pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)).default([...DEFAULT_DISABLED_SKILLS]).volatile()
+})
+
+function resolveTuiConfig(config) {
+  return Object.fromEntries(Object.entries(config ?? {}).map(([key, value]) => [
+    key,
+    typeof value?.get === 'function' ? value.get() : value
+  ]))
+}
 
 function isSubagentSession(record) {
   const sessionId = record?.header?.id ?? ''
@@ -356,8 +384,9 @@ const PRESET_PROVIDERS = [
 // ── the app ──────────────────────────────────────────────────────────────
 
 export class TuiApp {
-  constructor(ctx) {
+  constructor(ctx, config) {
     this.ctx = ctx
+    this.config = config
     this.agent = undefined
     this.handle = undefined
 
@@ -563,6 +592,22 @@ export class TuiApp {
   get attachmentsService() { return this.ctx.get('attachments') }
   get llmService() { return this.ctx.get('llm') }
   get sessionsService() { return this.ctx.get('sessions') }
+
+  settingsNamespace(ns) {
+    const described = this.ctx.settings?.describe?.({})
+    const namespaces = Array.isArray(described)
+      ? described
+      : described?.result?.value?.namespaces ?? []
+    return namespaces.find((entry) => entry?.ns === ns)
+  }
+
+  async mutateSettings(ns, ops) {
+    const mutate = this.ctx.settings?.mutate
+    if (typeof mutate !== 'function') throw new Error('settings service is unavailable')
+    return mutate.length >= 2
+      ? mutate.call(this.ctx.settings, ns, ops)
+      : mutate.call(this.ctx.settings, { ns, ops })
+  }
 
   async loadSystemEnv() {
     const home = process.env.HOME || homedir() || ''
@@ -819,10 +864,15 @@ export class TuiApp {
   }
 
   installSettings() {
-    const scope = this.ctx.settings.register('dsh-omc-tui', tuiSettingsSchema, { applies: 'live' })
+    const scope = {
+      get: () => this.settingsNamespace('tui-runner')?.value ?? resolveTuiConfig(this.config),
+      update: (next) => this.ctx.settings.update('tui-runner', next)
+    }
     this.settingsScope = scope
     this.applySettings(scope.get())
-    this.disposers.push(scope.watch((next) => this.applySettings(next)))
+    this.disposers.push(this.ctx.on('settings/document-updated', (ns) => {
+      if (ns === 'tui-runner') this.applySettings(scope.get())
+    }))
   }
 
   applySettings(next) {
@@ -1735,7 +1785,7 @@ export class TuiApp {
           }
           toolName ??= this.streaming.tool?.name
           this.streaming.tool = undefined
-          this.message = event.data.error ? `tool error · ${event.data.error.code}` : 'tool complete'
+          this.message = toolResultFailure(event.data) ? `tool error · ${toolResultError(event.data).code}` : 'tool complete'
           void this.refreshGitStatus({ force: this.toolMayChangeWorkspace(toolName) })
         }
         break
@@ -3855,8 +3905,7 @@ export class TuiApp {
       }
       try {
         if (this.ctx?.settings?.describe) {
-          const desc = await this.ctx.settings.describe({})
-          const piAiNs = desc?.result?.value?.namespaces?.find((n) => n.ns === 'llm-pi-ai')
+          const piAiNs = this.settingsNamespace('llm-pi-ai')
           if (piAiNs?.value?.providers) {
             for (const [routeId, prof] of Object.entries(piAiNs.value.providers)) {
               if (Array.isArray(prof.models)) {
@@ -4073,8 +4122,7 @@ export class TuiApp {
       let customProvidersMap = {}
       try {
         if (this.ctx.settings?.describe) {
-          const desc = await this.ctx.settings.describe({})
-          const piAiNs = desc?.result?.value?.namespaces?.find((n) => n.ns === 'llm-pi-ai')
+          const piAiNs = this.settingsNamespace('llm-pi-ai')
           if (piAiNs?.value?.providers) {
             customProvidersMap = piAiNs.value.providers
           }
@@ -4262,8 +4310,7 @@ export class TuiApp {
       let previousProfile = undefined
       if (this.ctx.settings?.describe) {
         try {
-          const desc = await this.ctx.settings.describe({})
-          const piAiNs = desc?.result?.value?.namespaces?.find((n) => n.ns === 'llm-pi-ai')
+          const piAiNs = this.settingsNamespace('llm-pi-ai')
           if (piAiNs?.value?.providers?.[id]) {
             previousProfile = piAiNs.value.providers[id]
           }
@@ -4318,10 +4365,7 @@ export class TuiApp {
       }
 
       if (this.ctx.settings?.mutate) {
-        await this.ctx.settings.mutate({
-          ns: 'llm-pi-ai',
-          ops: [{ op: 'set', path: ['providers', id], value: profile }]
-        })
+        await TuiApp.prototype.mutateSettings.call(this, 'llm-pi-ai', [{ op: 'set', path: ['providers', id], value: profile }])
       }
 
       if (isNewKey) {
@@ -4334,10 +4378,7 @@ export class TuiApp {
             const rollbackOp = previousProfile
               ? { op: 'set', path: ['providers', id], value: previousProfile }
               : { op: 'unset', path: ['providers', id] }
-            await this.ctx.settings.mutate({
-              ns: 'llm-pi-ai',
-              ops: [rollbackOp]
-            }).catch(() => {})
+            await TuiApp.prototype.mutateSettings.call(this, 'llm-pi-ai', [rollbackOp]).catch(() => {})
           }
           throw credErr
         }
@@ -4360,10 +4401,7 @@ export class TuiApp {
 
     try {
       if (this.ctx.settings?.mutate) {
-        await this.ctx.settings.mutate({
-          ns: 'llm-pi-ai',
-          ops: [{ op: 'unset', path: ['providers', id] }]
-        })
+        await TuiApp.prototype.mutateSettings.call(this, 'llm-pi-ai', [{ op: 'unset', path: ['providers', id] }])
       }
       const keyRef = `${id.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`
       if (this.ctx.get('credentials')?.unset) {
@@ -5718,7 +5756,7 @@ export class TuiApp {
             const resultId = toolCallId(event.data)
             return callId === undefined || resultId === undefined || resultId === callId
           })
-          const isError = result && result.data?.error
+          const isError = result && toolResultFailure(result.data)
           const isPending = !result && this.active
           const icon = isError ? '!' : (isPending ? '◐' : '✓')
 
@@ -8479,7 +8517,10 @@ export class TuiApp {
 
 // ── plugin entry ─────────────────────────────────────────────────────────
 
-export function apply(ctx) {
+export function apply(ctx, config) {
+  ctx.inject(['settings'], (child) => {
+    child.effect(() => child.settings.configure({ auto: false }, ctx.fiber))
+  })
   ctx.systemPrompt?.section?.({
     name: 'tui-execution-discipline',
     order: 109,
@@ -8491,7 +8532,7 @@ export function apply(ctx) {
     text: 'Use run_in_background: true only for independent work expected to outlive the next reasoning step: installs, builds, full test suites, dev servers, watchers, and long migrations. Keep a Bash call foreground when its output is needed before the next action. After backgrounding, continue useful work; use job_output only when its result is needed. Do not emulate backgrounding with nohup or a trailing &. The user manages jobs through /jobs.'
   })
   const skillDisposers = registerBundledSkills(ctx)
-  const app = new TuiApp(ctx)
+  const app = new TuiApp(ctx, config)
   const removeVisionRouter = registerVisionRouter(app)
   const removeBrowserLease = registerBrowserLease(ctx)
   void app.start().catch(async (error) => {

@@ -130,6 +130,33 @@ for (const row of expandedRunCodeDoc.rows) {
   assert.ok(widthOf(visibleOf(row)) <= 80, `Expanded run_code row exceeds terminal width: "${visibleOf(row)}"`)
 }
 
+// DSH V4 stores a first-class role=tool message. Its failure flag is no
+// longer event-data.isError, and diagnostics use error.reason.
+const v4ToolErrorEvents = [
+  { seq: 1, type: 'tool/call', time: 1000, data: { callId: 'v4-call', name: 'read_file', arguments: JSON.stringify({ path: 'secret.txt' }) } },
+  {
+    seq: 2,
+    type: 'tool/result',
+    time: 1200,
+    data: {
+      message: {
+        id: 'v4-result',
+        role: 'tool',
+        source: { kind: 'tool', callId: 'v4-call' },
+        toolCallId: 'v4-call',
+        isError: true,
+        content: [{ type: 'text', text: 'access denied' }]
+      },
+      error: { name: 'PermissionError', code: 'EACCES', reason: 'workspace policy blocked secret.txt' }
+    }
+  }
+]
+const v4ToolErrorBase = projectTranscript(v4ToolErrorEvents, 80)
+const v4ToolErrorBlock = v4ToolErrorBase.blocks.find((block) => block.kind === 'activity')
+assert.match(v4ToolErrorBlock.summary, /✗ 1 error/, 'V4 message.isError marks the activity as failed')
+const v4ToolErrorDoc = projectTranscript(v4ToolErrorEvents, 80, { expandedKeys: new Set([v4ToolErrorBlock.key]) })
+assert.match(visibleOf(v4ToolErrorDoc.rows.join('\n')), /EACCES · workspace policy blocked secret\.txt/)
+
 const fencedMarkdownDoc = projectTranscript([{
   seq: 1,
   type: 'assistant/message',

@@ -48,7 +48,7 @@
   disabled: true
 - id: tool-subagent-fork
   disabled: true
-- id: workflow-worker-thread
+- id: workflow-ptc
   disabled: true
 - id: tool-workflow
   disabled: true
@@ -66,18 +66,10 @@
     - id: subagent-model-selection-settings
       name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
 
-    - id: agent-presets
-      name: '@deepseek-ai/dsh-agent-presets'
+    - id: agent-preset-registry
+      name: '@deepseek-ai/dsh-agent-preset-registry'
       config:
         default: standard
-
-    # PTC mode is a core execution capability, also used by the headless bundle.
-    - id: code-runtime
-      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
-
-    # Model-facing question tool; the TUI runner registers the UI provider.
-    - id: user-questions-tool
-      name: '@deepseek-ai/dsh-tool-ask-user'
 
     # The TUI starts a dedicated Chrome instance only when these tools run.
     - id: mcp-chrome-devtools

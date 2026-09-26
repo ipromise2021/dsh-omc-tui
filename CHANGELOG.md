@@ -6,6 +6,7 @@
 
 ## v0.2.15 · 待发布
 
+- **Harness v0.1.7-rc.2 兼容**：依赖与 Profile patch 迁移至 preset registry、scoped standard preset 和 PTC runtime；TUI 设置迁移至 Config/SettingsForms；工具失败投影兼容 Session V4 的 `message.isError` 与 `error.reason`。隔离 `DSH_HOME` 中完成 `--dump-config` 和真实 TUI 启动验证。
 - **命令与附件**：修复 `/plan`、`/goal` 的图片附件契约；图片会以官方 `image` 形状交给 Harness，命令失败时回填待发送图片。
 - **转写与交互**：修复 `/btw`、`/compact` 本地输出在备用屏幕中的投影，工具结果可下钻读取嵌套文本与结构化文件/差异元数据；Esc 优先关闭浮层；输入文本非空时，行首 Backspace 可逐张移除待发送图片。
 - **性能与视觉**：折叠活动卡片延迟构建明细，durable 事件突发合并到下一帧重投影；Context 状态条使用单一 `░` 字形并以主题色区分已用与剩余容量。
