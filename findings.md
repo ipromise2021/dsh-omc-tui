@@ -1,5 +1,11 @@
 # 代码审查发现与跟踪
 
+## 四种 Agent preset 对齐（2026-09-27）
+
+- `/preset` 使用 Harness 的 `agentPresets.list()`，并未在 TUI 过滤；原 bundle 仅声明 `standard`，因此面板只有一项。
+- 已按 DSH v0.1.7-rc.2 官方定义补入 `ptc`、`minimal`、`cordis`，保留各自工具组成；Cordis preset 还需 Host 级 `cordis-host-runner` 与 `cordis-inspect-providers`，否则 `list()` 等待缺失服务而无法打开面板。
+- 隔离 Profile 中的实际 TUI 显示 `4 available`，依次切换四种 preset 均成功；mock PTY 的 `/preset` 回归通过。整套 PTY 在 `pty-features.py` 的模型 variant picker 断言处停止。
+
 ## DSH v0.1.7-rc.2 升级（2026-09-26）
 
 - 用户已授权将本地 TUI 直接迁移至 `@deepseek-ai/dsh@0.1.7-rc.2`，不再维持 `v0.1.5-rc.1` 运行时基线。

@@ -74,7 +74,9 @@ snapshot("narrow-80x24")
 # Blank-session agent preset switch uses the official roster/recompose path.
 send("/preset\r")
 assert wait_for("AGENT PRESETS", 8), "preset picker did not open"
-assert wait_for("standard", 4), "standard preset missing"
+assert wait_for("4 available", 4), "preset picker does not show all four DSH presets"
+for preset in ("standard", "ptc", "minimal", "cordis"):
+    assert wait_for(preset, 4), f"{preset} preset missing"
 snapshot("preset-picker")
 send("\x1b[B")
 drain(0.4)

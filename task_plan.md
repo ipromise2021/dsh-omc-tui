@@ -27,6 +27,13 @@
 - [x] 运行完整本地验证并给出明确发布建议
 - **状态：** complete
 
+### 阶段 39：对齐 DSH 的四种 Agent preset
+- [x] 核对 TUI 列表来源与 DSH v0.1.7-rc.2 官方 preset 定义
+- [x] 将缺失的 ptc、minimal、cordis 声明加入 TUI bundle
+- [x] 在隔离 DSH Profile 中验证四项注册与切换
+- [x] 运行回归、模块及打包检查
+- **状态：** complete
+
 ## 各阶段
 
 ### 阶段 1：确认审查基线

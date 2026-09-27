@@ -62,6 +62,13 @@
   disabled: true
 
 - insert:
+    # Cordis preset tools read the official Host inspection service.
+    - id: cordis-host-runner
+      name: '@deepseek-ai/dsh-cordis-host-runner'
+
+    - id: cordis-inspect-providers
+      name: '@deepseek-ai/dsh-tool-cordis/host'
+
     # Shipped rc.1 presets opt into the Host-owned subagent model-selection policy.
     - id: subagent-model-selection-settings
       name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'

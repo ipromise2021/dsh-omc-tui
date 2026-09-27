@@ -37,7 +37,7 @@ DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支
 | 范围 | 结果 | 验收 |
 | :--- | :--- | :--- |
 | Session 与权限 | 工具失败读取兼容 V3/V4 event payload，权限继续走官方 Session API | 单元回归与真实 profile 启动通过 |
-| Profile 与 preset | 迁移至 preset registry、标准 scoped preset 与 PTC runtime | `0.1.7-rc.2 --dump-config`、standard preset 启动通过 |
+| Profile 与 preset | 迁移至 preset registry，支持 standard、ptc、minimal、cordis 四种 scoped preset | `0.1.7-rc.2 --dump-config`、四种 preset 注册与切换通过 |
 | 依赖 | DSH peer dependency 对齐 `^0.1.7-rc.2` | 预发布依赖可被正确解析 |
 | 既有能力 | Agent、Jobs、附件、命令与模型能力调用签名保持兼容 | 源码级比对通过；真实 Provider/图片 E2E 待补 |
 

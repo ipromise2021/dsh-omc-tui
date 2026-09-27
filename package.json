@@ -59,7 +59,10 @@
     "bundle": {
       "patch": [
         "./cordis.patch.yml",
-        "./presets/standard.patch.yml"
+        "./presets/standard.patch.yml",
+        "./presets/ptc.patch.yml",
+        "./presets/minimal.patch.yml",
+        "./presets/cordis.patch.yml"
       ]
     }
   },

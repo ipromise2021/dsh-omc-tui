@@ -1,5 +1,13 @@
 # 代码审查优化进度日志
 
+## 会话：2026-09-27（Agent preset）
+
+### 阶段 39：对齐 DSH 的四种 Agent preset
+- **状态：** complete
+- Bundle 增加官方 `ptc`、`minimal`、`cordis` 定义；为 Cordis 模式补齐官方 Host inspection 服务；PTY 回归增加四项列表断言。
+- 隔离 `DSH_HOME` 的 `--dump-config` 有四项声明，真实 TUI 面板显示 `4 available`，四项逐一切换成功且正常退出；单独 `pty-resume.py` 通过。
+- `npm test`、`npm run verify`、`git diff --check`、`npm pack --dry-run` 通过；完整 PTY 套件在现有 `pty-features.py` 的模型 variant picker 断言处失败，preset 专项用例通过。
+
 ## 会话：2026-09-26
 
 ### 阶段 36：DSH v0.1.7-rc.2 本地升级
