@@ -134,6 +134,7 @@ capturedOutput = ''
 screen.reassertInputModes({ enterAltScreen: true })
 assert.ok(capturedOutput.includes('\x1b[?1049h'), 'Terminal recovery must re-enter alt screen when requested')
 assert.ok(capturedOutput.includes('\x1b[?1006h'), 'Terminal recovery must re-enable SGR mouse input')
+assert.ok(capturedOutput.includes('\x1b[?1015l'), 'Terminal recovery must disable urxvt mouse input')
 assert.ok(capturedOutput.includes('\x1b[?2004h'), 'Terminal recovery must re-enable bracketed paste')
 
 capturedOutput = ''

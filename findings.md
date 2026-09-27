@@ -1259,3 +1259,17 @@
 - 新增回归：danger-guard 15 条绕过用例 + 5 条对照用例；`handleAssistantChunk` 三类增量；凭据位置参数形状；discovery 位置参数/数组采纳/回退隔离；rows/rowSpans 三条不变式；浏览器 danger 工具审批；会话切换生命周期复位/单飞/在途消息；OSC 1337 ignore 状态；wrap 线性度与 emoji 宽度；`/context` activeTokens；provider 密钥圆点；vision initiator fail-closed；软换行分行。
 - 独立复核证据：真实 v3 会话日志解压（`assistant/chunk` 计数 0）、`checkDangerCommand` 直调 24 例、selection 复现（修复前后 `selected` 对比）、`wrap()` 基准、`npm pack --dry-run`（65 文件、`.agents/skills` 随包发布）。
 - 未覆盖：PTY 端到端套件（fixture 缺 `profiles/tui`）、`statusline.js`/`themes.js`/`welcome.js` 未深读、vision sidecar 无真实 provider 端到端验证。
+
+### 2026-09-27：终端输入与前台 Shell 审查
+
+- 现有未提交改动已覆盖 urxvt 1015 鼠标报告及部分待机后延迟 SGR 帧；本轮保留该改动并补上方向键、带修饰键方向键和分片数字 CSI 的恢复路径。复现证据：`ESC` 与 `[A` 间隔 200 ms 时，修复前路由输出 `ESC`、`[`、`A` 三个 token。
+- `handleInput()` 原本按每个 stdin 块独立 `toString('utf8')`，跨块的中文 UTF-8 字节会变成替代字符；改为 `StringDecoder` 流式解码。
+- `runBash()` 原本在 60 秒后向本地进程组发送 SIGKILL；现改为转入既有 Jobs 管理路径继续运行。`Ctrl+B` 与自动转换共用同一个切换方法。
+- 终端健康检查现检测事件循环超过 30 秒未运行的休眠间隔，并重新进入备用屏幕、重申输入模式和全屏重绘。
+
+### 2026-09-27：长待机输入无响应复核
+
+- 复现了上一轮遗漏的冻结路径：括号粘贴 `CSI 200~` 缺失结束标记时，`InputRouter.inPaste` 长期保持 true，之后键盘与方向键全部被吞。先加入失败用例，再加 30 秒无输入及 5 分钟总时长上限；过期时丢弃残缺粘贴并正常处理触发恢复的第一批输入。
+- 复现了图片传输等待态的首键丢失：`ImageParser.feed()` 在 30 秒超时后仅返回错误，未把当前输入交回路由。修复后超时返回 remainder，`TuiApp.handleInput()` 将其重新处理。
+- `handleInput()` 在 raw mode 丢失时曾直接调用 `setRawMode(true)`；现复用已有容错恢复路径，避免该操作抛错后中断键盘输入处理。
+- 限制：本地没有可用的 `profiles/tui` PTY fixture，也尚未在用户实际终端中完成多小时休眠/唤醒复现，因此当前不建议直接发布正式版本。

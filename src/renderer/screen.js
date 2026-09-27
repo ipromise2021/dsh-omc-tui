@@ -6,7 +6,7 @@ export const TERM_CODES = {
   EXIT_ALT_SCREEN: '\x1b[?1049l',
   ENABLE_BRACKETED_PASTE: '\x1b[?2004h',
   DISABLE_BRACKETED_PASTE: '\x1b[?2004l',
-  ENABLE_MOUSE_SGR: '\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1007l',
+  ENABLE_MOUSE_SGR: '\x1b[?1000h\x1b[?1002h\x1b[?1015l\x1b[?1006h\x1b[?1007l',
   DISABLE_MOUSE_SGR: '\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1007h',
   SHOW_CURSOR: '\x1b[?25h',
   HIDE_CURSOR: '\x1b[?25l',

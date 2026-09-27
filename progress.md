@@ -390,3 +390,16 @@
 - 续验确认 rc.1 的 `userQuestions` 改为 Agent-scoped `user-questions/request` waterfall；TUI 已优先在 `agent.ctx` 订阅该事件、保留旧 `registerProvider()` 后备，PTY 问答面板已进入选择流程。模块导入与 `node test/unit-regressions.mjs` 通过；interaction 余下菜单断言仍在按 rc.1 布局收口，尚未创建 `v0.2.10` 标签。
 - 发布复审修复：`userQuestions` 现优先保留旧 `registerProvider()`，仅在其缺失时订阅 rc.1 Agent-scoped waterfall；mock adapter 对文件/图片改为从最近携带对应内容块的消息读取，兼容 rc.1 context injection。全新复制 fixture 的六项 PTY 全部 `exit code: 0`；待最终测试、提交并创建 `v0.2.10`。
 - `v0.2.10` 发布预检通过：`npm test`、`npm run verify`、`git diff --check`、隔离 fixture 六项 PTY 及 `npm pack --dry-run` 均成功；包内版本和 `/status` 回归断言已同步为 `0.2.10`。npm 发布尚未执行。
+
+### 阶段 37：终端输入与长 Shell 任务稳定性
+- **状态：** complete
+- 已确认并保留工作区原有鼠标、屏幕模式及测试改动。
+- 补充延迟方向键、urxvt 鼠标报告、跨块 UTF-8 输入回归；将 `!` Shell 60 秒强杀改为自动后台继续运行，并用真实短命令验证输出仍可通过 Jobs 读取。
+- 完成休眠间隔的终端模式恢复与全屏重绘。最终 `npm test`、`npm run verify`、`git diff --check` 均通过；PTY fixture 未配置，未运行 PTY 套件。
+
+### 阶段 38：长待机输入无响应复核与发布判断
+- **状态：** complete
+- 用户追问后重新审视长期保持的输入状态，明确上一轮未覆盖真实长待机与输入冻结，不建议直接正式发布。
+- 先用 48 小时模拟状态复现残缺括号粘贴吞键，再修复空闲过期与总时长上限；用 6 分钟模拟持续活动验证鼠标点击可恢复。
+- 先复现未完成图片传输超时吞掉首键，再修复当前输入重新路由；raw mode 丢失时改用容错恢复入口。
+- 修复后 `npm test`、`npm run verify`、`git diff --check` 全部通过。PTY fixture 缺失，真实终端跨数小时睡眠/唤醒验证仍未完成；正式发布建议保持“暂缓”。

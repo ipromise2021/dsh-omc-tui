@@ -58,6 +58,18 @@ export function parseSgrMouse(sequence) {
 }
 
 /**
+ * urxvt 1015 mouse protocol: CSI Cb;Cx;CyM.
+ * Its button code is offset by 32, unlike SGR 1006's `<Cb` form.
+ */
+export function parseUrxvtMouse(sequence) {
+  const match = sequence.match(/^\x1b\[(\d+);(\d+);(\d+)M$/)
+  if (!match) return null
+  const cb = Number.parseInt(match[1], 10) - 32
+  if (cb < 0) return null
+  return parseSgrMouse(`\x1b[<${cb};${match[2]};${match[3]}M`)
+}
+
+/**
  * X10 / Standard mouse protocol parser (\x1b[M Cb Cx Cy)
  */
 export function parseX10Mouse(sequence) {

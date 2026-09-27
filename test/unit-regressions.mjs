@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { TuiApp, registerTuiSkillOverrides, registerBundledSkills, repeatedActionIntent, withTimeout, resolveModelVisionSupport } from '../src/index.js'
 import { registerVisionRouter, runVisionRoute } from '../src/vision-router.js'
 import { ImageParser, pngDimensions, jpegDimensions, imageDimensions, MAX_SAFE_IMAGE_PIXELS, downscaleImageBuffer } from '../src/image-protocol.js'
@@ -641,6 +642,33 @@ TuiApp.prototype.recoverTerminalInputModes.call(terminalRecoveryApp, { reassertM
 assert.equal(recoveredInputModeCalls, 1, 'Lightweight health checks must not rewrite terminal modes when no refresh is due')
 TuiApp.prototype.restoreTerminalInputModes.call(terminalRecoveryApp)
 assert.equal(restoredInputModes, true, 'Emergency cleanup must restore terminal input modes')
+
+const decodedInput = []
+const utf8InputApp = {
+  stdinDecoder: new StringDecoder('utf8'),
+  imageParser: { busy: false },
+  inputRouter: { processInput(value) { decodedInput.push(value) } }
+}
+const cjkBytes = Buffer.from('中文')
+await TuiApp.prototype.handleInput.call(utf8InputApp, cjkBytes.subarray(0, 2))
+await TuiApp.prototype.handleInput.call(utf8InputApp, cjkBytes.subarray(2, 4))
+await TuiApp.prototype.handleInput.call(utf8InputApp, cjkBytes.subarray(4))
+assert.deepEqual(decodedInput, ['中', '文'], 'split UTF-8 input must not produce replacement characters')
+
+const staleImageParser = new ImageParser()
+staleImageParser.feed(Buffer.from('\x1b]1337;File=inline=1:'))
+staleImageParser.lastActivity = Date.now() - 48 * 60 * 60 * 1000
+const recoveredImageInput = []
+const staleImageInputApp = {
+  imageParser: staleImageParser,
+  stdinDecoder: new StringDecoder('utf8'),
+  inputRouter: { processInput(value) { recoveredImageInput.push(value) } },
+  handleInput: TuiApp.prototype.handleInput,
+  log: noop,
+  scheduleRender: noop
+}
+await staleImageInputApp.handleInput(Buffer.from('wake'))
+assert.deepEqual(recoveredImageInput, ['wake'], 'the first key after a stale image transfer must reach input')
 
 const originalStdoutWrite = process.stdout.write
 let initializationOutput = ''
@@ -2002,6 +2030,48 @@ const fallbackBufferJob = { id: 'bash-buffer', output: '', outputBaseOffset: 0, 
 TuiApp.prototype.captureLocalBashOutput.call(bashBufferApp, fallbackBufferJob, 'fallback\n')
 assert.equal(bashBufferApp.jobOutputCache.get('bash-buffer'), 'fallback\n')
 assert.equal(bashBufferApp.jobPanel.outputNewLines, 1)
+
+if (process.platform !== 'win32') {
+  let autoBackground
+  let registeredShell
+  const originalSetTimeout = globalThis.setTimeout
+  const backgroundApp = {
+    agent: { session: { header: { cwd: process.cwd() } } },
+    jobsService: { start(spec) { registeredShell = spec; return 'shell-auto' } },
+    tuiShellJobIds: new Set(),
+    localBackgroundJobs: [],
+    jobOutputCache: new Map(),
+    localJobsCount: 0,
+    message: '',
+    scheduleRender: noop,
+    ensureJobStatusTimer: noop,
+    log(_level, message, source) { this.lastLog = { message, source } },
+    backgroundBash: TuiApp.prototype.backgroundBash,
+    appendLocalBashOutput: TuiApp.prototype.appendLocalBashOutput,
+    readLocalBashOutput: TuiApp.prototype.readLocalBashOutput,
+    captureLocalBashOutput: TuiApp.prototype.captureLocalBashOutput,
+    updateLocalJobOutput: TuiApp.prototype.updateLocalJobOutput
+  }
+  try {
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (delay === 60_000) autoBackground = callback
+      return originalSetTimeout(callback, delay, ...args)
+    }
+    TuiApp.prototype.runBash.call(backgroundApp, 'sleep 0.05; printf alive')
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+  }
+  const runningShell = backgroundApp.activeBash
+  assert.equal(typeof autoBackground, 'function')
+  autoBackground()
+  assert.equal(backgroundApp.activeBash, undefined, 'foreground Shell must yield to Jobs at the time limit')
+  assert.equal(runningShell.stopRequested, false, 'automatic backgrounding must leave the process running')
+  assert.equal(registeredShell.kind, 'bash')
+  assert.equal(backgroundApp.lastLog.source, '60s')
+  await runningShell.done
+  assert.equal(runningShell.status, 'completed')
+  assert.equal(registeredShell.run().readOutput(), 'alive', 'the continued job must retain its output')
+}
 
 const turnLifecycleApp = {
   active: false,

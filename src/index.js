@@ -6,6 +6,7 @@ import { access, appendFile, mkdir, readdir, readFile, realpath, stat, unlink, w
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir, tmpdir } from 'node:os'
+import { StringDecoder } from 'node:string_decoder'
 import { ImageParser, formatImageBytes, pngDimensions, jpegDimensions, imageDimensions, MAX_SAFE_IMAGE_PIXELS, downscaleImageBuffer } from './image-protocol.js'
 import { registerVisionRouter } from './vision-router.js'
 import { registerBrowserLease } from './browser-lease.js'
@@ -425,6 +426,7 @@ export class TuiApp {
     this.cachedModelEntries = undefined // Cached official model catalog entries for capability lookup
     this.imageAttachments = new Map() // attachment ID -> Harness image reference for analyze_image
     this.imageParser = new ImageParser()
+    this.stdinDecoder = new StringDecoder('utf8')
     this.currentFileQuery = undefined
 
     this.streaming = { text: '', reasoning: '', tool: undefined }
@@ -501,6 +503,7 @@ export class TuiApp {
     this.animationTimer = undefined
     this.terminalHealthTimer = undefined
     this.lastTerminalModeAssertionAt = 0
+    this.lastTerminalHealthAt = 0
     this.terminalSignalExitStarted = false
     this.caretRow = undefined
     this.caretCol = undefined
@@ -974,8 +977,16 @@ export class TuiApp {
     this.disposers.push(() => process.off('SIGTERM', onSigterm))
     this.disposers.push(() => process.off('SIGINT', onSigint))
 
+    this.lastTerminalHealthAt = Date.now()
     this.terminalHealthTimer = setInterval(() => {
-      const modeRefreshDue = Date.now() - this.lastTerminalModeAssertionAt >= 30_000
+      const now = Date.now()
+      const resumedAfterSleep = now - this.lastTerminalHealthAt > 30_000
+      this.lastTerminalHealthAt = now
+      if (resumedAfterSleep) {
+        this.recoverTerminalInputModes({ enterAltScreen: true, repaint: true })
+        return
+      }
+      const modeRefreshDue = now - this.lastTerminalModeAssertionAt >= 30_000
       this.recoverTerminalInputModes({ reassertModes: modeRefreshDue })
     }, 5000)
     this.terminalHealthTimer.unref?.()
@@ -6606,6 +6617,42 @@ export class TuiApp {
     return this.active && this.input === '' ? ANSI.detail : ANSI.rule
   }
 
+  backgroundBash(job, reason = 'Ctrl+B') {
+    if (this.activeBash !== job || !isRunningJob(job)) return
+    let registered = false
+    try {
+      const id = this.jobsService?.start?.({
+        kind: 'bash',
+        label: job.command,
+        owner: this.agent,
+        run: () => ({
+          cancel: () => {
+            void this.stopLocalJob(job).catch(() => {})
+          },
+          done: job.done,
+          readOutput: () => this.readLocalBashOutput(job)
+        })
+      })
+      if (id !== undefined && id !== null) {
+        job.id = String(id)
+        job.jobsManaged = true
+        this.tuiShellJobIds.add(job.id)
+        registered = true
+      }
+    } catch {}
+    if (!registered) {
+      if (!this.localBackgroundJobs) this.localBackgroundJobs = []
+      this.localBackgroundJobs.push(job)
+    }
+    clearTimeout(job.timeout)
+    job.timeout = undefined
+    this.ensureJobStatusTimer()
+    this.activeBash = undefined
+    this.message = ''
+    this.log('ok', `Backgrounded ${job.id} ($ ${shorten(job.command, 50)}) · type /jobs to inspect`, reason)
+    this.scheduleRender()
+  }
+
   runBash(command) {
     const cwd = this.agent?.session.header.cwd ?? process.cwd()
     if (!command) {
@@ -6638,12 +6685,7 @@ export class TuiApp {
     this.lastBashCommand = command
     let ended = false
     const timer = setTimeout(() => {
-      if (!ended) {
-        active.stopRequested = true
-        this.signalLocalJob(active, 'SIGKILL')
-        const text = '\n… (timed out after 60s)'
-        this.captureLocalBashOutput(active, text)
-      }
+      if (!ended) this.backgroundBash(active, '60s')
     }, 60_000)
     active.timeout = timer
     child.stdout.on('data', (chunk) => {
@@ -6875,7 +6917,9 @@ export class TuiApp {
 
   async handleInput(chunk) {
     if (this.sessionInitPromise) await this.sessionInitPromise
-    if (process.stdin.isTTY && !process.stdin.isRaw) process.stdin.setRawMode(true)
+    if (process.stdin.isTTY && !process.stdin.isRaw) {
+      this.recoverTerminalInputModes({ enterAltScreen: true, repaint: true })
+    }
     const value = chunk.toString('utf8')
     // One-shot compatibility aid for terminal-specific wheel bugs. It records
     // only a complete control sequence, never ordinary typed or pasted text.
@@ -6901,7 +6945,8 @@ export class TuiApp {
         return
       }
     }
-    this.inputRouter.processInput(value)
+    const decoded = this.stdinDecoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    if (decoded) this.inputRouter.processInput(decoded)
   }
 
   handleToken(value) {
@@ -7407,39 +7452,7 @@ export class TuiApp {
     }
     if (value === '\x02') {
       if (this.activeBash) {
-        const job = this.activeBash
-        let registered = false
-        try {
-          const id = this.jobsService?.start?.({
-            kind: 'bash',
-            label: job.command,
-            owner: this.agent,
-            run: () => ({
-              cancel: () => {
-                void this.stopLocalJob(job).catch(() => {})
-              },
-              done: job.done,
-              readOutput: () => this.readLocalBashOutput(job)
-            })
-          })
-          if (id !== undefined && id !== null) {
-            job.id = String(id)
-            job.jobsManaged = true
-            this.tuiShellJobIds.add(job.id)
-            registered = true
-          }
-        } catch {}
-        if (!registered) {
-          if (!this.localBackgroundJobs) this.localBackgroundJobs = []
-          this.localBackgroundJobs.push(job)
-        }
-        clearTimeout(job.timeout)
-        job.timeout = undefined
-        this.ensureJobStatusTimer()
-        this.activeBash = undefined
-        this.message = ''
-        this.log('ok', `Backgrounded ${job.id} ($ ${shorten(job.command, 50)}) · type /jobs to inspect`, 'Ctrl+B')
-        this.scheduleRender()
+        this.backgroundBash(this.activeBash)
         return
       }
       const toolName = this.streaming.tool?.name ?? ''

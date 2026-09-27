@@ -86,6 +86,25 @@ assert.equal(mouseEvents[0].deltaY, -2)
 assert.equal(historyNavCalled, false, 'X10 mouse wheel must never trigger historyNav')
 assert.equal(tokenEvents.length, 0, 'X10 mouse wheel must never leak characters to input')
 
+// 7.1 urxvt 1015 mouse reports are numeric CSI sequences. They must be
+// recognized before generic CSI key handling or their bytes reach the editor.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b[96;20;10M')
+assert.equal(mouseEvents.length, 1)
+assert.equal(mouseEvents[0].type, 'wheel')
+assert.equal(mouseEvents[0].deltaY, -2)
+assert.deepEqual(tokenEvents, [], 'urxvt mouse reports must not leak raw tokens to input')
+
+// The same report may arrive after an idle gap between chunks.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b[96;20;')
+await new Promise((resolve) => setTimeout(resolve, 60))
+router.processInput('10M')
+assert.equal(mouseEvents.length, 1, 'Split urxvt mouse reports must still dispatch')
+assert.deepEqual(tokenEvents, [], 'Split urxvt mouse reports must not leak into input')
+
 // 8. Delayed split Escape Sequence across chunks (SGR Mouse)
 mouseEvents = []
 tokenEvents = []
@@ -139,6 +158,50 @@ router.processInput('<0;115;42M')
 assert.equal(mouseEvents.length, 1, 'A three-part SGR mouse report must be parsed')
 assert.equal(mouseEvents[0].type, 'mouse')
 assert.deepEqual(tokenEvents, ['\x1b'], 'Only the independently expired Escape may reach the app')
+
+// After an idle period VS Code can delay the `[` and SGR body longer than the
+// ordinary Escape timeout. The complete report must still be consumed.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 350))
+router.processInput('[')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('<64;112;26M')
+assert.equal(mouseEvents.length, 1, 'Delayed idle SGR mouse report must be parsed')
+assert.equal(mouseEvents[0].type, 'wheel')
+assert.deepEqual(tokenEvents, ['\x1b'], 'Delayed SGR report body must never enter the composer')
+
+// An arrow key can be split at the same boundary after terminal wake. Its
+// remainder must be delivered as one key, never typed as visible [A text.
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('[A')
+assert.deepEqual(tokenEvents, ['\x1b', '\x1b[A'])
+
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('[')
+router.processInput('D')
+assert.deepEqual(tokenEvents, ['\x1b', '\x1b[D'], 'Three-part arrow keys must not leak a bracket or letter')
+
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('[1;3')
+router.processInput('C')
+assert.deepEqual(tokenEvents, ['\x1b', '\x1b[1;3C'], 'A delayed modified arrow key must stay intact')
+
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('[96;20;')
+router.processInput('10M')
+assert.equal(mouseEvents.length, 1, 'A delayed urxvt wheel report must still dispatch')
+assert.deepEqual(tokenEvents, ['\x1b'], 'A delayed urxvt wheel report must not reach the editor')
 
 // 8.4 A CSI or SGR mouse report split after the ESC [ introducer must survive
 // an arbitrary idle gap. Terminals write the introducer and the report body
@@ -220,6 +283,24 @@ router.processInput('\x1b[200~hello world\x1b[20')
 router.processInput('1~')
 assert.deepEqual(pasteEvents, ['hello world'], 'Bracketed paste with split closing marker must resolve successfully')
 assert.equal(router.inPaste, false, 'inPaste must be reset to false')
+
+// A paste start without its closing marker must not leave the composer
+// permanently unresponsive after the terminal has been asleep for hours.
+tokenEvents = []
+pasteEvents = []
+router.processInput('\x1b[200~unfinished paste')
+router.pasteLastActivityAt = Date.now() - 48 * 60 * 60 * 1000
+router.processInput('ready\x1b[A')
+assert.deepEqual(tokenEvents, ['r', 'e', 'a', 'd', 'y', '\x1b[A'], 'the first input after stale paste must work')
+assert.deepEqual(pasteEvents, [], 'an incomplete paste must be discarded')
+assert.equal(router.inPaste, false)
+
+mouseEvents = []
+router.processInput('\x1b[200~still unfinished')
+router.pasteStartedAt = Date.now() - 6 * 60 * 1000
+router.processInput('\x1b[<0;10;5M')
+assert.equal(mouseEvents.length, 1, 'a mouse click must recover even if stale paste saw recent activity')
+assert.equal(router.inPaste, false)
 
 // 11. Alt/Option and Meta key sequence dispatch
 tokenEvents = []
@@ -339,6 +420,13 @@ await new Promise((resolve) => setTimeout(resolve, 10))
 router.processInput('text]')
 await new Promise((resolve) => setTimeout(resolve, 200))
 assert.deepEqual(tokenEvents, ['\x1b', '[', 't', 'e', 'x', 't', ']'], 'Text after a bare [ must stay typed')
+
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('[123')
+await new Promise((resolve) => setTimeout(resolve, 1050))
+assert.deepEqual(tokenEvents, ['\x1b', '[', '1', '2', '3'], 'An incomplete numeric bracket must eventually remain ordinary text')
 
 // 12.6 A reply split immediately after ESC ] / ESC P must still be consumed.
 tokenEvents = []

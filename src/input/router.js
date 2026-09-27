@@ -1,8 +1,14 @@
-import { parseSgrMouse, parseX10Mouse } from './mouse.js'
+import { parseSgrMouse, parseUrxvtMouse, parseX10Mouse } from './mouse.js'
 
 const SGR_MOUSE_SEQUENCE = /^(\x1b?\[<\d+;\d+;\d+[Mm])/
 const SGR_MOUSE_PREFIX = /^\x1b?\[<\d*(?:;\d*){0,2}$/
 const MAX_SGR_MOUSE_LENGTH = 64
+// urxvt's 1015 protocol omits the SGR `<` marker and offsets Cb by 32.
+// Without a dedicated branch, it is mistaken for a numeric CSI key sequence
+// and its bytes are inserted into the composer.
+const URXVT_MOUSE_SEQUENCE = /^(\x1b\[\d+;\d+;\d+M)/
+const URXVT_MOUSE_PREFIX = /^\x1b\[\d+;\d+;\d*$/
+const MAX_URXVT_MOUSE_LENGTH = 64
 // Full ECMA-48 CSI grammar: ESC [ parameters (0x30-0x3F), intermediates
 // (0x20-0x2F), final byte (0x40-0x7E). Terminal reports such as device
 // attributes (`CSI ?1;2c`), DEC private mode replies (`CSI ?2004;1$y`) and
@@ -33,7 +39,13 @@ const INCOMPLETE_CSI_PREFIX = /^\x1b\[[\x20-\x3f]*$/
 // report. Only continuations that cannot be ordinary text are re-attached to a
 // synthetic Escape: SGR mouse, DEC private replies, focus events, and numeric
 // reports with a known final byte. Text such as [1] or [text] stays untouched.
-const BARE_CSI_CONTINUATION = /^\[(?:<|[?>]|I$|O$|[0-9;]+[Rcytnmu]$)/
+const BARE_CSI_CONTINUATION = /^\[(?:<|[?>]|[ABCDHFIO]$|[0-9;]+[ABCDHF~RcytnmuM]$)/
+// VS Code may release a suspended terminal's mouse report in multiple delayed
+// reads. Keep the narrowly-scoped `ESC` → `[` bridge alive long enough for
+// that recovery without delaying ordinary typing in normal input flow.
+const LATE_MOUSE_REPORT_GRACE_MS = 1000
+const PASTE_INACTIVITY_TIMEOUT_MS = 30_000
+const PASTE_MAX_DURATION_MS = 5 * 60_000
 // Shorter prefixes stay ambiguous with real keys (Escape, Alt+O, Alt+], Alt+P,
 // Alt+Esc), so they keep a bounded grace window and then flush as their own
 // tokens. Alt+] and Alt+P are buffered as potential OSC/DCS introducers because
@@ -51,6 +63,8 @@ export class InputRouter {
     this.bufferContinuation = ''
     this.inPaste = false
     this.pasteBuffer = ''
+    this.pasteLastActivityAt = 0
+    this.pasteStartedAt = 0
     this.flushTimer = null
     this.awaitingBareSgrIntroducer = false
     this.sgrIntroducerTimer = null
@@ -82,37 +96,62 @@ export class InputRouter {
       if (str === '[') {
         this.buffer = str
         this.bufferKind = 'bare-sgr-introducer'
-        this.setFlushTimer(150)
+        this.setFlushTimer(LATE_MOUSE_REPORT_GRACE_MS)
+        return
+      }
+      if (/^\[[0-9;]+$/.test(str)) {
+        this.buffer = str
+        this.bufferKind = 'bare-csi-numeric'
+        this.setFlushTimer(LATE_MOUSE_REPORT_GRACE_MS)
         return
       }
       // The leading Escape already flushed as a real key while a terminal
       // report was still in flight. Re-attach it so the report is consumed
       // instead of its tail being typed as text: focus events, DEC private
       // mode replies, OSC and DCS answers. Ordinary text is left untouched.
-      if (/^\[(?:[?>]|I$|O$)/.test(str) || /^\][0-9]/.test(str) || /^P[0-9$+]/.test(str)) {
+      if (/^\[(?:[?>]|[ABCDHFIO]$|[0-9;]+[ABCDHF~RcytnmuM]$)/.test(str) || /^\][0-9]/.test(str) || /^P[0-9$+]/.test(str)) {
         str = '\x1b' + str
       }
+    }
+
+    if ((pendingKind === 'bare-sgr-introducer' || pendingKind === 'bare-csi-numeric') && /^\[[0-9;]+$/.test(str)) {
+      this.buffer = str
+      this.bufferKind = 'bare-csi-numeric'
+      this.setFlushTimer(LATE_MOUSE_REPORT_GRACE_MS)
+      return
     }
 
     // The bare [ captured above is only a report introducer when its
     // continuation can be nothing else. Re-attach the Escape the bridge split
     // away so the report is consumed instead of typed as visible garbage.
-    if (pendingKind === 'bare-sgr-introducer' && BARE_CSI_CONTINUATION.test(str)) {
+    if ((pendingKind === 'bare-sgr-introducer' || pendingKind === 'bare-csi-numeric') && BARE_CSI_CONTINUATION.test(str)) {
       str = '\x1b' + str
     }
 
     // A truncated SGR report has an explicit M/m terminator. If later input
     // cannot continue that grammar, discard only the stale mouse prefix and
     // process the newly arrived bytes normally.
-    if (pendingKind === 'sgr-mouse' && (
-      (!SGR_MOUSE_SEQUENCE.test(str) && !SGR_MOUSE_PREFIX.test(str)) ||
-      str.length > MAX_SGR_MOUSE_LENGTH
-    )) {
+    const isPendingMouse = pendingKind === 'sgr-mouse' || pendingKind === 'urxvt-mouse'
+    const pendingMouseIsValid = pendingKind === 'sgr-mouse'
+      ? SGR_MOUSE_SEQUENCE.test(str) || SGR_MOUSE_PREFIX.test(str)
+      : URXVT_MOUSE_SEQUENCE.test(str) || URXVT_MOUSE_PREFIX.test(str)
+    const pendingMouseMaxLength = pendingKind === 'sgr-mouse' ? MAX_SGR_MOUSE_LENGTH : MAX_URXVT_MOUSE_LENGTH
+    if (isPendingMouse && (!pendingMouseIsValid || str.length > pendingMouseMaxLength)) {
       str = pendingContinuation + incoming
     }
 
     // 1. Bracketed paste mode continuation
+    if (this.inPaste && (
+      Date.now() - this.pasteLastActivityAt > PASTE_INACTIVITY_TIMEOUT_MS ||
+      Date.now() - this.pasteStartedAt > PASTE_MAX_DURATION_MS
+    )) {
+      this.inPaste = false
+      this.pasteBuffer = ''
+      this.pasteLastActivityAt = 0
+      this.pasteStartedAt = 0
+    }
     if (this.inPaste) {
+      this.pasteLastActivityAt = Date.now()
       const full = this.pasteBuffer + str
       const endIdx = full.indexOf('\x1b[201~')
       if (endIdx !== -1) {
@@ -120,6 +159,8 @@ export class InputRouter {
         const remainder = full.slice(endIdx + 6)
         this.inPaste = false
         this.pasteBuffer = ''
+        this.pasteLastActivityAt = 0
+        this.pasteStartedAt = 0
         this.app?.handlePaste?.(pasteContent)
         if (remainder) this.processInput(remainder)
         return
@@ -154,9 +195,33 @@ export class InputRouter {
         }
       }
 
+      // urxvt 1015 mouse reports look like a numeric CSI key sequence
+      // (`ESC [ Cb ; Cx ; Cy M`). Consume them before the generic CSI branch
+      // can pass their raw bytes to the input editor.
+      if (str.startsWith('\x1b[', i)) {
+        const tail = str.slice(i)
+        const urxvtMatch = tail.match(URXVT_MOUSE_SEQUENCE)
+        if (urxvtMatch) {
+          const mouseEvent = parseUrxvtMouse(urxvtMatch[1])
+          if (mouseEvent) this.dispatchMouseEvent(mouseEvent)
+          i += urxvtMatch[1].length
+          continue
+        }
+        if (URXVT_MOUSE_PREFIX.test(tail)) {
+          this.buffer = tail
+          this.bufferKind = 'urxvt-mouse'
+          this.bufferContinuation = pendingKind === 'urxvt-mouse'
+            ? pendingContinuation + incoming
+            : ''
+          return
+        }
+      }
+
       // 2. Bracketed paste start
       if (str.startsWith('\x1b[200~', i)) {
         this.inPaste = true
+        this.pasteLastActivityAt = Date.now()
+        this.pasteStartedAt = this.pasteLastActivityAt
         i += 6
         const remainder = str.slice(i)
         this.pasteBuffer = remainder
@@ -166,6 +231,8 @@ export class InputRouter {
           const afterPaste = this.pasteBuffer.slice(endIdx + 6)
           this.inPaste = false
           this.pasteBuffer = ''
+          this.pasteLastActivityAt = 0
+          this.pasteStartedAt = 0
           this.app?.handlePaste?.(pasteContent)
           if (afterPaste) this.processInput(afterPaste)
           return
@@ -340,12 +407,16 @@ export class InputRouter {
     this.buffer = ''
     this.bufferKind = undefined
     this.bufferContinuation = ''
+    this.inPaste = false
+    this.pasteBuffer = ''
+    this.pasteLastActivityAt = 0
+    this.pasteStartedAt = 0
   }
 
   rememberBareSgrIntroducer() {
     this.awaitingBareSgrIntroducer = true
     if (this.sgrIntroducerTimer) clearTimeout(this.sgrIntroducerTimer)
-    this.sgrIntroducerTimer = setTimeout(() => this.clearBareSgrIntroducer(), 150)
+    this.sgrIntroducerTimer = setTimeout(() => this.clearBareSgrIntroducer(), LATE_MOUSE_REPORT_GRACE_MS)
   }
 
   clearBareSgrIntroducer() {

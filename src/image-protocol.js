@@ -226,7 +226,7 @@ export class ImageParser {
   feed(chunk) {
     if (this.busy && Date.now() - this.lastActivity > INACTIVITY_TIMEOUT_MS) {
       this.reset()
-      return { error: 'image paste timed out' }
+      return { error: 'image paste timed out', remainder: chunk.toString('utf8') }
     }
     this.lastActivity = Date.now()
     const value = chunk.toString('utf8')
