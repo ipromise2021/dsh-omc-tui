@@ -4907,7 +4907,7 @@ inertDispose()
   assert.match(statusLogOutput, /Runtime\nTUI\|/)
   assert.match(statusLogOutput, /Session\nDirectory\|/)
   assert.match(statusLogOutput, /Usage\nContext\|/)
-  assert.match(statusLogOutput, /TUI\|dsh-omc-tui v0\.2\.15/)
+  assert.match(statusLogOutput, /TUI\|dsh-omc-tui v0\.2\.16/)
   assert.ok(statusLogOutput.includes('0 / 100.0k tokens · 0%') || statusLogOutput.includes('0 / 100k tokens · 0%') || statusLogOutput.includes('0 tokens · 0%'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
 
   const structuredStatusRows = TuiApp.prototype.formatLogEntry.call({}, {

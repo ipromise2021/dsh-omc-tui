@@ -4,9 +4,17 @@
 
 ---
 
-## v0.2.15 · 待发布
+## v0.2.16 · 2026-09-28
 
 - **Harness v0.1.7-rc.2 兼容**：依赖与 Profile patch 迁移至 preset registry、scoped standard preset 和 PTC runtime；TUI 设置迁移至 Config/SettingsForms；工具失败投影兼容 Session V4 的 `message.isError` 与 `error.reason`。隔离 `DSH_HOME` 中完成 `--dump-config` 和真实 TUI 启动验证。
+- **四种 Agent preset**：注册 `standard`、`ptc`、`minimal`、`cordis`；补齐 Cordis Host inspection 服务。隔离 Profile 中的 `/preset` 面板显示四项，并已逐一验证切换。
+- **终端输入与后台 Shell**：恢复长时间停顿后可能滞留的括号粘贴和图片传输状态；改进方向键、鼠标及跨块 UTF-8 输入处理。前台 Shell 超时后转入 Jobs 继续运行，不再直接强杀。
+- **验证范围**：单元测试、模块导入、preset 专项 PTY 与打包检查通过；跨数小时真实终端休眠/唤醒仍待使用中验证，完整 PTY 套件在模型 variant picker 断言处未通过。
+
+---
+
+## v0.2.15 · 2026-09-11
+
 - **命令与附件**：修复 `/plan`、`/goal` 的图片附件契约；图片会以官方 `image` 形状交给 Harness，命令失败时回填待发送图片。
 - **转写与交互**：修复 `/btw`、`/compact` 本地输出在备用屏幕中的投影，工具结果可下钻读取嵌套文本与结构化文件/差异元数据；Esc 优先关闭浮层；输入文本非空时，行首 Backspace 可逐张移除待发送图片。
 - **性能与视觉**：折叠活动卡片延迟构建明细，durable 事件突发合并到下一帧重投影；Context 状态条使用单一 `░` 字形并以主题色区分已用与剩余容量。
@@ -21,6 +29,7 @@
 
 | 版本 | 日期 | 说明 |
 | :--- | :--- | :--- |
+| **v0.2.16** | 2026-09-28 | **DSH v0.1.7-rc.2 与终端稳定性更新**。支持四种 Agent preset，增强长待机后的输入恢复，并让超时 Shell 任务转入后台 Jobs。 |
 | **v0.2.15** | 2026-09-11 | **任务状态与终端呈现可靠性修复**。Harness `todo/write` 快照实时驱动 `/tasks` 与状态栏；完整消费异步终端回执，避免控制序列污染输入框；工具 diff 输出维持层级缩进，Markdown 代码块移除裸围栏；Context 色彩与浅色终端主题检测优化。 |
 | **v0.2.14** | 2026-09-10 | **DSH v0.1.5-rc.1 兼容与压缩链路升级**。19 个 Harness peer 依赖与 Cordis 对齐新版预发布范围，Profile system prompt 迁移至 `personaPrefix` 并移除失效 patch；支持默认 DeepSeek-V41-Flash（`deepseek-flash`）及视觉旁路候选。接入 Harness 官方 `compaction-basic` 的 80% 阈值压缩与 durable 生命周期投影，兼容 V3 tool result 的 `message.source.callId`。`/status` 使用紧凑宽字符安全面板；修复 CR-only 粘贴及残缺 CSI 超时后吞掉普通输入的问题，并补齐回归测试。 |
 | **v0.2.13** | 2026-09-08 | **Tasks 与状态展示发布加固**。补齐 `/tasks` 注册与 Plan 默认入口，`/jobs` 保持后台任务兼容入口；修复 compact 耗时重复单位。`/status` 改为结构化内容区，标题、分组和空行不再被通用项目符号打散；详细状态栏会按终端高度自动收起 Plan，避免矮窗口尾部截断。计划 durable 投影按会话末尾事件缓存，Token/耗时进位边界统一显示为 `1m` / `1m 00s`。 |
