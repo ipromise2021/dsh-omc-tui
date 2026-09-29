@@ -1,5 +1,14 @@
 # 代码审查优化进度日志
 
+## 会话：2026-09-29（README 与设计校准）
+
+### 阶段 40：README 功能与设计说明校准
+- **状态：** complete
+- README 新增快速开始和设计边界，修正备用屏幕退出行为、四种 preset、代码块样式、长待机验证范围及 Shell Jobs 回退说明；Node engine 与文档同步收紧。
+- 旧架构与展示文档加历史方案提示，移除 README 中指向其过时设计说明的入口。
+- `npm test`、`npm run verify`、`git diff --check` 和 README 本地链接检查通过；使用临时 npm 缓存的 `npm pack --dry-run --json` 通过（69 文件）。
+- 保留已有 `.gitignore` 修改以及 `.nvmrc`、`tmp_text.md` 未跟踪文件；本轮未提交或发布。
+
 ## 会话：2026-09-27（Agent preset）
 
 ### 阶段 39：对齐 DSH 的四种 Agent preset

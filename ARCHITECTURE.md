@@ -1,6 +1,9 @@
 # DSH OMC TUI · 架构设计与全功能实现全景文档
 
-本项目是 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的官方原生全功能终端交互界面（TUI 投影层）。本篇文档系统化总结了插件的**目录结构**、**核心设计哲学**、**所有功能特性的架构与实现细节**以及**测试工程规范**。
+> [!WARNING]
+> 此文档保留了早期设计方案，部分目录和终端缓冲区描述已不符合当前实现。当前架构与功能请以 [README.md](README.md) 和源码为准。
+
+本项目是面向 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的社区 TUI 插件。以下内容保留早期设计记录，不能作为当前实现的完整说明。
 
 ---
 
@@ -35,12 +38,13 @@ flowchart TD
 * **业务写入走官方 API**：严禁在 TUI 本地伪造状态、篡改或截断底层 durable log。
 * **无状态恢复（Event Sourcing）**：恢复会话（`dsh-omc-tui -c` / `/resume`）时，所有卡片、历史对话和回顾均由持久化事件（`session/event`）重新投影构建。
 
-### 2. 普通缓冲区追加流（Zero Alternate Screen）
+### 2. 早期方案：普通缓冲区追加流（已废弃）
+当前实现使用备用屏幕与视口差分渲染，并在退出时把会话写回终端历史；以下内容仅作历史记录。
 * **不进入备用屏幕**：对话历史、Thinking 思考链、工具执行详情、Diff 均以增量形式直接追加到终端普通 Scrollback 缓冲区；
 * **保留原生交互体验**：彻底杜绝传统 TUI 劫持滚轮事件导致误触历史的问题，**100% 保留终端原生的鼠标滚轮回看与高亮选择复制能力**。
 
 ### 3. 零重型外部 UI 库（Zero Dependencies for UI）
-* 运行环境：标准 ES Modules (Node.js >= 20)；
+* 当前运行环境：标准 ES Modules，Node.js `^22.19.0 || >=24.2.0`；
 * 严禁引入 `blessed`、`ink`、`chalk`、`cli-boxes` 等重型终端库，全套 ANSI 渲染、东亚宽字符对齐、光标控制均原生自研实现。
 
 ---
@@ -97,21 +101,21 @@ dsh-omc-tui/
 ## ⚡ 三、全量功能模块的设计与实现机制
 
 ### 1. 原生终端排版与 Markdown 渲染引擎 (`src/renderer/`)
-* **CJK 字符安全对齐与截断 ([`ansi.js`](file:///Users/yy0812024/work/dsh-plugin/dsh-omc-tui/src/renderer/ansi.js))**：
+* **CJK 字符安全对齐与截断 ([`ansi.js`](src/renderer/ansi.js))**：
   - 中文字符、全角符号、Emoji 在终端占用 2 个列宽，通过自研的 `widthOf()` 与 `visibleOf()` 精确测量视觉宽度，严禁使用 `.length` 直接对齐。
   - `wrap()` 算法在东亚宽字符边界自动处理折行，避免终端硬折行导致的边框撕裂。
-* **高阶 Markdown 解析 ([`markdown.js`](file:///Users/yy0812024/work/dsh-plugin/dsh-omc-tui/src/renderer/markdown.js))**：
+* **高阶 Markdown 解析 ([`markdown.js`](src/renderer/markdown.js))**：
   - **代码围栏**：保留语言标记的 fenced-code 展示，并按终端列宽安全换行；
   - **Unicode 表格网格**：支持 `┌┬┐├┼┤└┴┘` Unicode 连续表格绘制；
   - **行内语法**：加粗、斜体、行内代码、多级列表嵌套支持。
-* **四阶灰度护眼主题体系 ([`themes.js`](file:///Users/yy0812024/work/dsh-plugin/dsh-omc-tui/src/renderer/themes.js))**：
+* **四阶灰度护眼主题体系 ([`themes.js`](src/renderer/themes.js))**：
   - 正文采用 `250` 雅致浅灰（柔和可读，杜绝高对比纯白眩光）；
   - 思维链采用 `241` 深石板灰，主色采用 Claude Terracotta 赤陶色 (`209`) 与温润琥珀金 (`214`)；
   - 支持 `claude`（默认）、`deepseek`、`mono`、`light` 四款主题热切换。
 
 ---
 
-### 2. 破坏性危险命令防御守卫 ([`src/core/danger-guard.js`](file:///Users/yy0812024/work/dsh-plugin/dsh-omc-tui/src/core/danger-guard.js))
+### 2. 破坏性危险命令防御守卫 ([`src/core/danger-guard.js`](src/core/danger-guard.js))
 * **定位与触发时机**：
   - 原生挂载在 Harness Cordis 的 `tools/pre-execute` 拦截点，在任何 Shell 工具（`bash`、`shell`、`pwsh`、`exec`、`run_command` 等）真正执行前进行前置同步审查与拦截；
 * **结构化 AST 分词与管道切分 (`splitShellSegments`)**：
@@ -133,7 +137,7 @@ dsh-omc-tui/
 
 ---
 
-### 3. claude-hud 风格全景上下文状态栏 ([`src/renderer/statusline.js`](file:///Users/yy0812024/work/dsh-plugin/dsh-omc-tui/src/renderer/statusline.js))
+### 3. claude-hud 风格全景上下文状态栏 ([`src/renderer/statusline.js`](src/renderer/statusline.js))
 * **设计意图**：借鉴深受好评的 `claude-hud` 架构，为开发者提供高信息密度、低视觉噪音的全局运行时指示器。
 * **全景指示器矩阵**：
   1. **模型与会话状态**：实时展示当前活跃模型（如 `[deepseek-v4-flash]`）、Build/Plan 运行模式、Reasoning Effort 档位（`HIGH`/`DEFAULT`）、当前会话摘要标题与探索动效（`◉ reading...`）；
@@ -193,11 +197,11 @@ dsh-omc-tui/
 ---
 
 ### 6. 行内安全审批卡片与交互式决策面板 (`src/panels/`)
-* **行内安全审批卡片 ([`approval.js`](file:///Users/yy0812024/work/dsh-plugin/dsh-omc-tui/src/panels/approval.js))**：
+* **行内安全审批卡片 ([`approval-panel.js`](src/panels/approval-panel.js))**：
   - 拦截危险 Shell 命令执行与文件写入；
-  - 使用 [`diff.js`](file:///Users/yy0812024/work/dsh-plugin/dsh-omc-tui/src/renderer/diff.js) 直接在终端渲染行级红绿 Diff 对比；
+  - 使用 [`diff.js`](src/renderer/diff.js) 直接在终端渲染行级红绿 Diff 对比；
   - 支持 `y` 允许、`n` 拒绝、`a` 永久信任等单键快速响应。
-* **多选项决策面板 ([`question.js`](file:///Users/yy0812024/work/dsh-plugin/dsh-omc-tui/src/panels/question.js))**：
+* **多选项决策面板 ([`question-panel.js`](src/panels/question-panel.js))**：
   - 捕获 Harness 的 `ask_user_question` 请求；
   - 提供多 Tab 勾选状态指示、明细审查与单键提交。
 
@@ -222,7 +226,7 @@ dsh-omc-tui/
 ---
 
 ### 8. 输入路由与工作区感知 (`src/input/`)
-* **`@` 树形路径逐级补全 ([`file-picker.js`](file:///Users/yy0812024/work/dsh-plugin/dsh-omc-tui/src/panels/file-picker.js))**：支持在输入框输入 `@` 时弹出交互式文件树，支持模糊搜索与子目录钻取；
+* **`@` 树形路径逐级补全 ([`file-picker.js`](src/panels/file-picker.js))**：支持在输入框输入 `@` 时弹出交互式文件树，支持模糊搜索与子目录钻取；
 * **`!` 本地 Shell 命令直通**：以 `!` 开头直接在本地工作区执行命令，并将输出无缝作为上下文提供给模型；
 * **异常恢复与状态保护**：提交失败（文件展开异常、网络中断、取消提交）时自动保留输入并恢复计时器，绝不丢失用户编辑内容。
 

@@ -1,5 +1,14 @@
 # 代码审查发现与跟踪
 
+## README 功能与设计校准（2026-09-29）
+
+- 当前 TUI 使用备用屏幕和视口差分渲染；`restoreTerminal()` 退出时会把会话行写回主终端历史。旧架构/展示文档的 Zero Alternate Screen 描述是历史方案，已在文档顶部和对应小节标注。
+- DSH 管理 Agent、preset、会话、权限与 Jobs 服务；TUI 管理输入、面板、投影和用户 `!` Shell 进程。Shell 后台化优先注册 Harness Jobs，失败时回退到进程内列表，不能跨退出恢复。
+- 四种 preset 由 bundle patch 声明，`/preset` 对已有对话要求确认新会话；旧 README 的常用命令表漏写了该入口。
+- 代码块现为语言标签加缩进代码行；旧 README 的四边闭合卡片描述已失效。
+- DSH 根项目的 Node 范围为 `^22.19.0 || >=24.0.0`，而其 CLI 使用 `import.meta.main`，Node 24 分支需 24.2.0 起；插件公开范围已收紧为 `^22.19.0 || >=24.2.0`。本机 Node v22.22.2 通过测试。
+- 用户已完成一次跨数小时待机实测，未出现键盘或鼠标乱码；真实 Provider/图片和跨终端长待机仍需继续验证，不作普遍性保证。
+
 ## 四种 Agent preset 对齐（2026-09-27）
 
 - `/preset` 使用 Harness 的 `agentPresets.list()`，并未在 TUI 过滤；原 bundle 仅声明 `standard`，因此面板只有一项。

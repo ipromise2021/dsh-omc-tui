@@ -5,16 +5,16 @@
 [![GitHub](https://img.shields.io/badge/GitHub-ipromise2021%2Fdsh--omc--tui-181717?style=flat-square&logo=github)](https://github.com/ipromise2021/dsh-omc-tui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![DeepSeek Harness](https://img.shields.io/badge/Harness-0.1.7--rc.2-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
-[![Node.js](https://img.shields.io/badge/Node.js-20%2B-green?style=flat-square)](package.json)
+[![Node.js](https://img.shields.io/badge/Node.js-22.19%2B%20%7C%2024.2%2B-green?style=flat-square)](package.json)
 
 **DeepSeek Harness 的终端原生 TUI**
 
 > **当前适配：DeepSeek Harness `v0.1.7-rc.2`**
 > **v0.2.16：适配 DSH v0.1.7-rc.2、支持四种 Agent preset，并增强长待机输入恢复与 Shell 后台任务。**
 
-独立视口差分渲染，提供双模态智能视觉、原生级划选回看、实时任务与 Plan 联动、行内审批与 Danger Guard 看门狗。
+独立视口差分渲染，提供图片输入、划选回看、任务与 Plan 面板、行内审批和 Danger Guard 看门狗。
 
-[架构与全功能实现](ARCHITECTURE.md) · [界面与设计说明](PRODUCT_SHOWCASE.md) · [兼容性契约](HARNESS_COMPATIBILITY.md) · [变更日志](CHANGELOG.md)
+[兼容性契约](HARNESS_COMPATIBILITY.md) · [变更日志](CHANGELOG.md)
 
 </div>
 
@@ -22,11 +22,33 @@
 
 `dsh-omc-tui` 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 ANSI 终端界面插件。
 
-插件专注于终端渲染与键盘交互；模型、会话、工具、权限、后台任务及持久化均由 Harness 官方服务提供。
+Agent 运行时、模型选择、会话、权限、Jobs 服务与持久化由 Harness 提供；插件负责终端交互与渲染，并提供视觉旁路工具和本地 `!` Shell 入口。
 
-项目参考了 Claude Code 的交互习惯与终端美学，采用独立备用屏幕与自研视口差分渲染架构，在彻底避免历史刷屏与乱码的同时，依然保留了顺滑的滚轮回看、鼠标智能分词划选与纯净文本复制等原生级体验。
+项目参考了 Claude Code 的交互习惯与终端美学，采用备用屏幕与视口差分渲染，支持滚轮回看、鼠标划选和复制。退出备用屏幕后，会把本次会话内容写回终端历史，方便继续查看。
 
-> 📌 **当前版本**：`v0.2.16` 面向 DSH `v0.1.7-rc.2`；已完成源码契约核对、隔离 Profile 实际启动、单元测试和模块导入验证。欢迎使用、点 Star 和反馈问题。
+> 📌 **当前版本**：`v0.2.16` 面向 DSH `v0.1.7-rc.2`；已完成源码契约核对、隔离 Profile 启动、单元测试和模块导入验证。跨数小时待机后，已有一次实际使用验证未出现键盘或鼠标乱码；其他终端环境仍欢迎反馈。
+
+## 快速开始
+
+需要 Node.js `22.19+`（22.x）或 `24.2+`，以及支持 ANSI 256 色的终端。用 `tui` profile 安装并启动：
+
+```sh
+npx --yes @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile tui add dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.1.7-rc.2 --profile tui
+```
+
+首次启动后，按 DSH 的提示配置模型提供方和 API Key。其他安装方式见[安装和启动](#安装和启动)。
+
+## 设计边界
+
+| 职责 | 实现位置 |
+| :--- | :--- |
+| Agent、模型、权限、会话、Jobs 服务与持久化 | DSH Profile 和 Harness 官方服务 |
+| 键盘/鼠标输入、面板、ANSI 渲染与会话投影 | 本插件的 `src/input/`、`src/panels/`、`src/renderer/` 和 `src/index.js` |
+| 用户输入的 `!` Shell 命令 | 插件启动本地进程，后台化时优先注册到 Harness Jobs 服务 |
+| 会话恢复 | 从 Harness 的 durable session events 重建 TUI 视图 |
+
+插件通过 Harness API 创建和恢复 Agent、提交业务操作；会话与权限不在插件内另建真相源。`!` Shell 进程属于当前 TUI，若 Jobs 服务无法注册，后台任务会暂存在当前进程内，退出后不能从该本地列表恢复。`standard`、`ptc`、`minimal`、`cordis` 四种 Agent preset 由 DSH preset registry 组合；`/preset` 可查看和切换，已有对话时会先确认新建会话。
 
 ## 当前 Harness 适配：DSH `v0.1.7-rc.2`
 
@@ -47,33 +69,33 @@ DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支
 
 ### 1. 独立视口与原生级终端体验
 
-- **备用屏幕与差分渲染**：采用终端备用屏幕（Alternate Screen，类似 Vim/tmux）与自研 Viewport 差分渲染引擎。会话在独立全屏视口中运行，退出时一键恢复原 Shell 画面，不向终端 Scrollback 遗留大段历史或混乱空行。
+- **备用屏幕与差分渲染**：采用终端备用屏幕（Alternate Screen，类似 Vim/tmux）与 Viewport 差分渲染。会话在全屏视口中运行，退出时恢复原 Shell 画面，并将会话内容写回终端历史。
 - **顺滑滚轮回看与智能划选**：内置 SGR 鼠标协议驱动的视口滚动；支持单击拖拽选区、双击中英文分词选择、三击选整行，复制时自动剥离 ANSI 样式纯净复制到系统剪贴板，亦可配合终端修饰键（macOS `Option` / Linux `Shift`）强制使用终端原生划选。
-- **工业级防乱码与终端健壮性**：完整消费 ECMA-48 CSI / OSC / DCS / SGR 回执，杜绝窗口缩放、焦点切换、外部编辑器返回或休眠唤醒时的控制序列乱码；后台挂起恢复后自动检测并修复 Raw Mode、输入流与鼠标追踪。
+- **输入恢复与终端健壮性**：输入路由识别 CSI / OSC / DCS 等控制序列和鼠标报告；对分片方向键、残缺粘贴、图片传输超时与待机后的终端模式丢失设有恢复路径。跨数小时待机的实际使用中，键盘和鼠标未出现乱码。
 - **语义阅读锚点与渐进防误触**：终端 Resize 窗口缩放时按内容语义锚点锁定阅读位置；生成期间按 `Esc` 先平滑滚动回底部、再次按下才触发任务中断。
 
 ### 2. 双模态视觉体系（原生直传 + 自主决策 Sidecar）
 
 支持在终端直接按 `Cmd/Ctrl+V` 粘贴 macOS / 桌面剪贴板图片，或通过 iTerm2 OSC 1337、Kitty Graphics 协议直接发送图片；内置高分屏自适应缩放引擎（2048px 安全基准线），并通过 Harness Attachment 管道自动管理与落盘。
 
-- **原生视觉直通**：连接多模态主模型（如 DeepSeek-V41-Flash、GPT-4o、Claude 3.5）时，图片作为原生 image content block 零延迟直传。
+- **原生视觉直通**：主模型支持图片输入时，通过 Harness 附件管道把图片作为 image content block 交给模型。
 - **自主旁路 Sidecar**：连接纯文本/代码模型时，主 Agent（无需人工切换主模型、无需手动调用插件）结合任务意图**自主判断**何时需要看图并自动触发底层的 `analyze_image` 视觉工具；TUI 在后台动态拉起隔离的临时视觉 Subagent，定向提取 OCR 与 UI 布局细节后立即销毁并回传主会话。
 - **待发图片快捷管理**：图片以 `[Image #n]` 出现在输入框前缀；若需撤回，将光标移到文本开头后按 `Backspace`，可按后进先出顺序逐张移除，文本草稿不会丢失。
 
 > **💡 视觉子代理模型与 API Key 配置提示**：
-> - **使用 DeepSeek API 订阅**：优先配置 DeepSeek-V41-Flash（执行 `/vision deepseek-official/deepseek-flash`）；也可继续使用 `deepseek-v4-flash-vision-exp`。子代理与主模型**共用同一套 DeepSeek API Key，无需额外更换或配置新的 Key**。
+> - **使用 DeepSeek API**：可配置 DeepSeek-V41-Flash（执行 `/vision deepseek-official/deepseek-flash`）；也可继续使用 `deepseek-v4-flash-vision-exp`。子代理与主模型使用同一提供方时，共用已配置的 DeepSeek API Key。
 > - **使用其他供应商视觉模型**：若子代理希望调用其他提供商（如 OpenAI `gpt-5.6-luna`、Qwen 等），只需在 DSH 中配置好对应供应商的 API Key，再执行 `/vision <provider>/<model>`（或直接输入 `/vision` 查看常用路由推荐）绑定子代理视觉模型即可。
 
 ### 3. 沉浸式树遍历排版与代码高亮
 
-- **Thinking 智能折叠与 `Ctrl+O` 穿透**：流式阶段显示平滑点阵动画与耗时；思考完毕自动收折为一行徽标；随时按 `Ctrl+O` 可原位穿透展开思维链与并行工具组，绝不产生终端刷屏与重放闪烁。
-- **精细化 Markdown 与层级 Diff**：四边闭合卡片与带语言标签的代码块呈现；展开工具调用后的 Diff 差异严格保持在所属工具下方层级缩进，并按列宽自适应截断。
+- **Thinking 折叠与 `Ctrl+O` 展开**：流式阶段显示动画与耗时；思考完毕自动收折为一行徽标；按 `Ctrl+O` 可原位展开思维链与工具组。
+- **Markdown 与层级 Diff**：代码块显示语言标签和缩进内容；展开工具调用后，Diff 保持在所属工具下方并按列宽截断。
 - **四款护眼主题**：内置 `claude`（暖色调）、`deepseek`（蓝色调）、`mono`（黑白）与 `light`（浅色，未选主题时自动感知终端背景）。
 
 ### 4. 实时任务中心与 Plan 联动 (Tasks & Plan)
 
 - **Durable 实时状态感知**：全面接入 Harness 的 `todo/write` 持久化快照，任务创建、进行中与已完成状态实时流式驱动 `/tasks` 任务中心面板与底部状态栏。
-- **断点完美复原**：历史会话恢复（`-c` / `/resume`）时，所有任务项与完成进度通过 Event Sourcing 100% 稳定重建。
+- **会话恢复**：历史会话恢复（`-c` / `/resume`）时，任务项与完成进度从 Harness 持久化事件重新投影。
 - **后台长任务 (Jobs)**：运行中的 `!` Shell 命令可用 `Ctrl+B` 放入后台，前台运行超过 60 秒也会自动转入后台继续执行；`/jobs` 可读取输出、刷新和取消任务。
 
 ### 5. 行内安全审批与原生看门狗 (Danger Guard)
@@ -92,7 +114,7 @@ DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支
 
 ## 环境要求
 
-- Node.js 20 或更高版本
+- Node.js `22.19+`（22.x）或 `24.2+`；DSH `v0.1.7-rc.2` 的运行时依赖需要这一范围
 - DeepSeek Harness [`@deepseek-ai/dsh@0.1.7-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)（预发布版本，需显式指定）
 - 支持 ANSI 256 色的终端
 - 图片显示建议使用 iTerm2 或支持 Kitty Graphics 的终端
@@ -175,6 +197,7 @@ npx --yes @deepseek-ai/dsh@0.1.7-rc.2 --profile tui
 | 命令 | 功能 |
 | :--- | :--- |
 | `/model` | 选择模型，并根据模型能力选择 reasoning effort |
+| `/preset` | 查看并切换 `standard`、`ptc`、`minimal`、`cordis`；已有对话时确认后新建会话 |
 | `/vision <provider>/<model>` | 配置 `analyze_image` 使用的旁路视觉模型 |
 | `/provider` | 管理模型提供方、自定义端点和模型列表 |
 | `/plan [off\|message]` | 进入或退出 Harness Plan 模式，可携带规划说明和图片 |
@@ -245,7 +268,7 @@ src/
 └── index.js     TUI 控制器与终端事件循环
 ```
 
-更完整的架构说明见 [PRODUCT_SHOWCASE.md](PRODUCT_SHOWCASE.md)，Harness 接口适配情况见 [HARNESS_COMPATIBILITY.md](HARNESS_COMPATIBILITY.md)。
+Harness 接口适配情况见 [HARNESS_COMPATIBILITY.md](HARNESS_COMPATIBILITY.md)。
 
 ## 开发与验证
 
@@ -262,7 +285,7 @@ DSH_TEST_FIXTURE_HOME=/path/to/dsh-home npm run test:pty
 
 ## 安全看门狗 (Danger Guard) 与安全边界
 
-`dsh-omc-tui` 内置了原生安全看门狗（Dangerous-Command Watchdog），在 Harness 的 `tools/pre-execute` 执行前切入点进行结构化语法审查与单调阻断（Deny-or-Abstain），防止模型或子代理意外执行高破坏性命令。
+`dsh-omc-tui` 内置了安全看门狗（Dangerous-Command Watchdog），在 Harness 的 `tools/pre-execute` 执行前切入点进行结构化语法审查与单调阻断（Deny-or-Abstain），降低模型或子代理误执行高破坏性命令的风险。
 
 ### 1. 内置防护覆盖矩阵
 
@@ -305,9 +328,10 @@ DSH_TEST_FIXTURE_HOME=/path/to/dsh-home npm run test:pty
 ## 当前限制
 
 - 项目仍处于 pre-release 阶段，Harness 上游接口变化后可能需要同步适配。
+- 长待机输入已有跨数小时实际使用验证；跨终端环境和真实 Provider/图片端到端测试仍需继续覆盖。
 - Windows 和更多真实模型提供方仍需要进一步验证。
 - `/plugins`、`/fork`、`/rewind` 等能力暂未在 TUI 中实现。
-- 本插件只提供 TUI；模型、工具、Sandbox 和会话持久化由 DSH profile 提供。
+- 本插件不提供独立 Agent Runtime 或模型服务；Sandbox 和会话持久化由 DSH profile 提供。
 
 ## 反馈与贡献
 

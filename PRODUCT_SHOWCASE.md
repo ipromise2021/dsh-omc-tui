@@ -1,5 +1,8 @@
 # DSH OMC (Oh-My-Claude TUI) · 设计亮点与功能详解
 
+> [!WARNING]
+> 此文档包含早期界面与设计说明，部分描述已不符合当前实现。当前功能请以 [README.md](README.md) 和源码为准。
+
 > DSH OMC 是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的终端 TUI 插件（`dsh.bundle`），提供 **Claude Code CLI 风格**的键盘优先交互界面，直接消费 Harness 底层的 Agent、工具与会话能力。
 
 ---
@@ -48,7 +51,8 @@
 
 ## 💡 核心交互设计与问题记录 (Key Interaction Design)
 
-### 1. 追加式普通缓冲区（Zero Alternate Screen）
+### 1. 早期方案：追加式普通缓冲区（已废弃）
+当前实现使用备用屏幕与视口差分渲染；以下内容仅作历史记录。
 - **问题**：备用屏幕（Alternate Screen）方案下，VS Code / iTerm2 的滚轮事件会被终端误解析为方向键，触发输入历史切换；同时鼠标无法框选复制文本。
 - **方案**：采用**标准缓冲区增量追加模型（Scrollback Stream）**——已生成的消息、工具执行与 Diff 直接追加进终端原生历史，仅在底部保留输入区与状态行。
 - **效果**：保留终端原生滚轮回看与划选复制能力，交互与普通命令行一致。
