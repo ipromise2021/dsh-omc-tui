@@ -852,6 +852,25 @@ export class TuiApp {
     this.history = await loadHistoryFile(this.stateDir(), this.preferences.persistHistory)
   }
 
+  /**
+   * Opt-in resume phase timing (`DSH_TUI_TRACE_RESUME=1`). Selecting a long
+   * session has several serial phases, and this records how long each one takes
+   * so the slow one is measured instead of guessed.
+   */
+  resumePhase(label, startedAt) {
+    this.resumeTrace?.push({ label, ms: performance.now() - startedAt })
+  }
+
+  flushResumeTrace(sessionId) {
+    const trace = this.resumeTrace
+    this.resumeTrace = undefined
+    if (!trace) return
+    const total = trace.reduce((sum, entry) => sum + entry.ms, 0)
+    const body = trace.map((entry) => `${entry.label} ${entry.ms.toFixed(0)}ms`).join(' | ')
+    const line = `${new Date().toISOString()} resume ${sessionId.slice(-8)} total ${total.toFixed(0)}ms :: ${body}\n`
+    void appendFile(join(this.stateDir(), 'resume-trace.log'), line).catch(() => {})
+  }
+
   async loadShellHistory(cwd = process.cwd()) {
     this.shellHistory = await loadShellHistoryFile(this.stateDir(), cwd, this.preferences.persistHistory, 200, {
       importSystemHistory: this.preferences.importSystemShellHistory
@@ -6031,9 +6050,13 @@ export class TuiApp {
     let candidateDangerGuardDispose
     let committed = false
     try {
+      const resumeStartedAt = performance.now()
+      if (process.env.DSH_TUI_TRACE_RESUME === '1') this.resumeTrace = []
+      this.resumeTraceAt = resumeStartedAt
       const selection = this.ctx.agentDefaultModel.currentSelection()
       let skillOverrideDisposers
       let requestedPreset = record.header.agentPreset ?? this.ctx.agentPresets.defaultId
+      const presetReadAt = performance.now()
       try {
         const snapshot = await this.ctx.sessionQuery.readSession(record.header.id)
         const selected = [...(snapshot.events ?? [])].reverse().find((event) => event.type === 'agent-preset/selected')
@@ -6041,6 +6064,8 @@ export class TuiApp {
       } catch {
         // Fall back to the recorded header/default when the query backend cannot replay this session.
       }
+      this.resumePhase?.('preset-read', presetReadAt)
+      const resumeAt = performance.now()
       const { agent, dispose } = await this.ctx.agents.resume({
         resumeSessionId: record.header.id,
         agentOptions: { provider: selection.provider, model: selection.model },
@@ -6053,6 +6078,8 @@ export class TuiApp {
       candidateSkillOverrides = skillOverrideDisposers ?? new Map()
       const candidatePresetName = this.ctx.agentPresets.composedPreset(agent.ctx) ?? requestedPreset
       const candidateReasoningEffort = agent.session.requestHeader()?.config.reasoningEffort ?? selection.reasoningEffort
+      this.resumePhase?.('agents-resume', resumeAt)
+      const foldAt = performance.now()
       const candidateEvents = sessionEvents(agent.session)
       const candidateUsage = foldUsage(candidateEvents)
       const candidatePermissionName = permissionFromEvents(candidateEvents, currentPermissionPreset(this.ctx.permissionPresets, agent.session))
@@ -6079,8 +6106,10 @@ export class TuiApp {
         isResumed: true,
         sessionEvents: candidateEvents
       })
+      this.resumePhase?.('fold-and-commit', foldAt)
       committed = true
 
+      const renderAt = performance.now()
       const previewLimit = candidateEvents.length > 200 ? 200 : undefined
       this.historyStartIndex = previewLimit ? candidateEvents.length - previewLimit : 0
       try {
@@ -6091,7 +6120,11 @@ export class TuiApp {
         this.log('error', `session resumed but failed to render: ${error instanceof Error ? error.message : String(error)}`, '/resume')
       }
 
+      this.resumePhase?.('first-paint', renderAt)
+      const cleanupAt = performance.now()
       await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers, previousDangerGuardDispose)
+      this.resumePhase?.('previous-cleanup', cleanupAt)
+      this.flushResumeTrace?.(record.header.id)
       if (this.agent === agent) {
         this.touchMru(record.header.id)
         void this.refreshSkills()
