@@ -111,7 +111,7 @@ export function renderStatusRows(options) {
 
   const meterWidth = columns >= 80 ? 14 : 8
   const filled = percent > 0 ? Math.min(meterWidth, Math.max(1, Math.floor((percent / 100) * meterWidth))) : 0
-  const meter = `${ANSI.dim}[${ANSI.reset}${ANSI.bold}${barColor}${'░'.repeat(filled)}${ANSI.rule ?? ANSI.bar}${'░'.repeat(meterWidth - filled)}${ANSI.dim}]${ANSI.reset}`
+  const meter = `${ANSI.dim}[${ANSI.reset}${ANSI.bold}${barColor}${'█'.repeat(filled)}${ANSI.rule ?? ANSI.bar}${'░'.repeat(meterWidth - filled)}${ANSI.dim}]${ANSI.reset}`
 
   const cacheTotal = usage.input + usage.cacheRead
   const cachePercent = cacheTotal > 0 ? Math.round((usage.cacheRead / cacheTotal) * 100) : 0

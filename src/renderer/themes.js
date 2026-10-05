@@ -100,9 +100,9 @@ export const THEMES = {
     bash: '\x1b[1;38;5;172m',     // Warm rich amber for light bg
     bar: '\x1b[38;5;250m',
     barFill: '\x1b[38;5;28m',
-    contextFill: '\x1b[38;5;28m',
-    contextWarning: '\x1b[38;5;130m',
-    contextCritical: '\x1b[38;5;124m',
+    contextFill: '\x1b[38;5;22m',
+    contextWarning: '\x1b[38;5;94m',
+    contextCritical: '\x1b[38;5;88m',
     selectionBg: '\x1b[48;5;252m\x1b[38;5;235m',
     userBg: '\x1b[48;5;252m',
     diffRemoveBg: '\x1b[48;5;224m',

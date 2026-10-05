@@ -3,6 +3,7 @@ test/__pycache__/
 dsh-session-*.md
 file-ref-fixture.js
 .DS_Store
+node_modules/
 
 # 内部规划与工程文档（不对外，不进 npm 包，也不进公开仓库）
 _internal/

@@ -1,5 +1,55 @@
 # 代码审查优化进度日志
 
+## 会话：2026-10-05（恢复标题、长历史与滚轮）
+
+### 阶段 44：恢复交互复核
+- **状态：** complete
+- 用户截图显示滚轮报告尾部进入输入框；现有 150ms `ESC [` 超时与恢复后同步排版完整历史可共同触发该现象。
+- `-c` 删除按 MRU 逐个读取完整日志的无效循环，只通过官方 `listSessions()` 选会话；`/resume` 标题改用官方批量查询，一次处理全部未缓存项。
+- 长历史首屏投影最近 200 个事件，向上滚动时每次再载入 400 个事件；不再启动 50ms 后的全量同步投影。旧内容仍来自 Harness durable event。
+- 输入路由为超时拆开的 SGR 滚轮主体保留短期重连窗口；普通输入不被保留状态吞掉。新增单元回归，`npm test`、`npm run verify`、`git diff --check`、隔离完整 PTY 套件 6 项及 69 文件打包预检均通过。
+- 单独运行 `dsh --profile tui -c` 恢复隔离历史会话，约 2.4 秒进入可输入界面并正常退出。原用户终端中的长历史和滚轮仍需使用者复测；本轮未提交、推送或发布。
+
+## 会话：2026-10-05（DSH 历次版本累计适配）
+
+### 阶段 43：发布变化与实际行为复核
+- **状态：** complete
+- 范围为已发布插件 `0.2.16` 所在的 DSH `0.1.7-rc.2`，及后续 `0.2.0-rc.1/rc.2` 的累计变化；继续以本地未发布源码 `0.2.17` 适配 rc.2。
+- 当前 `npm test`、`npm run verify`、`git diff --check` 与 69 文件打包预检通过；此前隔离 PTY 的模型变体选择等待在官方 `saveSelection()`，需要进一步定位。
+- 用临时安装的 DSH rc.2 包做阶段日志：`saveSelection()` 已取得 profile 锁，阻塞在官方配置重组等待未就绪 fiber；临时关闭 HMR 或 Chrome MCP 单项仍失败，同时关闭后 `pty-features.py` 通过。此前观察到的 TUI `stop()` 发生在 PTY 断言超时后，已纠正误判。
+- 产品 patch 默认关闭 HMR，隔离 mock bundle patch 关闭测试无关的 Chrome MCP；使用当前源码链接的隔离 Profile，`--dump-config` 核对两个禁用项、`pty-features.py` 通过。
+- 首次以 `DSH_TEST_FIXTURE_HOME` 运行完整 PTY 时，测试脚本复制 Profile 后相对 symlink 指向旧路径，mock bundle 无法解析；这是测试夹具复制问题。改用既有隔离 `DSH_HOME` 直接运行后再判定产品回归。
+- 复用隔离 Home 时，前一脚本已将模型切为 `mock-v2`，后续脚本的 `mock-v1` 初态假设失效；另一次新 Home 的 Profile patch 仍指向官方模型，导致 mock 审批步骤无法触发。创建全新 Profile、修正测试用软链接并指定 `mock-v1` 后，`npm run test:pty` 六项全部通过。
+- `/model` 的各 Provider 列表改为并行请求，并在成功刷新得到空目录时清除旧缓存；新增并发与旧模型清理回归。`npm test`、`npm run verify`、`git diff --check` 和 69 文件打包预检通过。
+- README、兼容契约和变更日志已记录三个版本的累积影响与验证边界。生产 Chrome MCP 初始连接现在在 10 秒未出现 JSON-RPC 输出时终止，避免官方配置重组无限等待；真实 Provider 与已就绪 Chrome MCP 的联合模型保存仍需实测。没有修改生产浏览器工具挂载，也未提交、推送或发布。
+
+## 会话：2026-10-05（/resume 历史加载优化）
+
+### 阶段 42：定位与改进
+- **状态：** complete
+- 用户澄清截图是 `dsh web` 页面；此前将其称为桌面端不准确。
+- 先测量 `/resume` 选择到首屏渲染的阶段耗时，并保持 Harness 官方服务与 durable event 为唯一数据源。
+- 已在隔离 Profile 测得短会话 `/resume` 总计约 99ms；合成历史的全量投影在 1000/3000 轮时分别约 1.0/2.9s。
+- 在 `resumeSelected()` 中先投影最近 200 条事件并同步显示首屏，然后等待旧会话清理、补齐全量历史。3000 轮合成会话预览投影约 137ms，全量补齐约 2835ms；最早历史最终可回看。
+- 增加长历史首屏先于清理、最终完整投影的回归断言；现有 `pty-resume.py` 在隔离 rc.2 Profile 上通过。`npm test`、`npm run verify`、`git diff --check` 通过。
+- 同样覆盖 `dsh -c` 启动恢复；隔离 Profile 中实际启动通过并显示既有历史内容。最终 `pty-resume.py`、`npm test`、`npm run verify`、`git diff --check`、69 文件打包预检均通过。本轮未提交、推送或发布。
+
+## 会话：2026-10-05（DSH v0.2.0-rc.2 适配）
+
+### 阶段 41：核对与适配
+- **状态：** complete
+- npm 官方页面确认 rc.2 存在；本机 Harness 源码检出及用户截图中的 `dsh web` 页面均仍为 `0.1.7-rc.2`。本轮先核对发布包/源码，再修改插件并隔离验证。
+- 预存工作区改动：`.gitignore`、statusline 配色及其测试、`.nvmrc`、`tmp_text.md`；保留这些改动，不纳入适配重写。
+- 官方 tag 源码比对确认四个 preset patch 与 registry `src/` 无变化；将全部 DSH peer 范围改为 `^0.2.0-rc.2`，其余源码契约变化待实际运行判断。
+- 隔离 Profile 安装本地 tarball、mock provider、`--dump-config` 均成功，四 preset 均在配置树中。`pnpm peers check` 提示缺少由 CLI 安装层提供的核心包，仍需通过启动验证。
+- 首次单独运行 `pty-resume.py` 在 `/resume` 断言失败；隔离 Home 只有正在运行的一条会话，而 picker 只列已持久化且非 live 的旧会话。接下来先运行其他 PTY 场景产生历史会话，再重试；不把这次失败直接认定为 rc.2 兼容缺陷。
+- `pty-e2e.py` 生成历史会话后，`pty-resume.py` 重跑通过；`pty-file.py`、`pty-image.py`、`pty-interaction.py` 也通过。
+- `pty-features.py` 在模型变体面板断言处失败，延长等待至 30 秒仍未通过。仅在隔离安装的临时插件中插入诊断，确认已读到 4 个 reasoning effort，随后等待于官方 `agentDefaultModel.saveSelection()`；此用例在旧版基线亦未通过。没有修改仓库产品代码以绕过官方写入。
+- 版本预备为未发布 `v0.2.17`；README 区分仓库源码与已发布 npm `v0.2.16`，同步兼容契约和变更日志。第一次 `npm test` 因版本断言仍写 `0.2.16` 失败，现已更新断言并重跑。
+- `npm pack --dry-run --json` 产出 `dsh-omc-tui@0.2.17` 的 69 个文件；`npm run verify`、`git diff --check` 通过。
+- 将最终 `0.2.17` tarball 再装入隔离 Profile。首次重装因沙箱下 pnpm store 路径与初装时不同而报 `ERR_PNPM_UNEXPECTED_STORE`；沿用初装的 store 重试成功。已核对安装包版本、`^0.2.0-rc.2` peer 和四种 preset 的最终 `--dump-config`。
+- 最终 `0.2.17` 安装包上重跑 `pty-resume.py` 通过（含 preset picker 与切换）；本轮未提交、推送或发布。
+
 ## 会话：2026-09-29（README 与设计校准）
 
 ### 阶段 40：README 功能与设计说明校准

@@ -4,6 +4,16 @@
 
 ---
 
+## v0.2.17 · 未发布
+
+- 将 Harness peer 依赖基线升级至 `v0.2.0-rc.2`；新版启动器会检查插件声明的 DSH peer 版本。
+- 核对四种 preset、Session 事件与所用服务接口；在隔离 Profile 中验证插件安装、配置加载和 TUI 交互。已发布的 `v0.2.16` 仍面向 DSH `v0.1.7-rc.2`。
+- 累计复核 DSH `v0.1.7-rc.2`、`v0.2.0-rc.1` 和 `v0.2.0-rc.2` 的 TUI 契约：关闭不需要的 Profile HMR；Chrome MCP 首次 JSON-RPC 握手限制为 10 秒，超时后让官方 MCP 重连机制接管，避免其未就绪 fiber 无限阻塞官方模型配置保存。隔离 mock Profile 的完整 PTY 套件包含模型变体切换均通过；真实 Provider 与已就绪 Chrome MCP 的联合保存仍待验收。
+- `/model` 并行读取各 Provider 的模型目录；刷新时移除已下架模型的旧缓存。
+- `/resume` 和 `-c` 先投影最近的历史事件；滚到顶部时按需载入更早内容，避免后台全量排版长时间占用输入循环。`-c` 选会话不再逐个读取完整日志，`/resume` 标题一次批量读取全部未缓存项；恢复期间被延迟拆开的滚轮报告不再进入输入框。
+
+---
+
 ## v0.2.16 · 2026-09-28
 
 - **Harness v0.1.7-rc.2 兼容**：依赖与 Profile patch 迁移至 preset registry、scoped standard preset 和 PTC runtime；TUI 设置迁移至 Config/SettingsForms；工具失败投影兼容 Session V4 的 `message.isError` 与 `error.reason`。隔离 `DSH_HOME` 中完成 `--dump-config` 和真实 TUI 启动验证。

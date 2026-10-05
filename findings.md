@@ -1,5 +1,40 @@
 # 代码审查发现与跟踪
 
+## 恢复会话标题、长历史与滚轮输入（2026-10-05）
+
+- `-c` 的 `findResumeRecord()` 曾按 MRU 顺序逐个调用 `sessionQuery.readSession()`，但新版 `readSession()` 返回 `{ session, events }` 而非 `header`，该循环无法命中，最终仍调用 `listSessions()`；长日志会被白读多次。现只调用一次官方 `listSessions()`，并以 header 和 MRU 排序选择。
+- `/resume` 标题曾并发调用最多 50 次 `readTitle()`，每次内部都进行一次 corpus 观察和持久化列表读取。改用官方 `readTitleSnapshots()` 一次并发处理全部未缓存标题；旧版缺少批量接口时仍使用 `readTitle()`。
+- 上一轮的 200 事件预览之后仍会同步排版全部历史，合成 3000 轮约耗时 2.8 秒，期间输入循环和滚轮响应受阻。现将较早转写保留在 Harness 会话事件中，只在滚至顶部时每次扩大 400 个事件的投影范围；旧内容仍可继续向上回看。
+- 输入路由此前对拆分的 `ESC [` 使用 150ms 通用超时，恢复排版阻塞后到达的 SGR 滚轮主体可能成为输入框文字。现在仅对超时后的明确 SGR `<...M/m` 主体短期重连，普通字符仍照常输入；新增超过 150ms 的拆分回归。截图字符形态与该路径一致，仍需用户在原终端复测。
+
+## DSH 历次版本累计适配复核（2026-10-05）
+
+- 官方 `0.1.7-rc.2` 发布记录包含动态工具增加、审批接续、模型切换等待与插件配置保存修复；`0.2.0-rc.1` 汇总图片重传、工具调度失败恢复和展示变更；`0.2.0-rc.2` 增加模型目录调整、可选异步问答与桌面/Web 改动。需依据 TUI 实际调用链核查，而非将 Web 界面功能逐项复制。
+- 现有 `chooseModel()` 在 `saveSelection()` 完成前不显示变体面板；隔离 mock Profile 的保存等待超过 30 秒，属于必须解释的交互瓶颈。
+- 分阶段日志定位到 `agentDefaultModel.saveSelection()` 已进入官方 `ConfigEditor.edit()`，并取得配置文件锁；它在提交新配置前先调用 `reconcileProfilePatches()`，该步骤会等待此前所有插件 fiber 完成。隔离 Profile 中 `hmr` 和 `mcp-chrome-devtools` 的初始 fiber 均可长期未就绪，单独禁用任一项时另一个仍阻塞保存。两者都禁用后同一模型变体 PTY 场景通过。测试脚本超时关闭终端后才触发 TUI `stop()`，不能把它误判成保存主动停止 TUI。
+- 官方 headless Profile 默认禁用 HMR；TUI 是交互式长生命周期进程，不依赖开发目录热更新即可提供正常功能。隔离 mock PTY 不需要外部 Chrome MCP，可在测试 Profile 禁用它，避免网络安装和外部浏览器影响模型持久化验收。生产 Chrome MCP 是否就绪仍需要单独验证。
+- `0.1.7-rc.2` 的动态工具与审批接续属于 Harness runtime，TUI 使用官方工具/审批事件和服务；`0.2.0-rc.1` 的图片重传、工具失败恢复由上游处理，TUI 现有 V3/V4 错误投影和附件路径可继续使用。`0.2.0-rc.2` 的旧模型 ID 移除会影响 `/model` 目录缓存，因此刷新时清理旧列表，且并行请求 Provider；实验性异步问答未在 TUI Profile 开启，继续用官方 legacy 模式。Web/Desktop 的界面变化不属于 TUI API 迁移。
+- 完整隔离 PTY 套件 6 项通过，其中模型变体选择和当前会话切换通过。先前复用 Profile 引起模型初态不符；直接复制含相对软链接的夹具引起 mock bundle 解析失败；改用全新 Profile 并修正隔离软链接后通过。这两项不是产品缺陷。
+- 生产 Chrome MCP 保持启用以保留浏览器工具。其包装器现在只等待 10 秒内出现 JSON-RPC 输出；超时会终止子进程，让 `mcp-client` 的非致命启动失败和既有重连策略接管，因此 `ConfigEditor` 不会无限等待该 fiber。回归用例以不响应的 `npx` 替身验证了此退出边界；真实 Provider 与已就绪 Chrome MCP 的联合模型保存尚未实测。未绕开官方 `saveSelection()` 或直接改写 Harness 配置。
+
+## /resume 历史加载优化（2026-10-05）
+
+- 用户所指截图为 `dsh web` 页面，之前将其称作桌面端是不准确的。
+- 隔离 mock 短会话的 `/resume` 阶段计时：预读 `readSession` 约 45ms、`agents.resume` 约 20ms、旧会话清理约 9ms、转写投影约 7ms；总计约 99ms。长会话的独立投影基准为 1000 轮约 1.0s、3000 轮约 2.9s。
+- 现行恢复流程必须从 durable event 判定最新 preset，然后由 Harness 正式恢复 Agent；不能以 header 猜测最新 preset，也不能直接读写底层会话文件。主要可优化点是首屏不要等完整转写投影和旧会话清理。
+- 当时的实现先投影最后 200 条事件并显示首屏，旧会话清理后再补齐全量历史。3000 轮合成会话的首屏投影约 137ms，全量补齐约 2835ms；全量排版仍占用主线程。此策略已在上面的恢复优化中改为向上滚动时按需载入。
+
+## DSH v0.2.0-rc.2 兼容适配（2026-10-05）
+
+- npm 官方包页面显示 `@deepseek-ai/dsh@0.2.0-rc.2` 已发布；用户截图是 `dsh web` 页面，页面中显示的版本为 `0.1.7-rc.2`；本地 Harness 源码检出也停在 `0.1.7-rc.2`。
+- 插件目前的 `package.json` peerDependencies、四个 preset patch 和 README 仍针对 `0.1.7-rc.2`。先获取新版发布契约再改动，保留现有未提交的 statusline 配色及其他文件。
+- 官方 tag `dsh-v0.2.0-rc.2` 为 `639ed015397290b3745d163aafe02ffee4aa3f84`。与本地旧版源码比较，四个 Web preset patch 完全相同，preset registry 的 `src/` 完全相同；base patch 主要新增 OTel entry。
+- 直接 peer 包源码变化集中在 `agent-loop` 的失败工具结果恢复、`session` 的 recovery helper、`user-questions` 的可选限时提问，以及 `tool-ask-user` 的可选 `mode: timed`；默认仍是 `legacy`。TUI 当前的 Agent-scoped `user-questions/request` waterfall 仍存在。
+- rc.2 的 app-boot 会检查所有 `@deepseek-ai/dsh*` peer 范围。当前 `^0.1.7-rc.2` 与 `0.2.0-rc.2` 不匹配，因此必须更新 peer 声明；`@deepseek-ai/cordis` 4.0.4 仍处于现有 `^4.0.2` 范围内。
+- 隔离 `DSH_HOME` 安装本地 tarball 与 mock bundle、配置展开和实际 TUI 启动成功。会话、resume、文件、图片、交互五项 PTY 脚本通过；首次 resume 失败只是缺少历史会话前置数据。
+- 模型切换 PTY 的变体面板未出现。隔离安装的临时插件诊断表明 mock 适配器的 4 个 effort 已成功读取，执行停在官方 `agentDefaultModel.saveSelection()`；30 秒仍未结束。旧版工作记录也记载此断言失败，尚无法判断真实 Provider 是否受影响。不能声称完整 PTY 套件通过。
+- 当前源码预备版本 `0.2.17` 不发布；npm `0.2.16` 仍适配 DSH `0.1.7-rc.2`。README 保留可用的已发布版安装命令，并给出 rc.2 本地源码安装命令。
+
 ## README 功能与设计校准（2026-09-29）
 
 - 当前 TUI 使用备用屏幕和视口差分渲染；`restoreTerminal()` 退出时会把会话行写回主终端历史。旧架构/展示文档的 Zero Alternate Screen 描述是历史方案，已在文档顶部和对应小节标注。
