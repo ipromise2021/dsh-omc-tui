@@ -6,7 +6,7 @@ const MAX_SGR_MOUSE_LENGTH = 64
 // Reads cap near 1024 bytes, so a continuous scroll cuts SGR reports at an
 // arbitrary byte and one read carries hundreds of them. The scanner consumes
 // every complete report and keeps only one unfinished head across reads.
-const SGR_REPORT_ANYWHERE = /\x1b\[<\d+;\d+;\d+[Mm]/g
+const SGR_REPORT_ANYWHERE = /\x1b\[<\d*;\d*;\d*[Mm]/g
 // An unfinished report head whose field can still be written.
 const SGR_HEAD_OPEN = /^\x1b\[<\d*(?:;\d*)?$/
 // An introducer that is not even complete (`ESC` or `ESC [`).
@@ -487,9 +487,12 @@ export class InputRouter {
       if (SGR_TAIL.test(text)) {
         // Complete the introducer only when the previous read cut it; otherwise
         // the pending head is a byte-exact prefix and the text continues it.
-        const head = last === '<' || /\d/.test(last)
-          ? this.sgrPending
-          : last === '[' ? `${this.sgrPending}<` : '\x1b[<'
+        // The introducer is only incomplete while it has not reached its `<`.
+        // Once it has, the pending head is a byte-exact prefix of the report and
+        // the read simply continues it.
+        const head = last === '[' ? `${this.sgrPending}<`
+          : last === '\x1b' ? '\x1b[<'
+            : this.sgrPending
         text = head + text.replace(/^</, '')
       } else {
         text = this.sgrPending + text
