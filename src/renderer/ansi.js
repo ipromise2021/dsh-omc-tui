@@ -284,8 +284,10 @@ export function shorten(text, size = 110) {
 }
 
 export function formatTokens(value) {
-  if (value >= 1000000) return `${(value / 1000000).toFixed(value % 1000000 === 0 ? 0 : 1)}m`
-  if (value >= 999500) return '1m'
+  // Millions stay whole and use a capital suffix, so a token count can never be
+  // confused with the lowercase `m` minute marker used by durations.
+  if (value >= 1000000) return `${Math.round(value / 1000000)}M`
+  if (value >= 999500) return '1M'
   if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k`
   return String(value)
 }
