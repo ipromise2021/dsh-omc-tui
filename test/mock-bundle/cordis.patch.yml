@@ -2,6 +2,11 @@
 # mount the mock adapter + approval-gated mock tool. Only ever added to an
 # isolated test profile — never to a real profile.
 
+# The mock scenarios exercise model persistence without a live browser or npm
+# download; keep the unrelated Chrome MCP connection out of this profile.
+- id: mcp-chrome-devtools
+  disabled: true
+
 - id: agent-default-model
   config:
     provider: mock

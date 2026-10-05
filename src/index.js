@@ -663,6 +663,7 @@ export class TuiApp {
 
     let resolveInit
     this.sessionInitPromise = new Promise((resolve) => { resolveInit = resolve })
+    let startupResumeAgent
 
     try {
       // 2. Parallel background data loading
@@ -723,6 +724,10 @@ export class TuiApp {
       this.attachRequestOverride(agent)
       this.dangerGuardDispose = await this.createDangerGuardDisposer(agent)
       const initialEvents = sessionEvents(agent.session)
+      if (isResumed && initialEvents.length > 200) {
+        startupResumeAgent = agent
+        this.historyStartIndex = initialEvents.length - 200
+      }
       this.permissionName = permissionFromEvents(initialEvents, currentPermissionPreset(this.ctx.permissionPresets, agent.session))
       this.usage = foldUsage(initialEvents)
       this.refreshContextTokens?.()
@@ -784,16 +789,17 @@ export class TuiApp {
       clearInterval(initTimer)
       this.sessionInitPromise = undefined
       if (resolveInit) resolveInit()
-      this.finishInitialization()
+      this.finishInitialization(startupResumeAgent)
       this.startBackgroundInitialization()
     }
   }
 
-  finishInitialization() {
+  finishInitialization(resumedAgent = undefined) {
     this.initializing = undefined
     this.lastFooterHeight = 0
     this.lastCursorRowInFooter = 0
-    this.repaint(true)
+    this.message = ''
+    this.repaint(true, resumedAgent ? 200 : undefined)
   }
 
   startBackgroundInitialization() {
@@ -807,15 +813,6 @@ export class TuiApp {
   }
 
   async findResumeRecord(cwd) {
-    const mruEntries = Object.entries(this.mru || {}).sort((a, b) => b[1] - a[1])
-    for (const [candidateId] of mruEntries) {
-      try {
-        const snapshot = await this.ctx.sessionQuery.readSession(candidateId)
-        if (!isSubagentSession(snapshot) && (snapshot?.header?.cwd ?? snapshot?.cwd) === cwd) {
-          return snapshot
-        }
-      } catch {}
-    }
     const records = (await this.ctx.sessionQuery.listSessions())
       .filter((record) => !isSubagentSession(record) && (record.header?.cwd ?? record.cwd) === cwd)
       .sort((a, b) => ((this.mru?.[b.header.id] ?? b.header.createdAt) - (this.mru?.[a.header.id] ?? a.header.createdAt)))
@@ -1401,14 +1398,16 @@ export class TuiApp {
     }
   }
 
-  reprojectDocument(preserveFollowEnd = true) {
+  reprojectDocument(preserveFollowEnd = true, eventLimit = undefined) {
     this.transcriptProjectionPending = false
     const columns = process.stdout.columns || 80
     const rows = process.stdout.rows || 24
     const footerHeight = this.lastFooterHeight || 4
     const viewportHeight = Math.max(1, rows - footerHeight)
 
-    const visibleEvents = sessionEvents(this.agent?.session).filter((e) => e.seq >= this.viewClearedSeq)
+    const allEvents = sessionEvents(this.agent?.session)
+    const visibleEvents = (eventLimit ? allEvents.slice(-eventLimit) : allEvents.slice(this.historyStartIndex ?? 0))
+      .filter((e) => e.seq >= this.viewClearedSeq)
     const logEvents = this.localLog
       .filter((e) => e.seq >= (this.viewClearedSeq ?? 0) && e.command !== '!' && !/^exit /.test(e.command ?? ''))
       .map((entry) => ({
@@ -1426,7 +1425,9 @@ export class TuiApp {
     const workspace = truncateWidth(safe(cwd), Math.max(24, contentWidth - 24))
     const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek-official', model: 'deepseek-flash' }
     const model = truncateWidth(`${selection.provider}/${selection.model}`, Math.max(20, contentWidth - 28))
-    const welcome = welcomeCardRows(columns, workspace, model, (this.currentEffort?.() ?? 'DEFAULT').toUpperCase())
+    const welcome = this.historyStartIndex > 0
+      ? [`  ${ANSI.dim}↑ scroll up to load earlier history${ANSI.reset}`, '']
+      : welcomeCardRows(columns, workspace, model, (this.currentEffort?.() ?? 'DEFAULT').toUpperCase())
 
     const options = {
       expandedKeys: this.expandedKeys,
@@ -1528,10 +1529,10 @@ export class TuiApp {
     this.repaint(true)
   }
 
-  repaint(clearScreen = false) {
+  repaint(clearScreen = false, eventLimit = undefined) {
     if (!this.terminalOpen) return
     if (clearScreen) this.clearScreenRequested = true
-    this.reprojectDocument()
+    this.reprojectDocument(true, eventLimit)
     const events = sessionEvents(this.agent?.session)
     if (events.length) {
       this.lastCommittedSeq = events[events.length - 1]?.seq ?? this.lastCommittedSeq
@@ -3894,17 +3895,21 @@ export class TuiApp {
     try {
       const llm = this.llmService
       const providers = llm?.listProviders?.() ?? []
-      const entries = []
-      for (const provider of providers) {
-        let models = []
+      let successfulLists = 0
+      const modelLists = await Promise.all(providers.map(async (provider) => {
         try {
-          models = (await llm.listModels(provider.id)) ?? []
+          const models = (await llm.listModels(provider.id)) ?? []
+          successfulLists++
+          return models
         } catch {
-          models = []
+          return []
         }
-        for (const entry of models) {
+      }))
+      const entries = []
+      for (let i = 0; i < providers.length; i++) {
+        for (const entry of modelLists[i]) {
           entries.push({
-            provider: provider.id,
+            provider: providers[i].id,
             model: entry.id ?? entry.name ?? entry.model,
             name: entry.name ?? entry.id ?? entry.model,
             description: entry.description,
@@ -3938,7 +3943,7 @@ export class TuiApp {
           }
         }
       } catch {}
-      if (entries.length > 0) {
+      if (entries.length > 0 || successfulLists > 0 || (llm && providers.length === 0)) {
         this.cachedModelEntries = entries
       }
     } catch {}
@@ -4911,6 +4916,7 @@ export class TuiApp {
     this.usage = usage
     this.permissionName = permissionName
     this.viewClearedSeq = 0
+    this.historyStartIndex = 0
     const events = sessionEvents(handle.agent.session)
     this.lastCommittedSeq = events[events.length - 1]?.seq ?? 0
 
@@ -5920,43 +5926,75 @@ export class TuiApp {
           return sessionCwd === undefined || sessionCwd === cwd
         })
         .sort((a, b) => (this.mru[b.header.id] ?? b.header.createdAt) - (this.mru[a.header.id] ?? a.header.createdAt))
-        .slice(0, 50)
       if (sessions.length === 0) {
         this.log('error', 'no past sessions in this directory', '/resume')
         this.scheduleRender(true)
         return
       }
-      // Show picker immediately with cached titles or placeholder for instant opening
-      const initialEntries = sessions.map((record) => {
-        const cached = this.sessionTitleCache.get(record.header.id)
+      // Read durable title projections first. The predecessor-title fallback
+      // keeps titles from the immediately previous Harness session format fast.
+      const candidates = sessions.map((record) => {
+        let cached = this.sessionTitleCache.get(record.header.id)
+        if (cached === undefined) {
+          try {
+            const cache = this.ctx.get?.('sessionProjectionCache')
+            let snapshot
+            try { snapshot = cache?.cachedSnapshot(record.header, ['title']) } catch {}
+            try { snapshot ??= cache?.cachedPredecessorTitle(record.header) } catch {}
+            const title = snapshot?.values?.title
+            if (title) cached = { title }
+          } catch {}
+          if (cached) this.sessionTitleCache.set(record.header.id, cached)
+        }
         return {
           header: record.header,
-          title: cached,
-          titleLoading: cached === undefined
+          title: cached
         }
       })
-      this.picker = { sessions: initialEntries, selected: 0, loaded: false }
+      const uncached = candidates.filter((entry) => !entry.title)
+      this.picker = {
+        sessions: candidates.filter((entry) => entry.title),
+        selected: 0,
+        loaded: false,
+        loadingTitles: uncached.length
+      }
+      const picker = this.picker
       this.scheduleRender(true)
-      // Fetch titles for any sessions not yet in cache asynchronously
-      const uncached = initialEntries.filter((e) => !e.title)
       if (uncached.length > 0) {
         void (async () => {
-          await Promise.all(uncached.map(async (entry) => {
+          if (this.picker !== picker) return
+          if (typeof this.ctx.sessionQuery?.readTitleSnapshots === 'function') {
             try {
-              const title = await this.ctx.sessionQuery?.readTitle(entry.header.id)
-              if (title) {
-                this.sessionTitleCache.set(entry.header.id, title)
-                entry.title = title
+              const results = await this.ctx.sessionQuery.readTitleSnapshots(uncached.map((entry) => entry.header.id))
+              for (let index = 0; index < uncached.length; index++) {
+                const title = results[index]?.status === 'fulfilled' ? results[index].value?.title : undefined
+                if (title) {
+                  this.sessionTitleCache.set(uncached[index].header.id, title)
+                  uncached[index].title = title
+                }
               }
-            } catch {
-              // fallback
-            } finally {
-              entry.titleLoading = false
-            }
-          }))
-          if (this.picker) {
-            this.scheduleRender()
+            } catch {}
+          } else {
+            await Promise.all(uncached.map(async (entry) => {
+              try {
+                const title = await this.ctx.sessionQuery?.readTitle(entry.header.id)
+                if (title) {
+                  this.sessionTitleCache.set(entry.header.id, title)
+                  entry.title = title
+                }
+              } catch {}
+            }))
           }
+          if (this.picker !== picker) return
+          const selectedId = picker.sessions[picker.selected]?.header.id
+          picker.sessions = candidates.filter((entry) => entry.title)
+          picker.selected = Math.max(0, picker.sessions.findIndex((entry) => entry.header.id === selectedId))
+          picker.loadingTitles = 0
+          if (picker.sessions.length === 0) {
+            this.picker = undefined
+            this.log('error', 'no past sessions with content in this directory', '/resume')
+          }
+          this.scheduleRender()
         })()
       }
     } catch (error) {
@@ -5980,6 +6018,7 @@ export class TuiApp {
     let candidateSkillOverrides
     let candidateRequestOverrideDispose
     let candidateDangerGuardDispose
+    let committed = false
     try {
       const selection = this.ctx.agentDefaultModel.currentSelection()
       let skillOverrideDisposers
@@ -6029,16 +6068,22 @@ export class TuiApp {
         isResumed: true,
         sessionEvents: candidateEvents
       })
+      committed = true
 
-      await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers, previousDangerGuardDispose)
-
-      this.touchMru(record.header.id)
-      void this.refreshSkills()
+      const previewLimit = candidateEvents.length > 200 ? 200 : undefined
+      this.historyStartIndex = previewLimit ? candidateEvents.length - previewLimit : 0
       try {
-        this.reprojectDocument(true)
+        this.reprojectDocument(true, previewLimit)
         this.viewport?.scrollToBottom()
+        this.scheduleRender(true)
       } catch (error) {
         this.log('error', `session resumed but failed to render: ${error instanceof Error ? error.message : String(error)}`, '/resume')
+      }
+
+      await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers, previousDangerGuardDispose)
+      if (this.agent === agent) {
+        this.touchMru(record.header.id)
+        void this.refreshSkills()
       }
     } catch (error) {
       if (candidate && this.handle?.agent !== candidate.agent) {
@@ -6053,8 +6098,10 @@ export class TuiApp {
       }
       this.log('error', error instanceof Error ? error.message : String(error), '/resume')
     } finally {
-      this.message = ''
-      this.scheduleRender(true)
+      if (!committed || this.agent === candidate?.agent) {
+        this.message = ''
+        this.scheduleRender(true)
+      }
     }
   }
 
@@ -6776,11 +6823,36 @@ export class TuiApp {
 
   // ── input router delegates ─────────────────────────────────────────────
 
+  loadEarlierHistory() {
+    const current = this.historyStartIndex ?? 0
+    if (!this.agent || current <= 0) return false
+    const firstVisibleKey = this.viewport?.blocks?.find((block) => block.kind !== 'welcome')?.key
+    const wasAtTop = (this.viewport?.scrollTop ?? 0) <= 2
+    this.historyStartIndex = Math.max(0, current - 400)
+    try {
+      this.reprojectDocument(false)
+      if (wasAtTop && firstVisibleKey) {
+        const previousFirst = this.viewport.blocks.find((block) => block.key === firstVisibleKey)
+        if (previousFirst) {
+          this.viewport.scrollTop = Math.min(this.viewport.maxScroll(), previousFirst.startRow)
+          this.viewport.followEnd = false
+          this.viewport.recordAnchor()
+        }
+      }
+      return true
+    } catch (error) {
+      this.historyStartIndex = current
+      this.log('error', `failed to load earlier history: ${error instanceof Error ? error.message : String(error)}`, '/resume')
+      return false
+    }
+  }
+
   onMouseWheel(event) {
     if (!this.terminalOpen) return
     if (this.questionPanel || this.commandPalette || this.modelPicker || this.variantPicker || this.providerPanel || this.presetPicker || this.settingsPicker || this.jobPanel || this.mcpPanel || this.skillsPanel) {
       return
     }
+    if (event.deltaY < 0 && this.viewport.scrollTop <= 2) this.loadEarlierHistory()
     this.viewport.scrollBy(event.deltaY)
     this.scheduleRender(true)
   }
@@ -6846,6 +6918,7 @@ export class TuiApp {
   onPageUp() {
     if (!this.terminalOpen) return
     if (this.scrollJobOutput?.(-1)) return
+    if (this.viewport.scrollTop <= this.viewport.viewportHeight) this.loadEarlierHistory()
     this.viewport.pageUp()
     this.scheduleRender(true)
   }

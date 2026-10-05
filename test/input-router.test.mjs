@@ -238,6 +238,15 @@ await new Promise((resolve) => setTimeout(resolve, 80))
 router.processInput('~')
 assert.deepEqual(pageEvents, ['up'], 'A split PageUp sequence must dispatch once')
 
+// Resume projection can delay the SGR body beyond the generic CSI timeout.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b[')
+await new Promise((resolve) => setTimeout(resolve, 210))
+router.processInput('<65;29;29M')
+assert.equal(mouseEvents.length, 1, 'A late wheel body after ESC [ must still scroll')
+assert.deepEqual(tokenEvents, [], 'A late wheel body must not appear in the composer')
+
 // 8.5 A lone Escape must still flush after the grace window: the incomplete
 // prefix wait must never swallow the Escape key itself.
 mouseEvents = []

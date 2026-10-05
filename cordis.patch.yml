@@ -1,6 +1,11 @@
 # A terminal app layer over the shared dsh-base services. It deliberately does
 # not mount the Web host or server runtime.
 
+# Profile reload can keep the TUI's long-lived plugin fibers pending and block
+# ConfigEditor writes such as /model. CLI mode does not need file watching.
+- id: hmr
+  disabled: true
+
 - id: system-prompt
   config:
     personaPrefix: >-
@@ -85,17 +90,32 @@
         serverName: chrome_devtools
         transport: stdio
         # chrome-devtools-mcp writes its legal and roots notices directly to
-        # stderr. Keep protocol stdout/stdin intact, but do not inherit stderr
-        # into the interactive TUI footer.
+        # stderr. The Harness MCP client waits for the initial handshake before
+        # its plugin fiber settles; cap that wait so a missing Chrome endpoint
+        # cannot indefinitely block ConfigEditor writes such as /model.
         command: node
         args:
           - -e
           - >-
             const { spawn } = require('node:child_process');
             const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-            const child = spawn(npx, ['-y', 'chrome-devtools-mcp@1.7.0', '--browser-url=http://127.0.0.1:9222', '--no-performance-crux', '--no-usage-statistics'], { stdio: ['inherit', 'inherit', 'ignore'] });
-            child.once('error', (error) => { process.stderr.write(String(error)); process.exit(1); });
-            child.once('exit', (code) => process.exit(code ?? 1));
+            const STARTUP_TIMEOUT_MS = 10_000;
+            const child = spawn(npx, ['-y', 'chrome-devtools-mcp@1.7.0', '--browser-url=http://127.0.0.1:9222', '--no-performance-crux', '--no-usage-statistics'], { stdio: ['pipe', 'pipe', 'ignore'] });
+            let startupComplete = false;
+            let timedOut = false;
+            let forceKill;
+            let startupTimer;
+            let startupInput = '';
+            let startupOutput = '';
+            const startupRequestIds = new Set();
+            const finish = (code) => { clearTimeout(startupTimer); clearTimeout(forceKill); process.stdin.unpipe(child.stdin); process.exit(timedOut ? 1 : (code ?? 1)); };
+            startupTimer = setTimeout(() => { timedOut = true; process.stderr.write('chrome-devtools-mcp startup timed out after 10s\\n'); child.kill('SIGTERM'); forceKill = setTimeout(() => { child.kill('SIGKILL'); finish(1); }, 1_000); }, STARTUP_TIMEOUT_MS);
+            process.stdin.on('data', (chunk) => { startupInput += String(chunk); let newline; while ((newline = startupInput.indexOf("\n")) >= 0) { const line = startupInput.slice(0, newline); startupInput = startupInput.slice(newline + 1); try { const message = JSON.parse(line); if (message.method === 'tools/list' && message.id !== undefined) startupRequestIds.add(String(message.id)); } catch {} } });
+            child.stdout.on('data', (chunk) => { startupOutput += String(chunk); let newline; while ((newline = startupOutput.indexOf("\n")) >= 0) { const line = startupOutput.slice(0, newline); startupOutput = startupOutput.slice(newline + 1); try { const message = JSON.parse(line); if (message.id !== undefined && startupRequestIds.delete(String(message.id)) && !startupComplete) { startupComplete = true; clearTimeout(startupTimer); } } catch {} } });
+            process.stdin.pipe(child.stdin);
+            child.stdout.pipe(process.stdout);
+            child.once('error', (error) => { process.stderr.write(String(error)); finish(1); });
+            child.once('exit', finish);
 
     - id: tui-runner
       name: 'dsh-omc-tui'

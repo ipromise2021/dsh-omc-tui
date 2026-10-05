@@ -8,7 +8,7 @@
 2. 业务写入走官方 API：不要由 TUI 直接篡改 session log、权限状态、模型状态或 Harness 配置文件。
 3. durable event 是可重放状态的依据：恢复会话时，应由事件重建 UI，而不是使用未持久化的内存缓存猜测状态。
 4. 可选服务须 capability-detect：服务未挂载时显示明确提示或关闭该入口，不能静默伪造结果。
-5. Harness 仍为 developer preview：依赖基线为 [`@deepseek-ai/dsh@0.1.7-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)。Session V4 的迁移由 Harness 负责，TUI 只经 `snapshotEvents()` 和 `sessionQuery` 投影；工具失败兼容读取 `message.isError` 与 `error.reason`，持久化生命周期由 `ctx.agents.create/resume()` 返回的 handle 管理。每次升级后，仍须复核 patch、注入服务、命令签名、事件 payload，并运行真实 Profile 的图片与 PTY 回归。
+5. Harness 仍为 developer preview：当前源码的依赖基线为 [`@deepseek-ai/dsh@0.2.0-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)。Session V4 的迁移由 Harness 负责，TUI 只经 `snapshotEvents()` 和 `sessionQuery` 投影；工具失败兼容读取 `message.isError` 与 `error.reason`，持久化生命周期由 `ctx.agents.create/resume()` 返回的 handle 管理。每次升级后，仍须复核 patch、注入服务、命令签名、事件 payload，并运行真实 Profile 的图片与 PTY 回归。
 
 ## 已适配的 Harness 能力
 
@@ -49,6 +49,7 @@ Reasoning effort 必须来自具体模型的 `reasoning.efforts` 元数据。官
 - 插件市场/安装目前**未适配**：TUI 没有 `ctx.plugins` 或 catalog 服务，也不会直接修改 profile manifest。计划中的 `/plugins` 应只做市场发现与确认，并把安装/移除委托给官方 `dsh plugin --profile tui add/remove`；profile 重组后需重启 TUI。
 - `/fork`、`/rewind`、会话内全文检索等功能，只有在 Harness 提供稳定 session/checkpoint 合约后才能实现；不能通过截断 durable log 模拟。
 - Windows、真实 provider 下的技能发送与长任务生产者仍须做独立 E2E 验证。
+- TUI Profile 已关闭不需要的 HMR。生产 Chrome MCP 保持启用，但其启动包装器只等待最多 10 秒的 JSON-RPC 输出；超时后进程退出，使 Harness 的 `failOnStartupError: false` 和重连机制继续处理，配置重组不会无限等待。隔离 mock Profile 的 `agentDefaultModel.saveSelection()` 和模型变体选择 PTY 回归通过；真实 Provider 与已就绪 Chrome MCP 的联合模型保存仍需独立验收。
 
 ## 发布前检查
 

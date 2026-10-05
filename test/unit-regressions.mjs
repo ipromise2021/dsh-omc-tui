@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
@@ -18,6 +18,7 @@ import { renderExportConfirm } from '../src/panels/export-confirm.js'
 import { renderModelPicker, filterModelEntries } from '../src/panels/model-picker.js'
 import { renderProviderList } from '../src/panels/provider-panel.js'
 import { renderQuestionPanel } from '../src/panels/question-panel.js'
+import { renderSessionPicker } from '../src/panels/session-picker.js'
 import { renderSkillsPanel } from '../src/panels/skills-panel.js'
 import { formatEvents } from '../src/renderer/transcript.js'
 import { BrowserLease, chromeApprovalReason, chromeConnectionApprovalReason, chromeLaunchArgs, chromeToolRisk, isChromeTool, registerBrowserLease } from '../src/browser-lease.js'
@@ -102,8 +103,41 @@ assert.equal(TuiApp.prototype.routeExternalOutput.call(externalOutputApp, 'chrom
 assert.equal(routedExternalOutput.length, 1)
 assert.match(visibleOf(routedExternalOutput[0][0]), /^│ /)
 const cordisPatch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
-assert.match(cordisPatch, /stdio: \['inherit', 'inherit', 'ignore'\]/)
 assert.match(cordisPatch, /chrome-devtools-mcp@1\.7\.0/)
+assert.match(cordisPatch, /const STARTUP_TIMEOUT_MS = 10_000/)
+assert.match(cordisPatch, /stdio: \['pipe', 'pipe', 'ignore'\]/)
+assert.match(cordisPatch, /chrome-devtools-mcp startup timed out after 10s/)
+assert.ok(cordisPatch.includes("message.method === 'tools/list'"))
+
+// The launcher is embedded in the profile patch. Run a shortened copy against
+// a non-responsive npx shim so future edits cannot remove its startup bound.
+if (process.platform !== 'win32') {
+  const launcherSource = cordisPatch.match(/          - >-\n((?:            .*\n?)+)/)?.[1]
+    ?.replace(/^            /gm, '')
+    .replace(/\n/g, ' ')
+  assert.ok(launcherSource, 'Chrome MCP launcher must remain an inline Node program')
+  const launcherDir = await mkdtemp(join(tmpdir(), 'dsh-chrome-mcp-launcher-'))
+  try {
+    const fakeNpx = join(launcherDir, 'npx')
+    await writeFile(fakeNpx, '#!/usr/bin/env node\nsetInterval(() => {}, 1_000)\n')
+    await chmod(fakeNpx, 0o755)
+    const child = await import('node:child_process').then(({ spawn }) => spawn(process.execPath, ['-e', launcherSource.replace('const STARTUP_TIMEOUT_MS = 10_000', 'const STARTUP_TIMEOUT_MS = 25')], {
+      env: { ...process.env, PATH: `${launcherDir}:${process.env.PATH ?? ''}` },
+      stdio: ['ignore', 'ignore', 'pipe']
+    }))
+    let stderr = ''
+    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+    const result = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Chrome MCP launcher did not time out')), 1_000)
+      child.once('error', (error) => { clearTimeout(timeout); reject(error) })
+      child.once('exit', (code, signal) => { clearTimeout(timeout); resolve({ code, signal }) })
+    })
+    assert.deepEqual(result, { code: 1, signal: null })
+    assert.match(stderr, /chrome-devtools-mcp startup timed out after 10s/)
+  } finally {
+    await rm(launcherDir, { recursive: true, force: true })
+  }
+}
 
 let visionTool
 registerVisionRouter({ ctx: { tools: { register(tool) { visionTool = tool } } } })
@@ -256,6 +290,34 @@ assert.equal(listModelsCalled, 1)
 // Second call should use cache without refetching
 await catalogCachingApp.getModelCatalog()
 assert.equal(listModelsCalled, 1)
+
+// Provider catalog requests start together; a refresh also removes retired models.
+const catalogCalls = []
+const catalogResolvers = new Map()
+let catalogModels = true
+const parallelCatalogApp = {
+  llmService: {
+    listProviders: () => [{ id: 'first' }, { id: 'second' }],
+    listModels: (id) => {
+      catalogCalls.push(id)
+      if (!catalogModels) return []
+      return new Promise((resolve) => catalogResolvers.set(id, resolve))
+    }
+  },
+  getModelCatalog: TuiApp.prototype.getModelCatalog
+}
+const catalogLoad = parallelCatalogApp.getModelCatalog()
+assert.deepEqual(catalogCalls, ['first', 'second'])
+catalogResolvers.get('second')([{ id: 'newer' }])
+catalogResolvers.get('first')([{ id: 'older' }])
+assert.deepEqual((await catalogLoad).map((entry) => `${entry.provider}/${entry.model}`), ['first/older', 'second/newer'])
+catalogModels = false
+assert.deepEqual(await parallelCatalogApp.getModelCatalog(true), [])
+assert.deepEqual(await parallelCatalogApp.getModelCatalog(), [])
+assert.equal(catalogCalls.length, 4)
+parallelCatalogApp.cachedModelEntries = [{ provider: 'first', model: 'last-known' }]
+parallelCatalogApp.llmService.listModels = async () => { throw new Error('provider unavailable') }
+assert.deepEqual(await parallelCatalogApp.getModelCatalog(true), [{ provider: 'first', model: 'last-known' }])
 
 // P1 Regression: Plain text message submission must NOT query getModelCatalog / listModels
 let textOnlyListModelsCalled = 0
@@ -847,6 +909,71 @@ await TuiApp.prototype.applyPresetConfirm.call(latePresetFailureApp, true)
 assert.equal(latePresetFailureApp.agent, latePresetExistingAgent, 'A preset projection failure must retain the old session')
 assert.equal(latePresetCandidateDisposed, true, 'A preset projection failure must dispose the candidate')
 
+const resumeRecords = Array.from({ length: 52 }, (_, index) => ({
+  header: { id: `session-${index}`, cwd: '/project', createdAt: index + 1 },
+  persisted: true,
+  live: false
+}))
+resumeRecords.push(
+  { header: { id: 'empty-session', cwd: '/project', createdAt: 20 }, persisted: true, live: false },
+  { header: { id: 'untitled-session', cwd: '/project', createdAt: 19 }, persisted: true, live: false },
+  { header: { id: 'cached-session', cwd: '/project', createdAt: 18 }, persisted: true, live: false }
+)
+let resumeListCalls = 0
+let titleBatchCalls = 0
+let titleBatchIds = []
+const resumeContentChecks = []
+let releaseResumeTitles
+const resumeTitlesReady = new Promise((resolve) => { releaseResumeTitles = resolve })
+const resumeListApp = {
+  mru: { 'session-3': 100 },
+  agent: { session: { header: { cwd: '/project' } } },
+  sessionTitleCache: new Map(),
+  ctx: { get: (name) => name === 'sessionProjectionCache' ? {
+    cachedSnapshot: (header) => header.id === 'cached-session' ? { values: { title: 'Cached title' } } : undefined,
+    cachedPredecessorTitle: (header) => /^session-/.test(header.id) ? { values: { title: `Cached ${header.id}` } } : undefined
+  } : undefined, sessionQuery: {
+    listSessions: async () => { resumeListCalls++; return resumeRecords },
+    readSession: async () => { throw new Error('full session must not be read for listing') },
+    readTitleSnapshots: async (ids) => {
+      titleBatchCalls++
+      titleBatchIds = ids
+      await resumeTitlesReady
+      return ids.map((id) => ({ status: 'fulfilled', value: {
+        title: id === 'empty-session' || id === 'untitled-session' ? undefined : { title: `Title ${id}` }
+      } }))
+    },
+    listEvents: async (id) => { resumeContentChecks.push(id); throw new Error(`unexpected full log read: ${id}`) }
+  } },
+  scheduleRender: noop,
+  log: noop
+}
+assert.equal((await TuiApp.prototype.findResumeRecord.call(resumeListApp, '/project')).header.id, 'session-3')
+assert.equal(resumeListCalls, 1, '-c selects from one metadata listing without reading every full log')
+const openPickerPromise = TuiApp.prototype.openPicker.call(resumeListApp)
+await openPickerPromise
+assert.equal(resumeListApp.picker.sessions.length, 53, 'Cached title projections open the full history list immediately')
+assert.equal(resumeListApp.picker.loadingTitles, 2)
+const datedPickerRows = renderSessionPicker({
+  sessions: [{ header: { id: 'dated-session', createdAt: new Date(2024, 0, 2, 3, 4).getTime() }, title: { title: 'Dated session' } }],
+  selected: 0,
+  loaded: false,
+  loadingTitles: 0
+}, 8, 80, ANSI).join('\n')
+assert.match(datedPickerRows, /2024-01-02 03:04/)
+releaseResumeTitles()
+await new Promise((resolve) => setImmediate(resolve))
+assert.equal(titleBatchCalls, 1, 'Resume titles use one concurrent batch read')
+assert.deepEqual(titleBatchIds.sort(), ['empty-session', 'untitled-session'], 'Only sessions without durable titles require a log read')
+assert.equal(titleBatchIds.includes('cached-session'), false, 'Cached title avoids a log read')
+assert.deepEqual(resumeContentChecks, [], 'Listing never reads complete event logs for untitled sessions')
+assert.equal(resumeListApp.picker.sessions.some((entry) => entry.header.id === 'empty-session'), false)
+assert.equal(resumeListApp.picker.sessions.some((entry) => entry.header.id === 'untitled-session'), false, 'Untitled sessions stay out of the title list')
+assert.equal(resumeListApp.picker.sessions.find((entry) => entry.header.id === 'cached-session').title.title, 'Cached title')
+assert.equal(resumeListApp.picker.sessions[0].title.title, 'Cached session-3')
+assert.equal(resumeListApp.picker.sessions.length, 53, 'All titled sessions are available for navigation')
+assert.equal(resumeListApp.picker.loadingTitles, 0)
+
 let resumeCandidateDisposed = false
 const resumeExistingAgent = { session: { events: [], seq: 9 } }
 const resumeFailureApp = {
@@ -902,6 +1029,70 @@ assert.equal(resumeRenderFailureApp.handle.agent, resumedAgent)
 assert.equal(oldResumeDisposed, true)
 assert.equal(resumeRenderFailureApp.permissionName, undefined)
 assert.match(resumeRenderLogs.at(-1).text, /resumed but failed to render/)
+
+const longResumeEvents = Array.from({ length: 240 }, (_, index) => ({
+  seq: index + 1,
+  type: 'user/message',
+  time: index + 1,
+  data: { source: { kind: 'user' }, content: [{ type: 'text', text: `History ${index}` }] }
+}))
+const longResumeAgent = {
+  ctx: { on: () => noop },
+  session: { events: longResumeEvents, requestHeader: () => ({ config: {} }) }
+}
+let releaseResumeCleanup
+const resumeCleanupGate = new Promise((resolve) => { releaseResumeCleanup = resolve })
+let previewReady
+const resumePreviewReady = new Promise((resolve) => { previewReady = resolve })
+const resumeProjections = []
+const longResumeApp = {
+  picker: { loaded: false, selected: 0, sessions: [{ header: { id: 'session-long', agentPreset: 'standard' } }] },
+  ctx: {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock-v1' }) },
+    sessionQuery: { readSession: async () => ({ events: [] }) },
+    agents: { resume: async ({ setup }) => { await setup({}); return { agent: longResumeAgent, dispose: noop } } },
+    agentPresets: { defaultId: 'standard', mount: async () => {}, composedPreset: () => 'standard' },
+    permissionPresets: { current: () => undefined }
+  },
+  scheduleRender: noop,
+  createRequestOverride: () => noop,
+  createDangerGuardDisposer: async () => noop,
+  extractReasoningBlocks: () => [],
+  commitSessionState({ handle }) { this.handle = handle; this.agent = handle.agent },
+  reprojectDocument(_preserveFollowEnd, limit) {
+    resumeProjections.push(limit)
+    if (limit === 200) previewReady()
+  },
+  cleanupPreviousSession: async () => resumeCleanupGate,
+  viewport: { scrollToBottom: noop },
+  touchMru: noop,
+  refreshSkills: noop,
+  log: noop
+}
+const longResumePromise = TuiApp.prototype.resumeSelected.call(longResumeApp)
+await resumePreviewReady
+assert.deepEqual(resumeProjections, [200], 'Long resume projects recent events before old-session cleanup')
+releaseResumeCleanup()
+await longResumePromise
+assert.deepEqual(resumeProjections, [200], 'Long resume leaves earlier history for on-demand scrolling')
+assert.equal(longResumeApp.historyStartIndex, 40)
+
+const startupResumeAgent = {}
+const startupProjections = []
+const startupResumeApp = {
+  agent: startupResumeAgent,
+  terminalOpen: true,
+  initializing: { continuing: true },
+  repaint(_clearScreen, limit) { startupProjections.push(limit) },
+  reprojectDocument() { startupProjections.push(undefined) },
+  scheduleRender: noop,
+  log: noop
+}
+TuiApp.prototype.finishInitialization.call(startupResumeApp, startupResumeAgent)
+assert.deepEqual(startupProjections, [200], 'Startup resume first paints recent history')
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert.deepEqual(startupProjections, [200], 'Startup resume does not block input with a full history projection')
+assert.equal(startupResumeApp.message, '')
 
 const cycleErrors = []
 const cycleApp = {
@@ -2330,7 +2521,7 @@ assert.match(hudText, /git:\(main\* ↑1\)/)
 assert.match(hudText, /48\.5 tok\/s/)
 assert.match(hudText, /⏱️ 2\.2s/)
 assert.match(hudText, /Context.*85k \/ 100k · 85% ⚠️ \| session in 12k · out 2\.5k/)
-assert.match(hudText, /\[░{14}]/, 'Context meter uses one glyph for filled and remaining capacity')
+assert.match(hudText, /\[█{11}░{3}]/, 'Context meter distinguishes filled and remaining capacity')
 assert.match(hudText, /Read: index\.js/)
 assert.match(hudText, /Edit: statusline\.js/)
 
@@ -3811,6 +4002,20 @@ assert.ok(projectedLines.includes('Resumed user message'), 'Resumed user message
 assert.ok(projectedLines.includes('Resumed response'), 'Resumed response must be in document')
 assert.ok(!projectedLines.includes('stale log from previous session'), 'Stale localLog must NOT leak into document')
 
+sessionIsolationApp.agent.session.events = longResumeEvents
+sessionIsolationApp.reprojectDocument(true, 200)
+const previewLines = sessionIsolationApp.viewport.allRows.join('\n')
+assert.ok(previewLines.includes('History 239'), 'Resume preview shows the latest event')
+assert.ok(!previewLines.includes('History 0'), 'Resume preview skips older events')
+sessionIsolationApp.historyStartIndex = 40
+sessionIsolationApp.reprojectDocument(true)
+assert.ok(!sessionIsolationApp.viewport.allRows.join('\n').includes('History 0'), 'Ordinary re-projection keeps earlier history unloaded')
+assert.equal(TuiApp.prototype.loadEarlierHistory.call(sessionIsolationApp), true)
+assert.equal(sessionIsolationApp.historyStartIndex, 0)
+assert.ok(sessionIsolationApp.viewport.allRows.join('\n').includes('History 0'), 'Scrolling can load the complete earlier history')
+sessionIsolationApp.reprojectDocument(true)
+assert.ok(sessionIsolationApp.viewport.allRows.join('\n').includes('History 0'), 'Complete projection restores older events')
+
 // 5. CR-021: refreshSkills failure preserves skillOverrideDisposers
 let skillOverrideCleanedUp = false
 const skillApp = new TuiApp({})
@@ -4907,7 +5112,7 @@ inertDispose()
   assert.match(statusLogOutput, /Runtime\nTUI\|/)
   assert.match(statusLogOutput, /Session\nDirectory\|/)
   assert.match(statusLogOutput, /Usage\nContext\|/)
-  assert.match(statusLogOutput, /TUI\|dsh-omc-tui v0\.2\.16/)
+  assert.match(statusLogOutput, /TUI\|dsh-omc-tui v0\.2\.17/)
   assert.ok(statusLogOutput.includes('0 / 100.0k tokens · 0%') || statusLogOutput.includes('0 / 100k tokens · 0%') || statusLogOutput.includes('0 tokens · 0%'), 'Status outputs 0% when recentInput is 0 rather than falling back to 80k')
 
   const structuredStatusRows = TuiApp.prototype.formatLogEntry.call({}, {

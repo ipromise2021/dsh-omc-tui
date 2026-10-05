@@ -44,6 +44,7 @@ const BARE_CSI_CONTINUATION = /^\[(?:<|[?>]|[ABCDHFIO]$|[0-9;]+[ABCDHF~RcytnmuM]
 // reads. Keep the narrowly-scoped `ESC` → `[` bridge alive long enough for
 // that recovery without delaying ordinary typing in normal input flow.
 const LATE_MOUSE_REPORT_GRACE_MS = 1000
+const LATE_MOUSE_BODY_GRACE_MS = 10_000
 const PASTE_INACTIVITY_TIMEOUT_MS = 30_000
 const PASTE_MAX_DURATION_MS = 5 * 60_000
 // Shorter prefixes stay ambiguous with real keys (Escape, Alt+O, Alt+], Alt+P,
@@ -68,6 +69,8 @@ export class InputRouter {
     this.flushTimer = null
     this.awaitingBareSgrIntroducer = false
     this.sgrIntroducerTimer = null
+    this.awaitingMouseBody = false
+    this.mouseBodyTimer = null
   }
 
   /**
@@ -112,6 +115,14 @@ export class InputRouter {
       if (/^\[(?:[?>]|[ABCDHFIO]$|[0-9;]+[ABCDHF~RcytnmuM]$)/.test(str) || /^\][0-9]/.test(str) || /^P[0-9$+]/.test(str)) {
         str = '\x1b' + str
       }
+    }
+
+    // A busy resume can delay the body of a wheel report until after the
+    // generic ESC [ prefix expired. Reattach only the unmistakable SGR '<'
+    // body; ordinary typing after an abandoned CSI prefix stays untouched.
+    if (this.awaitingMouseBody) {
+      this.clearMouseBodyWait()
+      if (str.startsWith('<')) str = '\x1b[' + str
     }
 
     if ((pendingKind === 'bare-sgr-introducer' || pendingKind === 'bare-csi-numeric') && /^\[[0-9;]+$/.test(str)) {
@@ -382,7 +393,10 @@ export class InputRouter {
         this.bufferContinuation = ''
         this.flushTimer = null
         if (kind === 'x10-mouse') return
-        if (kind === 'escape-prefix') return
+        if (kind === 'escape-prefix') {
+          if (buf === '\x1b[') this.rememberMouseBody()
+          return
+        }
         // Escape, Alt+O, Alt+] and Alt+P are single keys, so an expired prefix
         // flushes as one token; everything else (notably a double Escape) keeps
         // the original character-by-character delivery.
@@ -404,6 +418,7 @@ export class InputRouter {
       this.flushTimer = null
     }
     this.clearBareSgrIntroducer()
+    this.clearMouseBodyWait()
     this.buffer = ''
     this.bufferKind = undefined
     this.bufferContinuation = ''
@@ -425,6 +440,20 @@ export class InputRouter {
       this.sgrIntroducerTimer = null
     }
     this.awaitingBareSgrIntroducer = false
+  }
+
+  rememberMouseBody() {
+    this.awaitingMouseBody = true
+    if (this.mouseBodyTimer) clearTimeout(this.mouseBodyTimer)
+    this.mouseBodyTimer = setTimeout(() => this.clearMouseBodyWait(), LATE_MOUSE_BODY_GRACE_MS)
+  }
+
+  clearMouseBodyWait() {
+    if (this.mouseBodyTimer) {
+      clearTimeout(this.mouseBodyTimer)
+      this.mouseBodyTimer = null
+    }
+    this.awaitingMouseBody = false
   }
 
   dispatchMouseEvent(event) {
