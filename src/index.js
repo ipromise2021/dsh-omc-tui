@@ -6042,9 +6042,13 @@ export class TuiApp {
       }
       const picker = this.picker
       this.scheduleRender(true)
+      // Flush here, not inside the title backfill: a fully cached corpus never
+      // enters that branch, which is exactly the case that stayed unmeasured.
+      this.flushResumeTrace?.('resume-list')
       if (uncached.length > 0) {
         void (async () => {
           if (this.picker !== picker) return
+          this.beginResumeTrace?.()
           if (typeof this.ctx.sessionQuery?.readTitleSnapshots === 'function') {
             try {
               const results = await this.ctx.sessionQuery.readTitleSnapshots(uncached.map((entry) => entry.header.id))
@@ -6077,7 +6081,7 @@ export class TuiApp {
             this.picker = undefined
             this.log('error', 'no past sessions with content in this directory', '/resume')
           }
-          this.flushResumeTrace?.('resume-list')
+          this.flushResumeTrace?.('resume-list-titles')
           this.scheduleRender()
         })()
       }
