@@ -41,6 +41,24 @@ Reasoning effort 必须来自具体模型的 `reasoning.efforts` 元数据。官
 
 这些本地状态不得被表述为 Agent 的真实状态；重启或恢复会话后可丢失或重新计算。
 
+## 会话恢复的读取成本与 TUI 的应对
+
+官方 `sessionQuery` 的三个接口在成本上差异极大，恢复路径必须按成本选择：
+
+| 接口 | 底层读取 | 实测成本 |
+| :--- | :--- | :--- |
+| `listSessions()` / `readSession(id)` | 枚举**全部项目**的会话（逐个开日志、解压首个 zstd 帧取 header、再 stat） | 随语料线性增长，451 个会话时**每次约 8–11 秒** |
+| `agents.resume({ resumeSessionId })` | 经 `persistence.open(id)` → `findLog()` 只扫**一个项目目录**，再直读该会话日志 | 单会话 **84–458ms** |
+| 首屏投影 | 只排版事件流的尾部（预览窗口） | **13–46ms** |
+
+因此本轮做了三处调整：
+
+- `resumeSelected()` 不再为读取 preset 调用 `readSession(id)`。`agentPreset` 是 `SessionHeader` 的字段，且切换 preset 会新建会话并写入 header，所以 header 即权威来源；只有 header 缺失（早于该字段的旧会话）才回退读日志。
+- `/resume` 列表与 `-c` 的 `findResumeRecord()` 共用一个进程内列表缓存（TTL 5 分钟，支持 `force`），避免"开列表 → 选会话 → 再开列表"的来回切换每次重新枚举。恢复会话**不再清空**该缓存：`listSessions()` 本身不包含当前活跃会话，缓存不会让用户看到关于当前会话的过期信息。
+- 首屏只投影事件流尾部，更早内容在滚到顶部时按需载入；`preset-read` 从 1.6–14.7 秒降至 0ms，恢复总耗时从 10–21 秒降至 109–436ms。
+
+仍未消除的部分：`listSessions()` 首次枚举的固有成本（随会话总数增长）。官方没有"按 cwd 列举"或"按 id 直读"的会话查询接口，TUI 只能减少调用次数，不能改变实现。
+
 ## 目前的边界与待验证项
 
 - `/settings` 只保存 TUI 偏好；模型、权限和 preset 均继续由各自的官方服务持久化，不应移入 TUI namespace。
