@@ -2521,7 +2521,13 @@ assert.match(hudText, /git:\(main\* ↑1\)/)
 assert.match(hudText, /48\.5 tok\/s/)
 assert.match(hudText, /⏱️ 2\.2s/)
 assert.match(hudText, /Context.*85k \/ 100k · 85% ⚠️ \| session in 12k · out 2\.5k/)
-assert.match(hudText, /\[█{11}░{3}]/, 'Context meter distinguishes filled and remaining capacity')
+assert.match(hudText, /\[░{14}]/, 'Context meter uses one glyph for filled and remaining capacity')
+// Both sides share the same glyph, so the raw row must still tint the filled
+// 11/14 cells with the critical context color.
+assert.ok(
+  hudStatus.rows.join('\n').includes(`${ANSI.bold}${ANSI.contextCritical}${'░'.repeat(11)}${ANSI.rule}${'░'.repeat(3)}`),
+  'Context meter tints the filled capacity while remaining cells keep the rule color'
+)
 assert.match(hudText, /Read: index\.js/)
 assert.match(hudText, /Edit: statusline\.js/)
 
