@@ -489,6 +489,7 @@ export class TuiApp {
     this.idleIndex = -1
     this.statusRowsCache = undefined
     this.sessionTitleCache = new Map() // sessionId -> Title object
+    this.sessionListCache = undefined // { records, at } — listSessions() enumerates every project's sessions
     this.renderTimer = undefined
     this.renderPending = false
     this.baseTranscriptDocument = undefined
@@ -817,8 +818,27 @@ export class TuiApp {
     }, 0)
   }
 
+  /**
+   * Read the persisted session listing through a short in-process cache.
+   *
+   * `listSessions()` enumerates every project's sessions on disk — it opens each
+   * session log, decompresses its first zstd frame for the header and stats the
+   * file — and the official API has no per-directory or per-id read. The list UI
+   * only needs the state as of the moment it opens, so repeating that enumeration
+   * for every `/resume` makes the picker slower as the corpus grows. Cache the
+   * records briefly and let the next call refresh them.
+   */
+  async listSessionRecords({ force = false } = {}) {
+    const ttlMs = 15_000
+    const cached = this.sessionListCache
+    if (!force && cached !== undefined && Date.now() - cached.at < ttlMs) return cached.records
+    const records = (await this.ctx.sessionQuery.listSessions()) ?? []
+    this.sessionListCache = { records, at: Date.now() }
+    return records
+  }
+
   async findResumeRecord(cwd) {
-    const records = (await this.ctx.sessionQuery.listSessions())
+    const records = (await this.listSessionRecords())
       .filter((record) => !isSubagentSession(record) && (record.header?.cwd ?? record.cwd) === cwd)
       .sort((a, b) => ((this.mru?.[b.header.id] ?? b.header.createdAt) - (this.mru?.[a.header.id] ?? a.header.createdAt)))
     if (records.length === 0) throw new Error(`no previous Harness session found for ${cwd}; start once without -c`)
@@ -935,6 +955,9 @@ export class TuiApp {
 
   touchMru(sessionId) {
     this.mru[sessionId] = Date.now()
+    // The listing cache is also dropped whenever the active session changes, so
+    // a session started or resumed in this process shows up on the next open.
+    this.sessionListCache = undefined
     saveMruFile(this.stateDir(), this.mru)
   }
 
@@ -4946,6 +4969,9 @@ export class TuiApp {
   }) {
     this.handle = handle
     this.agent = handle.agent
+    // Every session this process activates — new, resumed or switched — drops the
+    // listing cache, so the next `/resume` open reflects it immediately.
+    this.sessionListCache = undefined
     this.skillOverrideDisposers = skillOverrideDisposers ?? new Map()
     this.presetName = presetName
     this.reasoningEffort = reasoningEffort
@@ -5958,7 +5984,7 @@ export class TuiApp {
     try {
       this.beginResumeTrace?.()
       const listAt = performance.now()
-      const records = (await this.ctx.sessionQuery?.listSessions()) ?? []
+      const records = await this.listSessionRecords()
       this.resumePhase?.('list-sessions', listAt)
       const filterAt = performance.now()
       const cwd = this.agent?.session.header.cwd ?? process.cwd()
