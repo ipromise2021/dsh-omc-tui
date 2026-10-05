@@ -868,7 +868,10 @@ export class TuiApp {
     const total = trace.reduce((sum, entry) => sum + entry.ms, 0)
     const body = trace.map((entry) => `${entry.label} ${entry.ms.toFixed(0)}ms`).join(' | ')
     const line = `${new Date().toISOString()} resume ${sessionId.slice(-8)} total ${total.toFixed(0)}ms :: ${body}\n`
-    void appendFile(join(this.stateDir(), 'resume-trace.log'), line).catch(() => {})
+    const dir = this.stateDir()
+    void mkdir(dir, { recursive: true })
+      .then(() => appendFile(join(dir, 'resume-trace.log'), line))
+      .catch(() => {})
   }
 
   async loadShellHistory(cwd = process.cwd()) {
@@ -6050,9 +6053,7 @@ export class TuiApp {
     let candidateDangerGuardDispose
     let committed = false
     try {
-      const resumeStartedAt = performance.now()
       if (process.env.DSH_TUI_TRACE_RESUME === '1') this.resumeTrace = []
-      this.resumeTraceAt = resumeStartedAt
       const selection = this.ctx.agentDefaultModel.currentSelection()
       let skillOverrideDisposers
       let requestedPreset = record.header.agentPreset ?? this.ctx.agentPresets.defaultId
