@@ -840,7 +840,9 @@ export class TuiApp {
   }
 
   async findResumeRecord(cwd) {
-    const records = (await this.listSessionRecords())
+    // Call through the prototype so a partial host object (tests, embedders) only
+    // needs the sessionQuery surface, not this cache helper.
+    const records = (await TuiApp.prototype.listSessionRecords.call(this))
       .filter((record) => !isSubagentSession(record) && (record.header?.cwd ?? record.cwd) === cwd)
       .sort((a, b) => ((this.mru?.[b.header.id] ?? b.header.createdAt) - (this.mru?.[a.header.id] ?? a.header.createdAt)))
     if (records.length === 0) throw new Error(`no previous Harness session found for ${cwd}; start once without -c`)
@@ -5980,7 +5982,7 @@ export class TuiApp {
     try {
       this.beginResumeTrace?.()
       const listAt = performance.now()
-      const records = await this.listSessionRecords()
+      const records = await TuiApp.prototype.listSessionRecords.call(this)
       this.resumePhase?.('list-sessions', listAt)
       const filterAt = performance.now()
       const cwd = this.agent?.session.header.cwd ?? process.cwd()
