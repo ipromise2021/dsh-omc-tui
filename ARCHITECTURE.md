@@ -153,7 +153,7 @@ dsh-omc-tui/
   5. **扩展生态与后台任务联动**：
      - 统计当前会话挂载的 Skills 数量、MCP Servers 数量与 Hook Bridges 数量；
      - 实时感知活跃的 Background Jobs，并在状态栏动态轮播任务运行时长（如 `1 active · 12s`）。
-  6. **权限档位与交互提示**：醒目指示当前权限等级（如 `workspace-write`），提示 `Shift+Tab` 单键无缝循环轮换。
+  6. **权限档位与交互提示**：醒目指示当前权限等级（如 `workspace-write`），提示 `Shift+Tab` 单键循环轮换；轮转顺序固定为 `read-only → workspace-write → danger-full-access → read-only`，与 Harness 预设表的声明顺序无关。
 * **高吞吐 Memoization 缓存性能**：
   - 基于高维复合键（`statusRowsCache`）实现毫秒级缓存，在用户高速输入与空闲静止帧时状态栏渲染开销降至 0ms。
 * **自适应密度调节**：

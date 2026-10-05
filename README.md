@@ -100,7 +100,7 @@ DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支
 
 ### 5. 行内安全审批与原生看门狗 (Danger Guard)
 
-- **行级红绿 Diff 审批**：文件修改与敏感命令执行前弹出结构化行内审批卡片，清晰呈现行级差异，支持单键允许/拒绝与会话级权限提权（`Shift+Tab`）；单选、多选与自由文本问答直接在终端内完成。
+- **行级红绿 Diff 审批**：文件修改与敏感命令执行前弹出结构化行内审批卡片，清晰呈现行级差异，支持单键允许/拒绝与会话级权限提权（`Shift+Tab`）；单选、多选与自由文本问答直接在终端内完成。`Shift+Tab` 按 `read-only → workspace-write → danger-full-access → read-only` 的固定顺序轮转，从最危险的 `danger-full-access` 回绕到最安全的 `read-only`，档位写入 Harness 官方会话事件（`permission/preset`、`sandbox/mode`、`approval/policy`）。
 - **事前 AST 危险守卫**：内置 Danger Guard 原生 Watchdog，在工具执行前拦截 `rm -rf /`、Fork 炸弹、磁盘直写等危险指令，覆盖 Unix/macOS/Windows 多平台，支持 `.dsh/danger-rules.json` 自定义全段锚定规则。
 
 ### 6. 全景状态栏 (HUD) 与效率工作流

@@ -181,7 +181,7 @@ diff --git a/src/renderer/diff.js b/src/renderer/diff.js
 | `Ctrl+G` | 外部编辑 | 使用系统 `$EDITOR`（Vim / VS Code 等）编辑超长 Prompt |
 | `Ctrl+F` / `Ctrl+R` | 历史搜索 | 打开交互式输入提示词模糊搜索面板 |
 | `Ctrl+P` | 命令面板 | 快速过滤并运行任意命令或 Skill |
-| `Shift+Tab` | 权限控制 | 在只读、工作区读写、全权限预设间无缝轮转 |
+| `Shift+Tab` | 权限控制 | 按 `read-only → workspace-write → danger-full-access → read-only` 固定顺序轮转 |
 | `Ctrl+A` / `Ctrl+E` | 光标定位 | 光标快速跳至当前行首或行尾 |
 | `Alt+←` / `Alt+→` | 按词跳转 | 按单词粒度左右移动光标 |
 | `Ctrl+W` | 快速编辑 | 删除光标前的一个单词 |

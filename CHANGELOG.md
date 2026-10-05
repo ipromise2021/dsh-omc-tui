@@ -12,6 +12,7 @@
 - `/resume` 和 `-c` 先投影最近的历史事件；滚到顶部时按需载入更早内容，避免后台全量排版长时间占用输入循环。`-c` 选会话不再逐个读取完整日志，`/resume` 标题一次批量读取全部未缓存项；恢复期间被延迟拆开的滚轮报告不再进入输入框。
 - **浅色主题对比度**：light 主题的 Context 进度条三档色（正常 / 预警 / 严重）整体加深，在浅色背景上更易分辨。
 - **Token 数量口径**：百万级 token 汇总显示为整数字加大写 `M`（`1048576` → `1M`），不再出现 `1.0m`，也不会与耗时的分钟标记 `1m` 混淆。
+- **权限轮转顺序**：`Shift+Tab` 改为按 `read-only → workspace-write → danger-full-access → read-only` 的固定顺序轮转。此前沿用 Harness 预设表的声明顺序，从 `workspace-write` 按一次会直接落到 `danger-full-access`（全盘访问且不再询问审批）；现在该档位回绕至最安全的 `read-only`。档位仍通过官方 `permissionPresets.set()` 写入会话事件，未启用 `auto` 预设。
 
 ---
 
