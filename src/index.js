@@ -857,8 +857,14 @@ export class TuiApp {
    * session has several serial phases, and this records how long each one takes
    * so the slow one is measured instead of guessed.
    */
-  resumePhase(label, startedAt) {
-    this.resumeTrace?.push({ label, ms: performance.now() - startedAt })
+  resumePhase(label, startedAt, note = undefined) {
+    this.resumeTrace?.push({ label, ms: performance.now() - startedAt, note })
+  }
+
+  /** Start a trace when `DSH_TUI_TRACE_RESUME=1` is set. */
+  beginResumeTrace() {
+    if (process.env.DSH_TUI_TRACE_RESUME !== '1') return
+    this.resumeTrace = []
   }
 
   flushResumeTrace(sessionId) {
@@ -866,7 +872,7 @@ export class TuiApp {
     this.resumeTrace = undefined
     if (!trace) return
     const total = trace.reduce((sum, entry) => sum + entry.ms, 0)
-    const body = trace.map((entry) => `${entry.label} ${entry.ms.toFixed(0)}ms`).join(' | ')
+    const body = trace.map((entry) => `${entry.label} ${entry.ms.toFixed(0)}ms${entry.note === undefined ? '' : ` (${entry.note})`}`).join(' | ')
     const line = `${new Date().toISOString()} resume ${sessionId.slice(-8)} total ${total.toFixed(0)}ms :: ${body}\n`
     const dir = this.stateDir()
     void mkdir(dir, { recursive: true })
@@ -5950,7 +5956,11 @@ export class TuiApp {
 
   async openPicker() {
     try {
+      this.beginResumeTrace?.()
+      const listAt = performance.now()
       const records = (await this.ctx.sessionQuery?.listSessions()) ?? []
+      this.resumePhase?.('list-sessions', listAt)
+      const filterAt = performance.now()
       const cwd = this.agent?.session.header.cwd ?? process.cwd()
       const sessions = records
         .filter((record) => {
@@ -5959,6 +5969,8 @@ export class TuiApp {
           return sessionCwd === undefined || sessionCwd === cwd
         })
         .sort((a, b) => (this.mru[b.header.id] ?? b.header.createdAt) - (this.mru[a.header.id] ?? a.header.createdAt))
+      this.resumePhase?.('filter-and-sort', filterAt)
+      const titleAt = performance.now()
       if (sessions.length === 0) {
         this.log('error', 'no past sessions in this directory', '/resume')
         this.scheduleRender(true)
@@ -5966,16 +5978,22 @@ export class TuiApp {
       }
       // Read durable title projections first. The predecessor-title fallback
       // keeps titles from the immediately previous Harness session format fast.
+      const projectionCache = this.ctx.get?.('sessionProjectionCache')
+      let cacheHits = 0
       const candidates = sessions.map((record) => {
         let cached = this.sessionTitleCache.get(record.header.id)
+        if (cached !== undefined) cacheHits += 1
         if (cached === undefined) {
           try {
-            const cache = this.ctx.get?.('sessionProjectionCache')
+            const cache = projectionCache
             let snapshot
             try { snapshot = cache?.cachedSnapshot(record.header, ['title']) } catch {}
             try { snapshot ??= cache?.cachedPredecessorTitle(record.header) } catch {}
             const title = snapshot?.values?.title
-            if (title) cached = { title }
+            if (title) {
+              cached = { title }
+              cacheHits += 1
+            }
           } catch {}
           if (cached) this.sessionTitleCache.set(record.header.id, cached)
         }
@@ -5985,6 +6003,11 @@ export class TuiApp {
         }
       })
       const uncached = candidates.filter((entry) => !entry.title)
+      this.resumePhase?.(
+        'cached-titles',
+        titleAt,
+        `${sessions.length} sessions, ${cacheHits} cached, ${uncached.length} to load, projectionCache=${projectionCache === undefined ? 'absent' : 'present'}`
+      )
       this.picker = {
         sessions: candidates.filter((entry) => entry.title),
         selected: 0,
@@ -6019,6 +6042,7 @@ export class TuiApp {
             }))
           }
           if (this.picker !== picker) return
+          this.resumePhase?.('batch-titles', titleAt)
           const selectedId = picker.sessions[picker.selected]?.header.id
           picker.sessions = candidates.filter((entry) => entry.title)
           picker.selected = Math.max(0, picker.sessions.findIndex((entry) => entry.header.id === selectedId))
@@ -6027,6 +6051,7 @@ export class TuiApp {
             this.picker = undefined
             this.log('error', 'no past sessions with content in this directory', '/resume')
           }
+          this.flushResumeTrace?.('resume-list')
           this.scheduleRender()
         })()
       }
@@ -6053,7 +6078,7 @@ export class TuiApp {
     let candidateDangerGuardDispose
     let committed = false
     try {
-      if (process.env.DSH_TUI_TRACE_RESUME === '1') this.resumeTrace = []
+      this.beginResumeTrace?.()
       const selection = this.ctx.agentDefaultModel.currentSelection()
       let skillOverrideDisposers
       let requestedPreset = record.header.agentPreset ?? this.ctx.agentPresets.defaultId
