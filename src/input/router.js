@@ -118,12 +118,11 @@ export class InputRouter {
     }
 
     // A busy resume can delay the body of a wheel report until after the
-    // generic ESC [ prefix expired. Reattach only the unmistakable SGR '<'
-    // body; ordinary typing after an abandoned CSI prefix stays untouched.
-    if (this.awaitingMouseBody) {
-      this.clearMouseBodyWait()
-      if (str.startsWith('<')) str = '\x1b[' + str
-    }
+    // generic prefix expired. Reattach only the unmistakable SGR '<' body;
+    // ordinary typing after an abandoned CSI prefix stays untouched. The
+    // dispatched reports are consumed whole, so the same bytes never reach the
+    // composer as text.
+    if (this.awaitingMouseBody && this.resumeMouseBodies(str)) return
 
     if ((pendingKind === 'bare-sgr-introducer' || pendingKind === 'bare-csi-numeric') && /^\[[0-9;]+$/.test(str)) {
       this.buffer = str
@@ -402,7 +401,13 @@ export class InputRouter {
         // the original character-by-character delivery.
         if (buf === '\x1b' || buf === '\x1bO' || buf === '\x1b]' || buf === '\x1bP') {
           this.app?.handleToken?.(buf)
-          if (buf === '\x1b') this.rememberBareSgrIntroducer()
+          if (buf === '\x1b') {
+            this.rememberBareSgrIntroducer()
+            // A single flushed Escape can also be the head of a wheel report
+            // whose remaining bytes arrive later, so keep the body window open
+            // exactly as the `ESC [` timeout above does.
+            this.rememberMouseBody()
+          }
         } else {
           for (const char of buf) {
             this.app?.handleToken?.(char)
@@ -446,6 +451,32 @@ export class InputRouter {
     this.awaitingMouseBody = true
     if (this.mouseBodyTimer) clearTimeout(this.mouseBodyTimer)
     this.mouseBodyTimer = setTimeout(() => this.clearMouseBodyWait(), LATE_MOUSE_BODY_GRACE_MS)
+  }
+
+  /**
+   * Consume the remainder of a wheel report whose introducer or Escape was
+   * already flushed. The bridge can split a burst at any byte, so the leftover
+   * arrives as a run of SGR bodies (`<65;7;26M`) with neither `ESC [<` nor the
+   * `<` that follows it. Every fragment must match the complete body grammar;
+   * anything else is ordinary input and reaches the composer untouched.
+   *
+   * @returns true when the whole input was wheel reports and is now dispatched.
+   */
+  resumeMouseBodies(str) {
+    const fragments = str.match(/<\d+;\d+;\d+[Mm]/g)
+    const consumed = fragments?.reduce((total, fragment) => total + fragment.length, 0)
+    if (consumed !== str.length) {
+      this.clearMouseBodyWait()
+      return false
+    }
+    // The burst can keep arriving in later reads; keep the wait armed until it
+    // stops. The armed timer is what bounds this to the grace window.
+    this.rememberMouseBody()
+    for (const fragment of fragments) {
+      const mouseEvent = parseSgrMouse(`\x1b[${fragment}`)
+      if (mouseEvent) this.dispatchMouseEvent(mouseEvent)
+    }
+    return true
   }
 
   clearMouseBodyWait() {

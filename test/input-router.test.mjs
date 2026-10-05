@@ -247,6 +247,52 @@ router.processInput('<65;29;29M')
 assert.equal(mouseEvents.length, 1, 'A late wheel body after ESC [ must still scroll')
 assert.deepEqual(tokenEvents, [], 'A late wheel body must not appear in the composer')
 
+// A stall during restore releases a whole wheel burst, and the bridge can cut
+// the report anywhere: the remainder then arrives as bare SGR bodies with no
+// introducer at all. Every report must scroll, and none of it may be typed.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b[')
+await new Promise((resolve) => setTimeout(resolve, 210))
+router.processInput('<65;7;26M<65;7;26M<65;7;26M')
+assert.equal(mouseEvents.length, 3, 'A late wheel burst must scroll once per report')
+assert.deepEqual(tokenEvents, [], 'A late wheel burst must not appear in the composer')
+
+// A single flushed Escape is also the head of a wheel report, so the same
+// window stays open for the body that follows it.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('<65;7;26M')
+assert.equal(mouseEvents.length, 1, 'A wheel body after a lone Escape must still scroll')
+assert.deepEqual(
+  tokenEvents,
+  ['\x1b'],
+  'Only the Escape key itself may reach the app when the body arrives after it'
+)
+
+// The burst can keep arriving in later reads; the window stays open until it stops.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b[')
+await new Promise((resolve) => setTimeout(resolve, 210))
+router.processInput('<65;7;26M<65;7;26M')
+await new Promise((resolve) => setTimeout(resolve, 40))
+router.processInput('<65;7;26M')
+assert.equal(mouseEvents.length, 3, 'A burst split across reads must still scroll every report')
+assert.deepEqual(tokenEvents, [], 'A split burst must not appear in the composer')
+
+// Ordinary typing after an abandoned prefix is never mistaken for a report,
+// because a report body always carries its `<` and the `c`/`x`/`y` separators.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b[')
+await new Promise((resolve) => setTimeout(resolve, 210))
+router.processInput('<div>')
+assert.deepEqual(tokenEvents, ['<', 'd', 'i', 'v', '>'], 'Typing "<div>" after a prefix timeout must stay ordinary input')
+assert.equal(mouseEvents.length, 0, 'Ordinary typing must not dispatch a mouse event')
+
 // 8.5 A lone Escape must still flush after the grace window: the incomplete
 // prefix wait must never swallow the Escape key itself.
 mouseEvents = []
