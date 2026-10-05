@@ -6082,18 +6082,23 @@ export class TuiApp {
       const selection = this.ctx.agentDefaultModel.currentSelection()
       let skillOverrideDisposers
       let requestedPreset = record.header.agentPreset ?? this.ctx.agentPresets.defaultId
+      // The header records the preset the session was created with, and switching
+      // presets starts a new session, so it is the normal source. Reading the log
+      // only covers sessions whose header predates that field: `readSession()`
+      // enumerates every persisted session to resolve one id, which costs seconds
+      // on a large corpus for a single name.
       const presetReadAt = performance.now()
-      try {
-        const snapshot = await this.ctx.sessionQuery.readSession(record.header.id)
-        this.resumePhase?.('preset-read:readSession', presetReadAt, `${snapshot.events?.length ?? 0} events`)
-        const foldAt2 = performance.now()
-        const selected = [...(snapshot.events ?? [])].reverse().find((event) => event.type === 'agent-preset/selected')
-        if (selected?.data?.agentPreset) requestedPreset = selected.data.agentPreset
-        this.resumePhase?.('preset-read:scan', foldAt2, selected?.data?.agentPreset ?? record.header.agentPreset ?? 'default')
-      } catch {
-        // Fall back to the recorded header/default when the query backend cannot replay this session.
+      if (record.header.agentPreset === undefined) {
+        try {
+          const snapshot = await this.ctx.sessionQuery.readSession(record.header.id)
+          const selected = [...(snapshot.events ?? [])].reverse().find((event) => event.type === 'agent-preset/selected')
+          if (selected?.data?.agentPreset) requestedPreset = selected.data.agentPreset
+          this.resumePhase?.('preset-read:from-log', presetReadAt, `${snapshot.events?.length ?? 0} events`)
+        } catch {
+          // Fall back to the default when the query backend cannot replay this session.
+        }
       }
-      this.resumePhase?.('preset-read', presetReadAt)
+      this.resumePhase?.('preset-read', presetReadAt, `header=${record.header.agentPreset ?? 'absent'} → ${requestedPreset}`)
       const resumeAt = performance.now()
       const { agent, dispose } = await this.ctx.agents.resume({
         resumeSessionId: record.header.id,
