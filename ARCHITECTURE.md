@@ -53,8 +53,6 @@ flowchart TD
 
 ```text
 dsh-omc-tui/
-├── bin/
-│   └── dsh-omc-tui.js          # CLI 启动入口（解析 -c / --resume / --profile 等参数）
 ├── src/
 │   ├── index.js                # TUI 核心控制器：PTY 输入循环、事件派发、调度渲染与生命周期
 │   ├── renderer/               # 纯 ANSI 终端排版与渲染引擎
