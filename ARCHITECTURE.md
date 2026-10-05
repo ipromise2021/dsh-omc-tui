@@ -85,7 +85,7 @@ dsh-omc-tui/
 │   └── core/                   # 安全守护与核心底层工具
 │       ├── danger-guard.js     # 破坏性危险命令拦截守卫（AST 管道切分与规则拦截）
 │       └── events.js           # 事件抽象与 Token 估算辅助
-├── test/                       # 自动化测试集（包含 7 大单元/回归套件）
+├── test/                       # 自动化测试集（5 个单元套件 + 6 个隔离 PTY 场景）
 ├── assets/                     # 终端界面实际运行预览图
 ├── README.md                   # 插件官方总览与快速入门
 ├── PRODUCT_SHOWCASE.md         # 详细界面预览与交互设计亮点文档
@@ -233,12 +233,14 @@ dsh-omc-tui/
 ## 🧪 四、测试体系与工程规范
 
 ### 1. 自动化测试套件
-项目配备纯原生 ESM 的 7 大回归测试套件，执行 `npm test` 即可全量验证：
+项目配备纯原生 ESM 的 5 个单元回归套件，执行 `npm test` 即可全量验证：
 1. `test/transcript-projection.test.mjs`：会话投影与块构建测试；
 2. `test/screen-viewport.test.mjs`：视口渲染与滚动边界测试；
 3. `test/input-router.test.mjs`：键盘路由与状态机测试；
 4. `test/mouse-selection.test.mjs`：鼠标选区与剪贴板测试；
 5. `test/unit-regressions.mjs`：70+ 核心业务回归测试（包含 recap 序号单调性、跨整数边界、200 上限、异常恢复等）。
+
+另有 `npm run test:pty` 的 6 个隔离 PTY 场景（`test/pty-*.py`，需要独立的 Harness `DSH_HOME`）：流式工具、功能、文件、图片、交互与 resume。
 
 ### 2. 模块完整性校验
 ```bash
