@@ -1119,6 +1119,48 @@ TuiApp.prototype.cyclePermission.call({
 assert.equal(cycleReadErrors[0].kind, 'error')
 assert.match(cycleReadErrors[0].text, /read failed/)
 
+const cycleLogs = []
+const cyclePresetNames = ['danger-full-access', 'read-only', 'workspace-write']
+const cyclePresetApp = {
+  agent: { session: { events: [] } },
+  ctx: {
+    permissionPresets: {
+      names: cyclePresetNames,
+      current: () => 'workspace-write',
+      set: (session, name) => session.events.push({ type: 'permission/preset', data: { preset: name } })
+    }
+  },
+  permissionName: 'workspace-write',
+  log(kind, text) { cycleLogs.push({ kind, text }) },
+  scheduleRender: noop
+}
+const walkedPresets = []
+for (let step = 0; step < cyclePresetNames.length; step++) {
+  TuiApp.prototype.cyclePermission.call(cyclePresetApp)
+  walkedPresets.push(cyclePresetApp.permissionName)
+}
+assert.deepEqual(
+  walkedPresets,
+  ['danger-full-access', 'read-only', 'workspace-write'],
+  'Shift+Tab must wrap from the most dangerous preset to the safest instead of leaving it from the default'
+)
+
+const customCyclePresetApp = {
+  agent: { session: { events: [] } },
+  ctx: {
+    permissionPresets: {
+      names: cyclePresetNames,
+      current: () => 'custom',
+      set: (session, name) => session.events.push({ type: 'permission/preset', data: { preset: name } })
+    }
+  },
+  permissionName: 'custom',
+  log: noop,
+  scheduleRender: noop
+}
+TuiApp.prototype.cyclePermission.call(customCyclePresetApp)
+assert.equal(customCyclePresetApp.permissionName, 'read-only', 'An unmatched preset must enter the rotation at the safest step')
+
 const planLogs = []
 const planApp = {
   agent: { session: { append() { throw new Error('must not append locally') } } },

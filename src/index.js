@@ -98,6 +98,11 @@ const VISION_ROUTE_OPTIONS = [
   'opencode-go/deepseek-v4-flash-vision-exp'
 ]
 
+// Shift+Tab rotation order: ascending risk, with the most dangerous preset
+// wrapping back to the safest one instead of landing on it from the default.
+// Unknown presets configured by other bundles rotate last, in listing order.
+const PERMISSION_ROTATION_ORDER = ['read-only', 'workspace-write', 'danger-full-access']
+
 const ACTION_INTENT_PATTERNS = [
   ['commit', /\b(?:git\s+(?:add|commit)|stage|commit)\b|暂存|提交/i],
   ['edit', /\b(?:edit|write|modify|update|revert)\b|编辑|修改|还原/i],
@@ -2965,8 +2970,14 @@ export class TuiApp {
       const names = service?.names ?? []
       if (names.length === 0) return
       const current = this.permissionName ?? currentPermissionPreset(service, this.agent.session)
-      const index = Math.max(0, names.indexOf(current))
-      const next = names[(index + 1) % names.length]
+      // Known presets rotate in safety order; anything the profile adds rotates
+      // last so an unrecognized name can never shift the fixed cycle.
+      const ordered = [
+        ...PERMISSION_ROTATION_ORDER.filter((name) => names.includes(name)),
+        ...names.filter((name) => !PERMISSION_ROTATION_ORDER.includes(name))
+      ]
+      const index = ordered.indexOf(current)
+      const next = index === -1 ? ordered[0] : ordered[(index + 1) % ordered.length]
       if (typeof service.set !== 'function') throw new Error('permission presets service unavailable')
       service.set(this.agent.session, next)
       const events = sessionEvents(this.agent.session)
