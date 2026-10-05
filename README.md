@@ -61,7 +61,7 @@ DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支
 | Session 与权限 | 工具失败读取兼容 V3/V4 event payload，权限继续走官方 Session API | 单元回归与真实 profile 启动通过 |
 | Profile 与 preset | 沿用 preset registry，支持 standard、ptc、minimal、cordis 四种 scoped preset | `0.2.0-rc.2 --dump-config`、四种 preset 注册与切换通过 |
 | 依赖 | DSH peer dependency 对齐 `^0.2.0-rc.2` | 隔离 Profile 安装与启动通过 |
-| 既有能力 | Agent、Jobs、附件、命令与模型能力调用签名保持兼容；`/model` 并行刷新 Provider 目录 | 隔离 mock 的完整 PTY 套件通过，包含模型变体选择；真实 Provider 与生产 Chrome MCP 场景待验证 |
+| 既有能力 | Agent、Jobs、附件、命令与模型能力调用签名保持兼容；`/model` 并行刷新 Provider 目录 | 隔离 mock 的完整 PTY 套件通过，包含模型变体选择；用户已实测真实 Provider 与 Chrome MCP 同时启用时，模型切换可以保存 |
 
 适配期间不会为了同步上游而复制其 UI 功能，也不会提前移除本地安全保护；只处理 Harness API 与 durable event 契约产生的实际兼容问题。
 
@@ -200,13 +200,15 @@ npx --yes @deepseek-ai/dsh@0.2.0-rc.2 --profile tui
 | `/tasks` | 打开任务中心；默认查看 Agent Plan，可切换后台任务 |
 | `/jobs` | 兼容入口；直接打开后台任务页，读取输出、刷新或取消任务 |
 | `/skills` | 浏览并在 TUI Profile 中切换 Skill 的 on/off 状态 |
-| `/resume` | 恢复当前工作目录下的历史会话 |
+| `/resume` | 列出当前工作目录下的历史会话标题与日期，选择后恢复内容 |
 | `/rename <标题>` | 重命名当前会话 |
 | `/mcp` / `/hooks` | 查看已挂载的 MCP 与 Hook 状态 |
 | `/export` | 在导出面板中选择目录并确认导出 Markdown |
 | `/exit` | 安全退出终端（有活跃后台任务时弹出确认） |
 
 其他命令和快捷键可以在 TUI 中通过 `?`、`/help` 或 `Ctrl+P` 查看。
+
+`/resume` 列表不按时间截断，也不限制为最近 50 条；显示当前目录中已持久化、有标题的非活跃主会话，没有标题的新会话和子会话不显示。列表先读取标题缓存，只为未缓存项批量查询标题；选择后才恢复完整会话数据。长历史首屏只排版最近 200 条事件，滚到顶部时按需载入更早内容。进程内列表缓存保留 5 分钟，每次打开都会核对官方活跃会话状态；当前 TUI 切换会话后及时更新，其他进程新增或删除的记录可能在缓存到期后才显示。恢复 preset 使用最后一次持久化选择，兼容其他客户端对空会话的预设修改。
 
 `/export` 打开导出面板，默认填入 `$DSH_HOME/exports/<项目名>/`；未设置 `DSH_HOME` 时即为 `~/.dsh/exports/<项目名>/`。首次按 Enter 校验时会创建该默认目录，避免会话导出文件混入 Git 工作区。可直接在面板的 `Directory` 输入框中编辑相对或绝对目录；自定义目录不会自动创建，按 Enter 会校验目录存在、类型与可写性，再确认导出；校验失败会在面板内显示原因且不会写入。导出目录和 Markdown 文件分别以仅当前用户可访问的权限创建。导出包含用户消息、助手回复与工具调用参数，分享前请自行检查敏感信息；文件名带会话尾号和 UTC 时间戳，不会覆盖此前导出结果。
 

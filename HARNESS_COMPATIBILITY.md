@@ -53,8 +53,8 @@ Reasoning effort 必须来自具体模型的 `reasoning.efforts` 元数据。官
 
 因此本轮做了三处调整：
 
-- `resumeSelected()` 不再为读取 preset 调用 `readSession(id)`。`agentPreset` 是 `SessionHeader` 的字段，且切换 preset 会新建会话并写入 header，所以 header 即权威来源；只有 header 缺失（早于该字段的旧会话）才回退读日志。
-- `/resume` 列表与 `-c` 的 `findResumeRecord()` 共用一个进程内列表缓存（TTL 5 分钟，支持 `force`），避免"开列表 → 选会话 → 再开列表"的来回切换每次重新枚举。恢复会话**不再清空**该缓存：`listSessions()` 本身不包含当前活跃会话，缓存不会让用户看到关于当前会话的过期信息。
+- `/resume` 与 `-c` 在 `agents.resume()` 的 setup 中投影已加载的会话事件，最后一次 `agent-preset/selected` 优先于创建时的 `SessionHeader.agentPreset`；无选择事件才使用 header 或默认 preset。其他客户端可以在空会话中修改 preset，因此不能只信任创建时的 header。旧会话也不再为读取 preset 额外调用 `readSession(id)`。
+- `/resume` 列表与 `-c` 的 `findResumeRecord()` 共用一个进程内列表缓存（TTL 5 分钟，支持 `force`），避免来回切换每次重新枚举。官方 `listSessions()` 包含活跃会话，因此每次读取缓存都通过官方 `sessions.list()` 核对 live 状态。旧会话成功 flush 后更新其持久化元数据、清除旧标题缓存；flush 失败或没有持久化监听器时让下次官方查询重新确认。当前会话不会进入恢复列表，新建后退出的会话也能立即出现。
 - 首屏只投影事件流尾部，更早内容在滚到顶部时按需载入；`preset-read` 从 1.6–14.7 秒降至 0ms，恢复总耗时从 10–21 秒降至 109–436ms。
 
 仍未消除的部分：`listSessions()` 首次枚举的固有成本（随会话总数增长）。官方没有"按 cwd 列举"或"按 id 直读"的会话查询接口，TUI 只能减少调用次数，不能改变实现。
@@ -67,7 +67,7 @@ Reasoning effort 必须来自具体模型的 `reasoning.efforts` 元数据。官
 - 插件市场/安装目前**未适配**：TUI 没有 `ctx.plugins` 或 catalog 服务，也不会直接修改 profile manifest。计划中的 `/plugins` 应只做市场发现与确认，并把安装/移除委托给官方 `dsh plugin --profile tui add/remove`；profile 重组后需重启 TUI。
 - `/fork`、`/rewind`、会话内全文检索等功能，只有在 Harness 提供稳定 session/checkpoint 合约后才能实现；不能通过截断 durable log 模拟。
 - Windows、真实 provider 下的技能发送与长任务生产者仍须做独立 E2E 验证。
-- TUI Profile 已关闭不需要的 HMR。生产 Chrome MCP 保持启用，但其启动包装器只等待最多 10 秒的 JSON-RPC 输出；超时后进程退出，使 Harness 的 `failOnStartupError: false` 和重连机制继续处理，配置重组不会无限等待。隔离 mock Profile 的 `agentDefaultModel.saveSelection()` 和模型变体选择 PTY 回归通过；真实 Provider 与已就绪 Chrome MCP 的联合模型保存仍需独立验收。
+- TUI Profile 已关闭不需要的 HMR。生产 Chrome MCP 保持启用，启动包装器对首次 `tools/list` 的 JSON-RPC 回应设置 10 秒期限；超时后终止子进程，再由 Harness 的重连机制处理。隔离 mock Profile 的 `agentDefaultModel.saveSelection()` 和模型变体选择 PTY 回归通过；2026-10-05 用户确认，真实 Provider 与 Chrome MCP 同时启用时，模型切换可以保存。这项手动验收覆盖模型切换保存，不代表已覆盖所有 Provider、重启持久化或长期断连场景。
 
 ## 发布前检查
 

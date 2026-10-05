@@ -515,4 +515,36 @@ assert.deepEqual(tokenEvents, [], 'A DCS reply split before the ST final byte mu
 
 router.dispose()
 
+// Preserve mixed input and paste boundaries at every possible read split.
+const wheel = '\x1b[<65;7;26M'
+const pastedReport = `hello${wheel}world`
+const mixedInput = `hi${wheel}\x1b[A${wheel}ok\x1b[200~${pastedReport}\x1b[201~!`
+const expectedMixed = ['h', 'i', 'wheel', '\x1b[A', 'wheel', 'o', 'k', ['paste', pastedReport], '!']
+for (let split = 0; split <= mixedInput.length; split++) {
+  const events = []
+  const mixedRouter = new InputRouter({ app: {
+    handleToken: (token) => events.push(token),
+    onMouseWheel: () => events.push('wheel'),
+    handlePaste: (text) => events.push(['paste', text])
+  } })
+  mixedRouter.processInput(mixedInput.slice(0, split))
+  mixedRouter.processInput(mixedInput.slice(split))
+  assert.deepEqual(events, expectedMixed, `Mixed input must preserve order and pasted reports at split ${split}`)
+  mixedRouter.dispose()
+}
+
+const splitEvents = []
+const splitRouter = new InputRouter({ app: {
+  handleToken: (token) => splitEvents.push(token),
+  onMouseWheel: () => splitEvents.push('wheel'),
+  handlePaste: (text) => splitEvents.push(['paste', text])
+} })
+for (const byte of mixedInput) splitRouter.processInput(byte)
+assert.deepEqual(splitEvents, expectedMixed, 'One-byte reads must preserve mixed input')
+splitEvents.length = 0
+splitRouter.processInput(`${wheel}\x1b`)
+await new Promise((resolve) => setTimeout(resolve, 180))
+assert.deepEqual(splitEvents, ['wheel', '\x1b'], 'A standalone Escape after scrolling must still flush as a key')
+splitRouter.dispose()
+
 console.log('✓ input router unit tests passed')

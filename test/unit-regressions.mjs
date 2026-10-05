@@ -28,7 +28,7 @@ import { ScreenRenderer } from '../src/renderer/screen.js'
 import { loadShellHistoryFile, loadSystemShellHistory } from '../src/input/history.js'
 import { listDir } from '../src/input/autocomplete.js'
 import { createDangerGuard, checkDangerCommand, compileDangerRules, DEFAULT_DANGER_RULES } from '../src/core/danger-guard.js'
-import { currentPermissionPreset, sessionEvents, toolCallId } from '../src/core/session-events.js'
+import { currentAgentPreset, currentPermissionPreset, sessionEvents, toolCallId } from '../src/core/session-events.js'
 import { groupActivitySpans, toolResultText } from '../src/renderer/activity.js'
 
 const noop = () => {}
@@ -47,6 +47,18 @@ assert.equal(sessionEvents(snapshotSession), snapshotSessionEvents)
 assert.equal(currentPermissionPreset({ current: (session) => session === snapshotSession ? 'snapshot' : 'wrong' }, snapshotSession), 'snapshot')
 assert.deepEqual(sessionEvents(undefined), [])
 assert.equal(currentPermissionPreset(undefined, snapshotSession), undefined)
+
+assert.equal(currentAgentPreset({ header: { agentPreset: 'standard' }, events: [] }, 'minimal'), 'standard')
+assert.equal(currentAgentPreset({ events: [] }, 'minimal'), 'minimal')
+assert.equal(currentAgentPreset({
+  header: { agentPreset: 'standard' },
+  snapshotEvents: () => [
+    { type: 'agent-preset/selected', data: { agentPreset: 'minimal' } },
+    { type: 'agent-preset/selected', data: { agentPreset: 'ptc' } },
+    { type: 'turn/end', data: {} }
+  ]
+}, 'standard'), 'ptc', 'The latest durable preset selection overrides the immutable creation header')
+assert.equal(currentAgentPreset({ events: [{ type: 'agent-preset/selected', data: { agentPreset: 'cordis' } }] }, 'standard'), 'cordis', 'Old headers still restore their durable preset')
 
 let tuiSkillOverride
 registerTuiSkillOverrides({
@@ -977,6 +989,73 @@ assert.equal(resumeListApp.picker.sessions[0].title.title, 'Cached session-3')
 assert.equal(resumeListApp.picker.sessions.length, 53, 'All titled sessions are available for navigation')
 assert.equal(resumeListApp.picker.loadingTitles, 0)
 
+// Cached persisted metadata must follow the official live registry during
+// resume/new transitions without enumerating the corpus again.
+{
+  const cacheHeader = (id) => ({ id, cwd: '/project', createdAt: 1, agentPreset: 'standard' })
+  const cacheSessionA = { header: cacheHeader('cache-a') }
+  const cacheSessionB = { header: cacheHeader('cache-b') }
+  const cacheSessionC = { header: cacheHeader('cache-new') }
+  const cacheLiveSessions = new Map([['cache-a', cacheSessionA]])
+  let cacheListReads = 0
+  const cacheSessionsService = {
+    list: () => [...cacheLiveSessions.values()],
+    flush: async () => true
+  }
+  const cacheApp = new TuiApp({})
+  Object.assign(cacheApp, {
+    agent: { session: cacheSessionA },
+    mru: {},
+    scheduleRender: noop,
+    log: noop,
+    ctx: {
+      get sessions() { throw new Error('Typed service access requires inject; use the declared get surface') },
+      get: (name) => name === 'sessions' ? cacheSessionsService : name === 'sessionProjectionCache' ? {
+        cachedSnapshot: (header) => ({ values: { title: { title: header.id } } })
+      } : undefined,
+      sessionQuery: {
+        listSessions: async () => {
+          cacheListReads++
+          return [
+            { header: cacheSessionA.header, live: true, persisted: true },
+            { header: cacheSessionB.header, live: false, persisted: true }
+          ]
+        },
+        readSession: async () => { throw new Error('No full log read is allowed for listing') }
+      }
+    }
+  })
+  const cachePickerIds = () => cacheApp.picker.sessions.map((entry) => entry.header.id).sort()
+  await cacheApp.openPicker()
+  assert.deepEqual(cachePickerIds(), ['cache-b'])
+  cacheLiveSessions.set('cache-b', cacheSessionB)
+  cacheApp.agent = { session: cacheSessionB }
+  await cacheApp.cleanupPreviousSession({ agent: { session: cacheSessionA }, dispose: () => cacheLiveSessions.delete('cache-a') })
+  await cacheApp.openPicker()
+  assert.deepEqual(cachePickerIds(), ['cache-a'], 'Outgoing session becomes resumable; the resumed session stays hidden')
+  assert.equal((await cacheApp.findResumeRecord('/project')).header.id, 'cache-a', '-c must also exclude live sessions')
+
+  cacheLiveSessions.set('cache-new', cacheSessionC)
+  cacheApp.agent = { session: cacheSessionC }
+  await cacheApp.cleanupPreviousSession({ agent: { session: cacheSessionB }, dispose: () => cacheLiveSessions.delete('cache-b') })
+  await cacheApp.openPicker()
+  assert.deepEqual(cachePickerIds(), ['cache-a', 'cache-b'])
+  cacheLiveSessions.set('cache-a', cacheSessionA)
+  cacheApp.agent = { session: cacheSessionA }
+  await cacheApp.cleanupPreviousSession({ agent: { session: cacheSessionC }, dispose: () => cacheLiveSessions.delete('cache-new') })
+  await cacheApp.openPicker()
+  assert.deepEqual(cachePickerIds(), ['cache-b', 'cache-new'], 'A newly persisted outgoing session joins the cached list immediately')
+  assert.equal(cacheListReads, 1, 'Switching/resuming sessions must keep the corpus cache fast')
+
+  for (const flush of [async () => false, async () => { throw new Error('checkpoint failed') }]) {
+    const failedCacheApp = new TuiApp({})
+    failedCacheApp.ctx = { get: () => ({ flush }) }
+    failedCacheApp.sessionListCache = { at: Date.now(), records: [] }
+    await failedCacheApp.cleanupPreviousSession({ agent: { session: cacheSessionC }, dispose: noop })
+    assert.equal(failedCacheApp.sessionListCache, undefined, 'An unsuccessful checkpoint must not claim durable persistence')
+  }
+}
+
 let resumeCandidateDisposed = false
 const resumeExistingAgent = { session: { events: [], seq: 9 } }
 const resumeFailureApp = {
@@ -988,7 +1067,11 @@ const resumeFailureApp = {
   ctx: {
     agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock-v2' }) },
     sessionQuery: { readSession: async () => ({ events: [] }) },
-    agents: { resume: async ({ setup }) => { await setup({}); return { agent: { ctx: { on: () => noop }, session: { events: [], requestHeader: () => ({ config: {} }) } }, dispose: async () => { resumeCandidateDisposed = true } } } },
+    agents: { resume: async ({ setup }) => {
+      const agent = { ctx: { on: () => noop }, session: { events: [], requestHeader: () => ({ config: {} }) } }
+      await setup(agent.ctx, agent)
+      return { agent, dispose: async () => { resumeCandidateDisposed = true } }
+    } },
     agentPresets: { defaultId: 'deepseek', mount: async () => {}, composedPreset: () => { throw new Error('resume projection failed') } },
     permissionPresets: { current: () => undefined }
   },
@@ -1012,7 +1095,7 @@ const resumeRenderFailureApp = {
   ctx: {
     agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock-v2' }) },
     sessionQuery: { readSession: async () => ({ events: [] }) },
-    agents: { resume: async ({ setup }) => { await setup({}); return { agent: resumedAgent, dispose: noop } } },
+    agents: { resume: async ({ setup }) => { await setup(resumedAgent.ctx, resumedAgent); return { agent: resumedAgent, dispose: noop } } },
     agentPresets: { defaultId: 'deepseek', mount: async () => {}, composedPreset: () => 'deepseek' },
     permissionPresets: { current: () => undefined }
   },
@@ -1032,6 +1115,57 @@ assert.equal(resumeRenderFailureApp.handle.agent, resumedAgent)
 assert.equal(oldResumeDisposed, true)
 assert.equal(resumeRenderFailureApp.permissionName, undefined)
 assert.match(resumeRenderLogs.at(-1).text, /resumed but failed to render/)
+
+// Exercise the actual resume setup contract: persistence has loaded the session
+// before it passes (agentCtx, agent), including selections made by other clients.
+for (const { headerPreset, selections, expected } of [
+  { headerPreset: 'standard', selections: ['minimal', 'ptc'], expected: 'ptc' },
+  { headerPreset: undefined, selections: ['cordis'], expected: 'cordis' },
+  { headerPreset: 'minimal', selections: [], expected: 'minimal' },
+  { headerPreset: undefined, selections: [], expected: 'standard' }
+]) {
+  const header = { id: 'preset-resume', agentPreset: headerPreset }
+  const agent = {
+    ctx: {},
+    session: {
+      header,
+      snapshotEvents: () => selections.map((agentPreset) => ({ type: 'agent-preset/selected', data: { agentPreset } })),
+      requestHeader: () => ({ config: {} })
+    }
+  }
+  let mountedPreset
+  let extraLogReads = 0
+  const errors = []
+  const app = {
+    picker: { selected: 0, sessions: [{ header }] },
+    ctx: {
+      agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock-v2' }) },
+      sessionQuery: { readSession: async () => { extraLogReads++; throw new Error('Redundant corpus scan') } },
+      agents: { resume: async ({ setup }) => { await setup(agent.ctx, agent); return { agent, dispose: noop } } },
+      agentPresets: {
+        defaultId: 'standard',
+        mount: async (_ctx, id) => { mountedPreset = id },
+        composedPreset: () => mountedPreset
+      },
+      permissionPresets: { current: () => undefined }
+    },
+    scheduleRender: noop,
+    log: (_kind, text) => errors.push(text),
+    extractReasoningBlocks: () => [],
+    createRequestOverride: () => noop,
+    createDangerGuardDisposer: async () => noop,
+    commitSessionState(state) { this.handle = state.handle; this.agent = state.handle.agent; this.presetName = state.presetName },
+    reprojectDocument: noop,
+    cleanupPreviousSession: noop,
+    touchMru: noop,
+    refreshSkills: noop
+  }
+  await TuiApp.prototype.resumeSelected.call(app)
+  assert.equal(mountedPreset, expected, 'Resume mounts the preset projected from the already loaded durable log')
+  assert.equal(app.presetName, expected)
+  assert.equal(extraLogReads, 0, 'Preset recovery must never enumerate the corpus a second time')
+  assert.deepEqual(errors, [])
+}
 
 const longResumeEvents = Array.from({ length: 240 }, (_, index) => ({
   seq: index + 1,
@@ -1053,7 +1187,7 @@ const longResumeApp = {
   ctx: {
     agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock-v1' }) },
     sessionQuery: { readSession: async () => ({ events: [] }) },
-    agents: { resume: async ({ setup }) => { await setup({}); return { agent: longResumeAgent, dispose: noop } } },
+    agents: { resume: async ({ setup }) => { await setup(longResumeAgent.ctx, longResumeAgent); return { agent: longResumeAgent, dispose: noop } } },
     agentPresets: { defaultId: 'standard', mount: async () => {}, composedPreset: () => 'standard' },
     permissionPresets: { current: () => undefined }
   },

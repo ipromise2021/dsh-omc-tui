@@ -11,6 +11,12 @@ export function sessionEvents(session) {
   return Array.isArray(session.events) ? session.events : []
 }
 
+/** Project the latest durable preset selection over the creation-time header. */
+export function currentAgentPreset(session, fallback) {
+  const selected = sessionEvents(session).findLast((event) => event.type === 'agent-preset/selected')
+  return selected?.data?.agentPreset ?? session?.header?.agentPreset ?? fallback
+}
+
 /**
  * Read the paired tool-call id from a tool/call or tool/result event across
  * Harness releases. DSH v0.1.5 moved the result correlation from the

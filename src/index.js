@@ -11,7 +11,7 @@ import { ImageParser, formatImageBytes, pngDimensions, jpegDimensions, imageDime
 import { registerVisionRouter } from './vision-router.js'
 import { registerBrowserLease } from './browser-lease.js'
 import { createDangerGuard } from './core/danger-guard.js'
-import { currentPermissionPreset, sessionEvents, toolResultError, toolResultFailure } from './core/session-events.js'
+import { currentAgentPreset, currentPermissionPreset, sessionEvents, toolResultError, toolResultFailure } from './core/session-events.js'
 import {
   THEMES,
   defaultTheme,
@@ -693,8 +693,8 @@ export class TuiApp {
         sessionId: `session-${randomUUID()}`,
         meta: { cwd: process.cwd(), agentPreset: requestedPreset },
         agentOptions: { provider: selection.provider, model: selection.model },
-        setup: async (agentCtx) => {
-          await this.ctx.agentPresets.mount(agentCtx, resumeRecord?.header.agentPreset ?? requestedPreset)
+        setup: async (agentCtx, agent) => {
+          await this.ctx.agentPresets.mount(agentCtx, currentAgentPreset(agent.session, requestedPreset))
           skillOverrideDisposers = registerTuiSkillOverrides(agentCtx, this.preferences?.disabledSkills ?? DEFAULT_DISABLED_SKILLS)
         }
       }
@@ -826,24 +826,32 @@ export class TuiApp {
    * file — and the official API has no per-directory or per-id read. The list UI
    * only needs the state as of the moment it opens, so repeating that enumeration
    * for every `/resume` makes the picker slower as the corpus grows. The listing
-   * also never contains the live session, so a cached copy cannot show stale
-   * information about the session in front of the user; the TTL is a freshness
-   * bound for sessions created or removed elsewhere, nothing more.
+   * includes live sessions, so refresh their flags from the official in-memory
+   * registry on every read. Successful outgoing flushes update persisted
+   * metadata below; the TTL bounds changes made by other processes.
    */
   async listSessionRecords({ force = false } = {}) {
     const ttlMs = 300_000
     const cached = this.sessionListCache
-    if (!force && cached !== undefined && Date.now() - cached.at < ttlMs) return cached.records
-    const records = (await this.ctx.sessionQuery.listSessions()) ?? []
-    this.sessionListCache = { records, at: Date.now() }
-    return records
+    if (force || cached === undefined || Date.now() - cached.at >= ttlMs) {
+      const records = (await this.ctx.sessionQuery.listSessions()) ?? []
+      this.sessionListCache = { records, at: Date.now() }
+    }
+    const liveSessions = this.ctx.get?.('sessions')?.list?.()
+    if (liveSessions === undefined) return this.sessionListCache.records
+    const liveHeaders = new Map(liveSessions.map((session) => [session.header.id, session.header]))
+    return this.sessionListCache.records.map((record) => ({
+      ...record,
+      header: liveHeaders.get(record.header.id) ?? record.header,
+      live: liveHeaders.has(record.header.id)
+    }))
   }
 
   async findResumeRecord(cwd) {
     // Call through the prototype so a partial host object (tests, embedders) only
     // needs the sessionQuery surface, not this cache helper.
     const records = (await TuiApp.prototype.listSessionRecords.call(this))
-      .filter((record) => !isSubagentSession(record) && (record.header?.cwd ?? record.cwd) === cwd)
+      .filter((record) => record.persisted && !record.live && !isSubagentSession(record) && (record.header?.cwd ?? record.cwd) === cwd)
       .sort((a, b) => ((this.mru?.[b.header.id] ?? b.header.createdAt) - (this.mru?.[a.header.id] ?? a.header.createdAt)))
     if (records.length === 0) throw new Error(`no previous Harness session found for ${cwd}; start once without -c`)
     return records[0]
@@ -5052,9 +5060,24 @@ export class TuiApp {
       try { disposeOverride() } catch {}
     }
     if (!previousHandle) return
+    const session = previousHandle.agent.session
+    let persisted = false
     try {
-      await withTimeout(this.sessionsService?.flush?.(previousHandle.agent.session), 500)
+      persisted = await withTimeout(this.sessionsService?.flush?.(session), 500) === true
     } catch {}
+    if (this.sessionListCache) {
+      if (persisted) {
+        const record = { header: session.header, live: true, persisted: true }
+        this.sessionListCache.records = this.sessionListCache.records
+          .filter((entry) => entry.header.id !== session.header.id)
+          .concat(record)
+      } else {
+        // A failed/absent checkpoint cannot establish durable metadata. Let the
+        // official listing resolve it next time instead of assuming persistence.
+        this.sessionListCache = undefined
+      }
+    }
+    this.sessionTitleCache?.delete(session.header?.id)
     try {
       await withTimeout(previousHandle.dispose?.(), 1000)
     } catch {}
@@ -6110,28 +6133,17 @@ export class TuiApp {
       const selection = this.ctx.agentDefaultModel.currentSelection()
       let skillOverrideDisposers
       let requestedPreset = record.header.agentPreset ?? this.ctx.agentPresets.defaultId
-      // The header records the preset the session was created with, and switching
-      // presets starts a new session, so it is the normal source. Reading the log
-      // only covers sessions whose header predates that field: `readSession()`
-      // enumerates every persisted session to resolve one id, which costs seconds
-      // on a large corpus for a single name.
-      const presetReadAt = performance.now()
-      if (record.header.agentPreset === undefined) {
-        try {
-          const snapshot = await this.ctx.sessionQuery.readSession(record.header.id)
-          const selected = [...(snapshot.events ?? [])].reverse().find((event) => event.type === 'agent-preset/selected')
-          if (selected?.data?.agentPreset) requestedPreset = selected.data.agentPreset
-          this.resumePhase?.('preset-read:from-log', presetReadAt, `${snapshot.events?.length ?? 0} events`)
-        } catch {
-          // Fall back to the default when the query backend cannot replay this session.
-        }
-      }
-      this.resumePhase?.('preset-read', presetReadAt, `header=${record.header.agentPreset ?? 'absent'} → ${requestedPreset}`)
       const resumeAt = performance.now()
       const { agent, dispose } = await this.ctx.agents.resume({
         resumeSessionId: record.header.id,
         agentOptions: { provider: selection.provider, model: selection.model },
-        setup: async (agentCtx) => {
+        setup: async (agentCtx, agent) => {
+          // Harness has already loaded the durable events before setup. A blank
+          // session may have selected another preset after its frozen header
+          // was created; project those events without a second disk query.
+          const presetReadAt = performance.now()
+          requestedPreset = currentAgentPreset(agent.session, requestedPreset)
+          this.resumePhase?.('preset-read', presetReadAt, requestedPreset)
           await this.ctx.agentPresets.mount(agentCtx, requestedPreset)
           skillOverrideDisposers = registerTuiSkillOverrides(agentCtx, this.preferences?.disabledSkills ?? DEFAULT_DISABLED_SKILLS)
         }
