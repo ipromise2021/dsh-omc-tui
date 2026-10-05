@@ -825,11 +825,13 @@ export class TuiApp {
    * session log, decompresses its first zstd frame for the header and stats the
    * file — and the official API has no per-directory or per-id read. The list UI
    * only needs the state as of the moment it opens, so repeating that enumeration
-   * for every `/resume` makes the picker slower as the corpus grows. Cache the
-   * records briefly and let the next call refresh them.
+   * for every `/resume` makes the picker slower as the corpus grows. The listing
+   * also never contains the live session, so a cached copy cannot show stale
+   * information about the session in front of the user; the TTL is a freshness
+   * bound for sessions created or removed elsewhere, nothing more.
    */
   async listSessionRecords({ force = false } = {}) {
-    const ttlMs = 15_000
+    const ttlMs = 300_000
     const cached = this.sessionListCache
     if (!force && cached !== undefined && Date.now() - cached.at < ttlMs) return cached.records
     const records = (await this.ctx.sessionQuery.listSessions()) ?? []
@@ -893,7 +895,7 @@ export class TuiApp {
     if (!trace) return
     const total = trace.reduce((sum, entry) => sum + entry.ms, 0)
     const body = trace.map((entry) => `${entry.label} ${entry.ms.toFixed(0)}ms${entry.note === undefined ? '' : ` (${entry.note})`}`).join(' | ')
-    const line = `${new Date().toISOString()} resume ${sessionId.slice(-8)} total ${total.toFixed(0)}ms :: ${body}\n`
+    const line = `${new Date().toISOString()} ${sessionId} total ${total.toFixed(0)}ms :: ${body}\n`
     const dir = this.stateDir()
     void mkdir(dir, { recursive: true })
       .then(() => appendFile(join(dir, 'resume-trace.log'), line))
@@ -955,9 +957,6 @@ export class TuiApp {
 
   touchMru(sessionId) {
     this.mru[sessionId] = Date.now()
-    // The listing cache is also dropped whenever the active session changes, so
-    // a session started or resumed in this process shows up on the next open.
-    this.sessionListCache = undefined
     saveMruFile(this.stateDir(), this.mru)
   }
 
@@ -4969,9 +4968,6 @@ export class TuiApp {
   }) {
     this.handle = handle
     this.agent = handle.agent
-    // Every session this process activates — new, resumed or switched — drops the
-    // listing cache, so the next `/resume` open reflects it immediately.
-    this.sessionListCache = undefined
     this.skillOverrideDisposers = skillOverrideDisposers ?? new Map()
     this.presetName = presetName
     this.reasoningEffort = reasoningEffort
@@ -6044,7 +6040,7 @@ export class TuiApp {
       this.scheduleRender(true)
       // Flush here, not inside the title backfill: a fully cached corpus never
       // enters that branch, which is exactly the case that stayed unmeasured.
-      this.flushResumeTrace?.('resume-list')
+      this.flushResumeTrace?.('list')
       if (uncached.length > 0) {
         void (async () => {
           if (this.picker !== picker) return
@@ -6081,7 +6077,7 @@ export class TuiApp {
             this.picker = undefined
             this.log('error', 'no past sessions with content in this directory', '/resume')
           }
-          this.flushResumeTrace?.('resume-list-titles')
+          this.flushResumeTrace?.('list-titles')
           this.scheduleRender()
         })()
       }
@@ -6188,7 +6184,7 @@ export class TuiApp {
       const cleanupAt = performance.now()
       await this.cleanupPreviousSession(previousHandle, previousRequestOverrideDispose, previousSkillOverrideDisposers, previousDangerGuardDispose)
       this.resumePhase?.('previous-cleanup', cleanupAt)
-      this.flushResumeTrace?.(record.header.id)
+      this.flushResumeTrace?.(`resume-${record.header.id.slice(-8)}`)
       if (this.agent === agent) {
         this.touchMru(record.header.id)
         void this.refreshSkills()
