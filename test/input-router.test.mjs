@@ -283,6 +283,16 @@ router.processInput('<65;7;26M')
 assert.equal(mouseEvents.length, 3, 'A burst split across reads must still scroll every report')
 assert.deepEqual(tokenEvents, [], 'A split burst must not appear in the composer')
 
+// A lone flushed Escape can head a bubble of reports just as `ESC [` can, so a
+// burst that follows it must scroll every tick instead of being typed.
+mouseEvents = []
+tokenEvents = []
+router.processInput('\x1b')
+await new Promise((resolve) => setTimeout(resolve, 200))
+router.processInput('<65;1;21M<65;1;21M<65;1;21M')
+assert.equal(mouseEvents.length, 3, 'A burst after a lone Escape must scroll once per report')
+assert.deepEqual(tokenEvents, ['\x1b'], 'A burst after a lone Escape must not reach the composer')
+
 // Ordinary typing after an abandoned prefix is never mistaken for a report,
 // because a report body always carries its `<` and the `c`/`x`/`y` separators.
 mouseEvents = []
