@@ -7030,10 +7030,23 @@ export class TuiApp {
       }
     }
     const decoded = this.stdinDecoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-    if (decoded) this.inputRouter.processInput(decoded)
+    if (decoded) {
+      // Opt-in trace for terminal-specific input bugs. It records only the raw
+      // read and the bytes the router could not classify, which is exactly what
+      // a leaked control sequence looks like in the composer.
+      if (process.env.DSH_TUI_TRACE_INPUT === '1') {
+        this.traceInputChunk = decoded
+        void appendFile(join(this.stateDir(), 'input-trace.log'), `${new Date().toISOString()} chunk ${JSON.stringify(decoded)}\n`).catch(() => {})
+      }
+      this.inputRouter.processInput(decoded)
+    }
   }
 
   handleToken(value) {
+    if (process.env.DSH_TUI_TRACE_INPUT === '1' && this.traceInputChunk !== undefined) {
+      void appendFile(join(this.stateDir(), 'input-trace.log'), `${new Date().toISOString()} token ${JSON.stringify(value)} <- chunk ${JSON.stringify(this.traceInputChunk)}\n`).catch(() => {})
+      this.traceInputChunk = undefined
+    }
     if (this.selectionController?.active || this.selectionController?.hasSelection()) {
       this.selectionController.clear()
     }
