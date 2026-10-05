@@ -6085,8 +6085,11 @@ export class TuiApp {
       const presetReadAt = performance.now()
       try {
         const snapshot = await this.ctx.sessionQuery.readSession(record.header.id)
+        this.resumePhase?.('preset-read:readSession', presetReadAt, `${snapshot.events?.length ?? 0} events`)
+        const foldAt2 = performance.now()
         const selected = [...(snapshot.events ?? [])].reverse().find((event) => event.type === 'agent-preset/selected')
         if (selected?.data?.agentPreset) requestedPreset = selected.data.agentPreset
+        this.resumePhase?.('preset-read:scan', foldAt2, selected?.data?.agentPreset ?? record.header.agentPreset ?? 'default')
       } catch {
         // Fall back to the recorded header/default when the query backend cannot replay this session.
       }
