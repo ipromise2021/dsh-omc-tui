@@ -4,10 +4,9 @@
 
 ---
 
-## v0.2.17 · 未发布
+## v0.2.17 · 2026-10-05
 
-- 将 Harness peer 依赖基线升级至 `v0.2.0-rc.2`；新版启动器会检查插件声明的 DSH peer 版本。
-- 核对四种 preset、Session 事件与所用服务接口；在隔离 Profile 中验证插件安装、配置加载和 TUI 交互。已发布的 `v0.2.16` 仍面向 DSH `v0.1.7-rc.2`。
+- **Harness v0.2.0-rc.2 兼容**：peer 依赖基线升级至 `^0.2.0-rc.2`（新版启动器会检查插件声明的 DSH peer 版本），并累计复核 `v0.1.7-rc.2` → `v0.2.0-rc.2` 的四种 preset、Session 事件与所用服务接口。请在 DSH `v0.2.0-rc.2` 上安装本版本；`v0.2.16` 面向 DSH `v0.1.7-rc.2`。
 - 累计复核 DSH `v0.1.7-rc.2`、`v0.2.0-rc.1` 和 `v0.2.0-rc.2` 的 TUI 契约：关闭不需要的 Profile HMR；Chrome MCP 首次 JSON-RPC 握手限制为 10 秒，超时后让官方 MCP 重连机制接管，避免其未就绪 fiber 无限阻塞官方模型配置保存。隔离 mock Profile 的完整 PTY 套件包含模型变体切换均通过；真实 Provider 与已就绪 Chrome MCP 的联合保存仍待验收。
 - `/model` 并行读取各 Provider 的模型目录；刷新时移除已下架模型的旧缓存。
 - `/resume` 和 `-c` 先投影最近的历史事件；滚到顶部时按需载入更早内容，避免后台全量排版长时间占用输入循环。`-c` 选会话不再逐个读取完整日志，`/resume` 标题一次批量读取全部未缓存项；恢复期间被延迟拆开的滚轮报告不再进入输入框。
@@ -39,6 +38,7 @@
 
 | 版本 | 日期 | 说明 |
 | :--- | :--- | :--- |
+| **v0.2.17** | 2026-10-05 | **DSH v0.2.0-rc.2 兼容与恢复性能优化**。peer 依赖基线升级至 `^0.2.0-rc.2`，并累计复核 `v0.1.7-rc.2` → `v0.2.0-rc.2` 的 preset、Session 事件与服务接口；TUI Profile 关闭不需要的 HMR，Chrome MCP 首次握手限制为 10 秒，避免未就绪 fiber 阻塞官方模型配置保存；`/model` 并行读取 Provider 目录并清理已下架模型缓存；`/resume` 与 `-c` 先投影最近历史、向上滚动时按需载入更早内容，标题改用官方批量查询且不再逐个读取完整日志；恢复期间被拆开的滚轮报告不再进入输入框。 |
 | **v0.2.16** | 2026-09-28 | **DSH v0.1.7-rc.2 与终端稳定性更新**。支持四种 Agent preset，增强长待机后的输入恢复，并让超时 Shell 任务转入后台 Jobs。 |
 | **v0.2.15** | 2026-09-11 | **任务状态与终端呈现可靠性修复**。Harness `todo/write` 快照实时驱动 `/tasks` 与状态栏；完整消费异步终端回执，避免控制序列污染输入框；工具 diff 输出维持层级缩进，Markdown 代码块移除裸围栏；Context 色彩与浅色终端主题检测优化。 |
 | **v0.2.14** | 2026-09-10 | **DSH v0.1.5-rc.1 兼容与压缩链路升级**。19 个 Harness peer 依赖与 Cordis 对齐新版预发布范围，Profile system prompt 迁移至 `personaPrefix` 并移除失效 patch；支持默认 DeepSeek-V41-Flash（`deepseek-flash`）及视觉旁路候选。接入 Harness 官方 `compaction-basic` 的 80% 阈值压缩与 durable 生命周期投影，兼容 V3 tool result 的 `message.source.callId`。`/status` 使用紧凑宽字符安全面板；修复 CR-only 粘贴及残缺 CSI 超时后吞掉普通输入的问题，并补齐回归测试。 |

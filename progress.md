@@ -1,5 +1,14 @@
 # 代码审查优化进度日志
 
+## 会话：2026-10-05（v0.2.17 提交与发布准备）
+
+### 阶段 45：整理提交
+- **状态：** complete
+- 清理与本次发布无关的 `tmp_text.md` 草稿；`.nvmrc` 由 `22` 收紧为 `22.19.0`，与 `engines` 下限一致。
+- 改动拆为三次提交：`.nvmrc` 收敛、`feat(harness): adapt tui to dsh 0.2.0-rc.2`、`perf(resume): load history and model catalogs on demand`。提交后的 `npm test`、`npm run verify`、`git diff --check` 与 69 文件打包预检均通过。
+- 版本与文档改为发布口径：CHANGELOG 记录 `v0.2.17 · 2026-10-05`，README 安装命令切换至 `@deepseek-ai/dsh@0.2.0-rc.2` + `dsh-omc-tui@0.2.17`。
+- 剩余动作：`git tag v0.2.17`、推送与 `npm publish`；真实 Provider 与已就绪 Chrome MCP 的联合模型保存、原终端长历史滚轮仍待使用者实测。
+
 ## 会话：2026-10-05（恢复标题、长历史与滚轮）
 
 ### 阶段 44：恢复交互复核

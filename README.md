@@ -4,13 +4,13 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-ipromise2021%2Fdsh--omc--tui-181717?style=flat-square&logo=github)](https://github.com/ipromise2021/dsh-omc-tui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![DeepSeek Harness](https://img.shields.io/badge/Harness-0.1.7--rc.2-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/Harness-0.2.0--rc.2-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
 [![Node.js](https://img.shields.io/badge/Node.js-22.19%2B%20%7C%2024.2%2B-green?style=flat-square)](package.json)
 
 **DeepSeek Harness 的终端原生 TUI**
 
-> **当前适配：DeepSeek Harness `v0.1.7-rc.2`**
-> **v0.2.16：适配 DSH v0.1.7-rc.2、支持四种 Agent preset，并增强长待机输入恢复与 Shell 后台任务。**
+> **当前版本：`v0.2.17`，适配 DeepSeek Harness `v0.2.0-rc.2`。**
+> **上一版本 `v0.2.16` 面向 DSH `v0.1.7-rc.2`，请勿混用。**
 
 独立视口差分渲染，提供图片输入、划选回看、任务与 Plan 面板、行内审批和 Danger Guard 看门狗。
 
@@ -24,17 +24,17 @@
 
 Agent 运行时、模型选择、会话、权限、Jobs 服务与持久化由 Harness 提供；插件负责终端交互与渲染，并提供视觉旁路工具和本地 `!` Shell 入口。
 
-项目参考了 Claude Code 的交互习惯与终端美学，采用备用屏幕与视口差分渲染，支持滚轮回看、鼠标划选和复制。退出备用屏幕后，会把本次会话内容写回终端历史，方便继续查看。
+项目参考了 Claude Code 的交互习惯与终端美学，采用备用屏幕与视口差分渲染，支持滚轮回看、鼠标划选和复制。退出备用屏幕后，会把当前已载入的会话内容写回终端历史，方便继续查看。
 
-> 📌 **当前版本**：`v0.2.16` 面向 DSH `v0.1.7-rc.2`；已完成源码契约核对、隔离 Profile 启动、单元测试和模块导入验证。跨数小时待机后，已有一次实际使用验证未出现键盘或鼠标乱码；其他终端环境仍欢迎反馈。
+> 📌 **版本说明**：本版本面向 DSH `v0.2.0-rc.2`，请使用同一版本线的 DSH 启动。跨数小时待机后，已有一次实际使用验证未出现键盘或鼠标乱码；其他终端环境仍欢迎反馈。
 
 ## 快速开始
 
 需要 Node.js `22.19+`（22.x）或 `24.2+`，以及支持 ANSI 256 色的终端。用 `tui` profile 安装并启动：
 
 ```sh
-npx --yes @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile tui add dsh-omc-tui
-npx --yes @deepseek-ai/dsh@0.1.7-rc.2 --profile tui
+npx --yes @deepseek-ai/dsh@0.2.0-rc.2 plugin --profile tui add dsh-omc-tui@0.2.17
+npx --yes @deepseek-ai/dsh@0.2.0-rc.2 --profile tui
 ```
 
 首次启动后，按 DSH 的提示配置模型提供方和 API Key。其他安装方式见[安装和启动](#安装和启动)。
@@ -50,18 +50,18 @@ npx --yes @deepseek-ai/dsh@0.1.7-rc.2 --profile tui
 
 插件通过 Harness API 创建和恢复 Agent、提交业务操作；会话与权限不在插件内另建真相源。`!` Shell 进程属于当前 TUI，若 Jobs 服务无法注册，后台任务会暂存在当前进程内，退出后不能从该本地列表恢复。`standard`、`ptc`、`minimal`、`cordis` 四种 Agent preset 由 DSH preset registry 组合；`/preset` 可查看和切换，已有对话时会先确认新建会话。
 
-## 当前 Harness 适配：DSH `v0.1.7-rc.2`
+## 当前适配：DSH `v0.2.0-rc.2`
 
-`v0.1.7-rc.2` 使用 preset registry 与 PTC runtime 组合 Agent 能力，并在 Session V4 工具结果中将失败状态置于 `message.isError`、细节置于 `error.reason`。TUI 继续只通过 `ctx.agents.create/resume`、`dispose()`、`snapshotEvents()` 与 `sessionQuery` 使用官方生命周期；预设、权限与会话均由 Harness 持久化。
+本次从 `v0.1.7-rc.2` 累计检查至 `v0.2.0-rc.2`：前者引入动态工具与审批接续等行为；`v0.2.0-rc.1` 改进图片重传和工具调度异常恢复；`v0.2.0-rc.2` 调整模型目录，并提供可选的限时提问。preset registry、PTC runtime 和 Session V4 事件契约仍可沿用。TUI 继续通过 `ctx.agents.create/resume`、`dispose()`、`snapshotEvents()` 与 `sessionQuery` 使用官方生命周期；限时提问当前未启用，仍使用默认的 legacy 模式。
 
 DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支持文本、图片以及会话内系统提示词更新。TUI 的初始化兜底模型和 `/vision` 常用模型候选均已纳入该模型。
 
 | 范围 | 结果 | 验收 |
 | :--- | :--- | :--- |
 | Session 与权限 | 工具失败读取兼容 V3/V4 event payload，权限继续走官方 Session API | 单元回归与真实 profile 启动通过 |
-| Profile 与 preset | 迁移至 preset registry，支持 standard、ptc、minimal、cordis 四种 scoped preset | `0.1.7-rc.2 --dump-config`、四种 preset 注册与切换通过 |
-| 依赖 | DSH peer dependency 对齐 `^0.1.7-rc.2` | 预发布依赖可被正确解析 |
-| 既有能力 | Agent、Jobs、附件、命令与模型能力调用签名保持兼容 | 源码级比对通过；真实 Provider/图片 E2E 待补 |
+| Profile 与 preset | 沿用 preset registry，支持 standard、ptc、minimal、cordis 四种 scoped preset | `0.2.0-rc.2 --dump-config`、四种 preset 注册与切换通过 |
+| 依赖 | DSH peer dependency 对齐 `^0.2.0-rc.2` | 隔离 Profile 安装与启动通过 |
+| 既有能力 | Agent、Jobs、附件、命令与模型能力调用签名保持兼容；`/model` 并行刷新 Provider 目录 | 隔离 mock 的完整 PTY 套件通过，包含模型变体选择；真实 Provider 与生产 Chrome MCP 场景待验证 |
 
 适配期间不会为了同步上游而复制其 UI 功能，也不会提前移除本地安全保护；只处理 Harness API 与 durable event 契约产生的实际兼容问题。
 
@@ -69,7 +69,7 @@ DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支
 
 ### 1. 独立视口与原生级终端体验
 
-- **备用屏幕与差分渲染**：采用终端备用屏幕（Alternate Screen，类似 Vim/tmux）与 Viewport 差分渲染。会话在全屏视口中运行，退出时恢复原 Shell 画面，并将会话内容写回终端历史。
+- **备用屏幕与差分渲染**：采用终端备用屏幕（Alternate Screen，类似 Vim/tmux）与 Viewport 差分渲染。会话在全屏视口中运行，退出时恢复原 Shell 画面，并将已载入的会话内容写回终端历史。
 - **顺滑滚轮回看与智能划选**：内置 SGR 鼠标协议驱动的视口滚动；支持单击拖拽选区、双击中英文分词选择、三击选整行，复制时自动剥离 ANSI 样式纯净复制到系统剪贴板，亦可配合终端修饰键（macOS `Option` / Linux `Shift`）强制使用终端原生划选。
 - **输入恢复与终端健壮性**：输入路由识别 CSI / OSC / DCS 等控制序列和鼠标报告；对分片方向键、残缺粘贴、图片传输超时与待机后的终端模式丢失设有恢复路径。跨数小时待机的实际使用中，键盘和鼠标未出现乱码。
 - **语义阅读锚点与渐进防误触**：终端 Resize 窗口缩放时按内容语义锚点锁定阅读位置；生成期间按 `Esc` 先平滑滚动回底部、再次按下才触发任务中断。
@@ -95,7 +95,7 @@ DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支
 ### 4. 实时任务中心与 Plan 联动 (Tasks & Plan)
 
 - **Durable 实时状态感知**：全面接入 Harness 的 `todo/write` 持久化快照，任务创建、进行中与已完成状态实时流式驱动 `/tasks` 任务中心面板与底部状态栏。
-- **会话恢复**：历史会话恢复（`-c` / `/resume`）时，任务项与完成进度从 Harness 持久化事件重新投影。
+- **会话恢复**：历史会话恢复（`-c` / `/resume`）时，任务项与完成进度从 Harness 持久化事件重新投影；先显示最近内容，向上滚动到顶部时再载入更早的历史。
 - **后台长任务 (Jobs)**：运行中的 `!` Shell 命令可用 `Ctrl+B` 放入后台，前台运行超过 60 秒也会自动转入后台继续执行；`/jobs` 可读取输出、刷新和取消任务。
 
 ### 5. 行内安全审批与原生看门狗 (Danger Guard)
@@ -108,14 +108,14 @@ DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支
 - **4 行全景自适应状态栏**：实时呈现当前模型、Plan/Build 模式、权限档位、会话 Context 进度条与水位预警、Git 分支/变更/ahead/behind、活跃扩展（Skills/MCP/Hooks）与最近响应速度。支持 `detailed`、`compact` 和 `minimal` 三种密度。
 - **无污染旁路提问 (`/btw`)**：后台创建独立临时会话回答旁路问题，完全不污染主会话上下文与 Token 预算。
 - **自动与平滑压缩 (`/compact`)**：上下文达到阈值（Harness `compaction-basic.thresholdRatio`，默认 80%）时在回合内自动触发平滑压缩，亦可通过 `/compact` 手动触发。
-- **会话回顾与空闲总结 (`/recap`)**：随时生成会话历史摘要；空闲 15 分钟时自动生成呼吸总结。
+- **会话回顾与空闲总结 (`/recap`)**：随时生成会话历史摘要；空闲 15 分钟时自动生成呼吸总结。恢复长会话后，较早的转写会随向上滚动按需载入。
 - **工作区逐级下钻 (`@文件`)**：输入 `@` 浏览工作区目录树，支持交互过滤、子目录钻取与文件内容高亮注入。
 - **安全导出 (`/export`)**：在专用面板中校验并导出 Markdown 会话记录，默认安全隔离于专用配置目录。
 
 ## 环境要求
 
-- Node.js `22.19+`（22.x）或 `24.2+`；DSH `v0.1.7-rc.2` 的运行时依赖需要这一范围
-- DeepSeek Harness [`@deepseek-ai/dsh@0.1.7-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)（预发布版本，需显式指定）
+- Node.js `22.19+`（22.x）或 `24.2+`
+- DeepSeek Harness：[`@deepseek-ai/dsh@0.2.0-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)（预发布版本，需显式指定）
 - 支持 ANSI 256 色的终端
 - 图片显示建议使用 iTerm2 或支持 Kitty Graphics 的终端
 
@@ -123,23 +123,14 @@ DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支
 
 ## 安装和启动
 
-从 npm 安装到 `tui` profile（推荐，直接分发构建产物，无需 Git 依赖构建授权）：
+从 npm 安装 `dsh-omc-tui` 到 `tui` profile（直接分发构建产物，无需 Git 依赖构建授权）：
 
 ```sh
-npx --yes @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile tui add dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.2.0-rc.2 plugin --profile tui add dsh-omc-tui@0.2.17
+npx --yes @deepseek-ai/dsh@0.2.0-rc.2 --profile tui
 ```
 
-也可以从 GitHub 安装（会拉取源码，首次需按 pnpm 提示授权 `prepare` 构建脚本）：
-
-```sh
-npx --yes @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile tui add github:ipromise2021/dsh-omc-tui
-```
-
-启动：
-
-```sh
-npx --yes @deepseek-ai/dsh@0.1.7-rc.2 --profile tui
-```
+要从源码试用，请先检出本仓库，再按[本地开发安装](#本地开发安装)中的命令安装。
 
 如果已经全局安装 DSH，也可以直接运行：
 
@@ -171,8 +162,8 @@ omc
 
 ```sh
 export DSH_HOME=/private/tmp/dsh-tui-dev
-npx --yes @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile tui add /absolute/path/to/dsh-omc-tui
-npx --yes @deepseek-ai/dsh@0.1.7-rc.2 --profile tui
+npx --yes @deepseek-ai/dsh@0.2.0-rc.2 plugin --profile tui add /absolute/path/to/dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.2.0-rc.2 --profile tui
 ```
 
 ## 常用快捷键
