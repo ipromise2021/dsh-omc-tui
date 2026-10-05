@@ -140,7 +140,7 @@ dsh-omc-tui/
 * **全景指示器矩阵**：
   1. **模型与会话状态**：实时展示当前活跃模型（如 `[deepseek-v4-flash]`）、Build/Plan 运行模式、Reasoning Effort 档位（`HIGH`/`DEFAULT`）、当前会话摘要标题与探索动效（`◉ reading...`）；
   2. **Token 上下文吞吐与智能水位预警**：
-     - 动态渲染高可读性 Token 进度条（`Context ██████░░░░ 45%`）；
+     - 动态渲染高可读性 Token 进度条（`Context ░░░░░░░░░░░░░░ 45%`，已用与剩余容量同形，靠主题色区分）；
      - 60% 绿色正常、75% 琥珀黄预警、80% 珊瑚红严重告警（⚠️ 标识），并自动联动 Harness 的 85% 自动 Compact 机制；
      - 支持 `percent`、`tokens`、`remaining`（剩余可用）及 `both` 四种显示模式。
   3. **Git 仓库动态感知**：

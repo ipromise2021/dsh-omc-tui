@@ -133,7 +133,7 @@ diff --git a/src/renderer/diff.js b/src/renderer/diff.js
 ### 6. 全景状态指示器与系统体检看板（Statusline & `/status`）
 - **四行全景 Statusline**：
   - **第 1 行（身份行）**：`BUILD/PLAN 模式 | [模型名] | 工作目录 | 会话标题`，带动态探索动画（`◉ Exploring`）；
-  - **第 2 行（Token 经济学）**：块状进度条 `█████░░░░░░░░░ 38%`、In / Out / Cache 命中率；
+  - **第 2 行（Token 经济学）**：单字形进度条 `░░░░░░░░░░░░░░ 38%`（已用与剩余同形，按主题色区分）、In / Out / Cache 命中率；
   - **第 3 行（生态看板）**：已挂载 Skills 数、MCP 服务数、Hook 拦截点、最近工具结果、后台运行 Jobs；
   - **第 4 行（权限控制）**：当前权限预设（`workspace-write` 等），支持 `Shift+Tab` 一键轮转。
 - **`/status` 全局体检看板**：一键输出环境、Token 用量、扩展与配置体检报告。
