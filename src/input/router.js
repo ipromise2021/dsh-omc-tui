@@ -3,6 +3,16 @@ import { parseSgrMouse, parseUrxvtMouse, parseX10Mouse } from './mouse.js'
 const SGR_MOUSE_SEQUENCE = /^(\x1b?\[<\d+;\d+;\d+[Mm])/
 const SGR_MOUSE_PREFIX = /^\x1b?\[<\d*(?:;\d*){0,2}$/
 const MAX_SGR_MOUSE_LENGTH = 64
+// Reads cap near 1024 bytes, so a continuous scroll cuts SGR reports at an
+// arbitrary byte and one read carries hundreds of them. The scanner consumes
+// every complete report and keeps only one unfinished head across reads.
+const SGR_REPORT_ANYWHERE = /\x1b\[<\d+;\d+;\d+[Mm]/g
+// An unfinished report head whose field can still be written.
+const SGR_HEAD_OPEN = /^\x1b\[<\d*(?:;\d*)?$/
+// An introducer that is not even complete (`ESC` or `ESC [`).
+const SGR_INTRODUCER = /^\x1b\[?$/
+// A read that continues inside a report cut by the previous read.
+const SGR_TAIL = /^[<;\d]/
 // urxvt's 1015 protocol omits the SGR `<` marker and offsets Cb by 32.
 // Without a dedicated branch, it is mistaken for a numeric CSI key sequence
 // and its bytes are inserted into the composer.
@@ -71,6 +81,7 @@ export class InputRouter {
     this.sgrIntroducerTimer = null
     this.awaitingMouseBody = false
     this.mouseBodyTimer = null
+    this.sgrPending = ''
   }
 
   /**
@@ -88,6 +99,15 @@ export class InputRouter {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer)
       this.flushTimer = null
+    }
+
+    // Report bytes first: a read boundary splits what the terminal already sent,
+    // so the scanner rejoins the pieces and consumes every complete report. Only
+    // an unfinished head survives into the next read.
+    if (!this.inPaste && (this.sgrPending !== '' || str.includes('\x1b[<'))) {
+      const rest = this.scanSgrReports(str)
+      if (rest === '') return
+      str = rest
     }
 
     // Some terminal bridges deliver a mouse report as ESC, then [, then its
@@ -451,6 +471,46 @@ export class InputRouter {
     this.awaitingMouseBody = true
     if (this.mouseBodyTimer) clearTimeout(this.mouseBodyTimer)
     this.mouseBodyTimer = setTimeout(() => this.clearMouseBodyWait(), LATE_MOUSE_BODY_GRACE_MS)
+  }
+
+  /**
+   * Consume every complete SGR report in `text` and keep only an unfinished
+   * head. Reads cap near 1024 bytes, so reports are cut at arbitrary bytes and
+   * several share one read: scanning by the report's own M/m terminator means
+   * no read boundary is ever guessed.
+   *
+   * @returns the bytes that are not part of a report.
+   */
+  scanSgrReports(text) {
+    if (this.sgrPending !== '') {
+      const last = this.sgrPending.at(-1)
+      if (SGR_TAIL.test(text)) {
+        // Complete the introducer only when the previous read cut it; otherwise
+        // the pending head is a byte-exact prefix and the text continues it.
+        const head = last === '<' || /\d/.test(last)
+          ? this.sgrPending
+          : last === '[' ? `${this.sgrPending}<` : '\x1b[<'
+        text = head + text.replace(/^</, '')
+      } else {
+        text = this.sgrPending + text
+      }
+      this.sgrPending = ''
+    }
+    SGR_REPORT_ANYWHERE.lastIndex = 0
+    let index = 0
+    let match
+    while ((match = SGR_REPORT_ANYWHERE.exec(text)) !== null) {
+      const mouseEvent = parseSgrMouse(match[0])
+      if (mouseEvent) this.dispatchMouseEvent(mouseEvent)
+      index = match.index + match[0].length
+    }
+    const remainder = text.slice(index)
+    if (remainder === '') return ''
+    if (remainder.length <= MAX_SGR_MOUSE_LENGTH && (SGR_HEAD_OPEN.test(remainder) || SGR_INTRODUCER.test(remainder))) {
+      this.sgrPending = remainder
+      return ''
+    }
+    return remainder
   }
 
   /**

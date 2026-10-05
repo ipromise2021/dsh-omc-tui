@@ -7,10 +7,11 @@ import { wheelBurstChunks } from './fixtures/wheel-burst-chunks.mjs'
 // cut at arbitrary bytes: the router must consume every report and must never
 // let a fragment reach the composer.
 //
-// KNOWN FAILING against the current router (3930 dispatched instead of 1750,
-// with `7;24M…` reaching the composer). It is intentionally not part of
-// `npm test` so the suite stays green while the streaming rewrite is pending;
-// run it directly with `node test/wheel-burst.test.mjs` to watch the fix.
+// The composer leak is fixed: this fixture now replays with zero bytes reaching
+// the composer. The dispatch counter is still three reports short of 1750 — one
+// `<0;133;19M`/`m` press/release pair and one `<65;133;19M` wheel — so the
+// assertion is intentionally kept strict and this file stays out of `npm test`
+// until that residue is closed. Run it directly to watch the remaining gap.
 const full = wheelBurstChunks.join('')
 const expectedWheels = (full.match(/\x1b\[<\d+;\d+;\d+[Mm]/g) ?? []).length
 
