@@ -1,6 +1,11 @@
 import { safe, shorten, truncateWidth } from '../renderer/ansi.js'
 import { ANSI as defaultAnsi } from '../renderer/themes.js'
 
+/** The target is part of Harness's canonical sandbox approval audit reason. */
+export function approvalSandboxMode(request) {
+  return /^escalate sandbox to (workspace-write|danger-full-access):/.exec(request?.reason?.trim() ?? '')?.[1]
+}
+
 export function renderInlineApproval(pendingApproval, approvalChoice = 0, approvalDiffLines, columns, ANSI = defaultAnsi) {
   if (!pendingApproval) return []
   const request = pendingApproval.request || {}
@@ -20,7 +25,8 @@ export function renderInlineApproval(pendingApproval, approvalChoice = 0, approv
 
   const toolName = request.toolName || 'action'
   const reason = (request.reason ?? '').trim()
-  const isEscalate = /escalat|permission|workspace-write|sandbox/i.test(toolName) || /escalat|workspace-write/i.test(reason)
+  const sandboxMode = approvalSandboxMode(request)
+  const isEscalate = sandboxMode !== undefined
   const file = args.file_path ?? args.path ?? ''
   const command = args.command ?? args.cmd ?? args.script ?? ''
   const isEdit = !isEscalate && (/edit|write|replace|file/i.test(toolName) || Boolean(file))
@@ -30,9 +36,12 @@ export function renderInlineApproval(pendingApproval, approvalChoice = 0, approv
 
   // 1. Header & Target Context
   if (isEscalate) {
-    lines.push(`  ${ANSI.bold}${ANSI.amber}Permission required: workspace-write${ANSI.reset}`)
+    lines.push(`  ${ANSI.bold}${ANSI.amber}Permission required: ${sandboxMode}${ANSI.reset}`)
     if (reason) {
       lines.push(`  ${ANSI.dim}${safe(reason)}${ANSI.reset}`)
+    }
+    if (sandboxMode === 'danger-full-access') {
+      lines.push(`  ${ANSI.coral}Session-wide danger-full-access disables the sandbox and approval prompts.${ANSI.reset}`)
     }
   } else if (isEdit) {
     lines.push(`  ${ANSI.bold}${ANSI.ink}Edit file${ANSI.reset}`)
@@ -62,7 +71,7 @@ export function renderInlineApproval(pendingApproval, approvalChoice = 0, approv
   // 3. Question prompt
   let promptText = ''
   if (isEscalate) {
-    promptText = 'Do you want to grant workspace-write permission?'
+    promptText = `Do you want to grant ${sandboxMode} permission?`
   } else if (isEdit && file) {
     promptText = `Do you want to make this edit to ${safe(file)}?`
   } else if (isCmd && command) {
@@ -73,11 +82,11 @@ export function renderInlineApproval(pendingApproval, approvalChoice = 0, approv
   lines.push(`  ${ANSI.ink}${ANSI.bold}${promptText}${ANSI.reset}`)
 
   // 4. 3 Clean Claude Code English options
-  let opt1Label = '1. Yes'
-  let opt2Label = '2. Yes, switch to workspace-write for this session (shift+tab)'
+  let opt1Label = '1. Yes, allow this operation once'
+  let opt2Label = '2. Yes, set workspace-write and allow once (shift+tab)'
   let opt3Label = '3. No'
 
-  if (isEscalate) opt2Label = '2. Yes, allow workspace-write during this session (shift+tab)'
+  if (isEscalate) opt2Label = `2. Yes, use ${sandboxMode} for this session (shift+tab)`
 
   const optionLabels = [opt1Label, opt2Label, opt3Label]
 

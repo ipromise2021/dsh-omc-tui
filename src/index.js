@@ -347,6 +347,7 @@ import {
 
 import {
   renderHelpPanel,
+  renderMessageQueue,
   renderMcpPanel,
   renderQuestionPanel,
   renderPresetConfirm,
@@ -366,6 +367,7 @@ import {
   renderSessionPicker,
   renderFilePicker,
   renderInlineApproval,
+  approvalSandboxMode,
   renderProviderList,
   renderAddPresetPicker,
   renderProviderForm,
@@ -404,6 +406,7 @@ export class TuiApp {
     this.shellHistory = []
     this.shellCompletion = undefined // { base, matches, selected }
     this.queuedSubmissions = [] // { draft, images, messageId?, cancelled }
+    this.messageQueuePanel = undefined // { selectedKey }
     this.skills = []
 
     this.help = false
@@ -1176,7 +1179,7 @@ export class TuiApp {
             const speed = (generatedTokens > 0 && durationMs > 500) ? (generatedTokens / (durationMs / 1000)) : (this.turnStats?.speed || 0)
             this.turnStats = { speed, durationMs, active: true }
           }
-          const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.providerPanel || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.exitConfirm || this.exportConfirm || this.skillsPanel
+          const hasOverlay = this.questionPanel || this.pendingApproval || this.help || this.menu || this.modelPicker || this.variantPicker || this.providerPanel || this.picker || this.historySearch || this.commandPalette || this.presetPicker || this.settingsPicker || this.mcpPanel || this.exitConfirm || this.exportConfirm || this.skillsPanel || this.messageQueuePanel
           if (hasOverlay) return
           this.scheduleRender()
         }, 100)
@@ -1204,8 +1207,11 @@ export class TuiApp {
     this.commitUnprintedEvents()
     this.streaming = { text: '', reasoning: '', tool: undefined }
     this.message = ''
-    this.lastQueuedText = undefined
-    this.queuedSubmissions = []
+    const pendingIds = new Set([
+      ...(this.agent?.inbox?.nextTurn ?? []), ...(this.agent?.inbox?.nextStep ?? [])
+    ].map((message) => message.id))
+    this.queuedSubmissions = (this.queuedSubmissions ?? []).filter((submission) =>
+      !submission.cancelled && (!submission.messageId || pendingIds.has(submission.messageId)))
     if (wasActive) {
       void this.sessionsService?.flush?.(this.agent.session)?.catch?.(() => {})
       void this.refreshGitStatus({ force: true })
@@ -1810,12 +1816,17 @@ export class TuiApp {
   onSessionEvent(session, event) {
     if (session !== this.agent?.session) return
     switch (event.type) {
+      case 'turn/start':
+        // Queued turns can begin without another agent/status transition.
+        this.onStatus('running')
+        break
       case 'assistant/chunk': {
         // Legacy v0/v1 logs embed the live stream as durable chunk events.
         this.handleAssistantChunk(event.data.chunk, event.seq)
         break
       }
       case 'user/message': {
+        this.queuedSubmissions = (this.queuedSubmissions ?? []).filter((submission) => submission.messageId !== event.data.id)
         this.rememberImageAttachments(event.data?.content)
         this.turnHeaderCommitted = false
         this.streamHeaderCommitted = false
@@ -2160,6 +2171,19 @@ export class TuiApp {
       if (item.request.signal?.aborted) {
         item.resolve('cancelled')
         continue
+      }
+      // Parallel calls may already be queued when the user changes the durable
+      // session mode. Recheck only canonical sandbox escalations against the
+      // official policy; independent tool/browser approval gates still ask.
+      const targetMode = approvalSandboxMode(item.request)
+      if (targetMode) {
+        const mode = this.ctx?.get?.('sandboxPolicy')?.resolve({
+          session: item.request.agent?.session ?? this.agent?.session
+        }).mode
+        if (mode === targetMode || mode === 'danger-full-access') {
+          item.resolve('allowed-once')
+          continue
+        }
       }
       this.pendingApproval = item
       this.approvalChoice = 'allow'
@@ -3159,15 +3183,75 @@ export class TuiApp {
     return submission
   }
 
-  withdrawQueuedSubmission() {
-    const submission = this.queuedSubmissions.at(-1)
+  queuedMessageEntries() {
+    const drafts = this.queuedSubmissions ?? []
+    const entries = []
+    for (const [target, messages] of [['next-step', this.agent?.inbox?.nextStep], ['next-turn', this.agent?.inbox?.nextTurn]]) {
+      for (const message of messages ?? []) {
+        if (message.source?.kind !== 'user') continue
+        const submission = drafts.find((draft) => draft.messageId === message.id && !draft.cancelled)
+        entries.push({ key: message.id, target, message, submission, text: compactExpandedFileReferences(textOf(message.content)) })
+      }
+    }
+    for (const submission of drafts) {
+      if (!submission.messageId && !submission.cancelled) {
+        entries.push({ key: submission, target: 'preparing', submission })
+      }
+    }
+    return entries
+  }
+
+  openMessageQueue() {
+    this.messageQueuePanel = { selectedKey: this.queuedMessageEntries()[0]?.key }
+    this.scheduleRender()
+  }
+
+  steerQueuedMessage(entry = this.queuedMessageEntries().filter((item) => item.target !== 'next-step').at(-1)) {
+    if (!entry || this.agent?.status !== 'running') {
+      this.log('error', 'no queued message available to insert into the running turn', '/queue')
+      return false
+    }
+    if (entry.target === 'next-step') return true
+    if (entry.target === 'preparing') {
+      entry.submission.target = 'next-step'
+      this.message = 'will insert after attachments are ready'
+      this.scheduleRender()
+      return true
+    }
+    // Match Harness's queue action: move the complete identified message,
+    // including attachments, rather than copying text into another delivery.
+    if (!this.agent.inbox.nextTurn.some((message) => message.id === entry.message.id)) return false
+    if (!this.agent.inbox.remove(entry.message.id)) return false
+    try {
+      this.agent.steer(entry.message)
+    } catch (error) {
+      this.agent.inbox.append('next-turn', entry.message)
+      this.log('error', error instanceof Error ? error.message : String(error), '/queue')
+      return false
+    }
+    this.message = 'message will be inserted at the next step'
+    this.scheduleRender()
+    return true
+  }
+
+  cancelQueuedMessage(entry) {
+    if (!entry) return false
+    if (entry.message && !this.agent?.inbox?.remove(entry.message.id)) return false
+    if (entry.submission) entry.submission.cancelled = true
+    this.queuedSubmissions = this.queuedSubmissions.filter((item) => item !== entry.submission)
+    this.message = 'queued message cancelled'
+    this.scheduleRender()
+    return true
+  }
+
+  withdrawQueuedSubmission(submission = this.queuedSubmissions.at(-1)) {
     if (!submission) return false
     if (submission.messageId && !this.agent?.inbox?.remove?.(submission.messageId)) {
-      this.queuedSubmissions.pop()
+      this.queuedSubmissions = this.queuedSubmissions.filter((item) => item !== submission)
       return false
     }
     submission.cancelled = true
-    this.queuedSubmissions.pop()
+    this.queuedSubmissions = this.queuedSubmissions.filter((item) => item !== submission)
     this.input = this.input ? `${submission.draft}\n${this.input}` : submission.draft
     this.cursor = this.input.length
     this.pendingImages = [...submission.images, ...(this.pendingImages ?? [])]
@@ -3175,7 +3259,6 @@ export class TuiApp {
     this.pasteFolded = undefined
     this.clearSelection()
     this.message = 'queued message returned to input'
-    this.lastQueuedText = undefined
     this.updateMenu()
     this.maybeOpenFilePicker()
     this.scheduleRender(true)
@@ -3191,6 +3274,7 @@ export class TuiApp {
       text = expanded.text
       missing = expanded.missing
     } catch (error) {
+      if (queuedSubmission?.cancelled) return
       this.queuedSubmissions = (this.queuedSubmissions ?? []).filter((submission) => submission !== queuedSubmission)
       this.pendingImages = [...images, ...(this.pendingImages ?? [])]
       if (prompt) {
@@ -3215,6 +3299,7 @@ export class TuiApp {
       try {
         persistedImages = await this.persistImageDrafts(images)
       } catch (error) {
+        if (queuedSubmission?.cancelled) return
         this.queuedSubmissions = (this.queuedSubmissions ?? []).filter((submission) => submission !== queuedSubmission)
         this.pendingImages = [...images, ...(this.pendingImages ?? [])]
         if (prompt) {
@@ -3283,7 +3368,6 @@ export class TuiApp {
       }
       this.cursor = this.input.length
       this.message = ''
-      this.lastQueuedText = undefined
       this.log('error', 'session changed while sending; message not delivered', 'submit')
       this.scheduleRender()
       return
@@ -3291,16 +3375,19 @@ export class TuiApp {
     if (fullText) content.push({ type: 'text', text: fullText })
     const message = userMessage(content)
     if (queuedSubmission) queuedSubmission.messageId = message.id
-    if (this.agent?.status === 'running' && fullText) {
-      this.lastQueuedText = fullText
+    if (this.agent?.status !== 'running') {
+      this.streamBuffer = ''
+      this.streamHeaderCommitted = false
+      this.turnHeaderCommitted = false
     }
-    this.streamBuffer = ''
-    this.streamHeaderCommitted = false
-    this.turnHeaderCommitted = false
     this.clearAutoRecapTimer?.()
     try {
       if (this.agent?.followup) {
-        await this.agent.followup(message)
+        if (queuedSubmission?.target === 'next-step' && this.agent.status === 'running') {
+          await this.agent.steer(message)
+        } else {
+          await this.agent.followup(message)
+        }
       }
     } catch (error) {
       this.queuedSubmissions = (this.queuedSubmissions ?? []).filter((submission) => submission !== queuedSubmission)
@@ -3311,7 +3398,6 @@ export class TuiApp {
       }
       this.cursor = this.input.length
       this.message = ''
-      this.lastQueuedText = undefined
       if (!this.active) this.scheduleAutoRecapTimer?.()
       this.log('error', error instanceof Error ? error.message : String(error), 'followup')
     } finally {
@@ -5003,8 +5089,8 @@ export class TuiApp {
     this.turnStartOutputTokens = 0
     this.turnHeaderCommitted = false
     this.streamHeaderCommitted = false
-    this.lastQueuedText = undefined
     this.queuedSubmissions = []
+    this.messageQueuePanel = undefined
     this.pendingImages = []
     this.localLog = []
     this.localEventCounter = 0
@@ -6967,7 +7053,7 @@ export class TuiApp {
 
   onMouseWheel(event) {
     if (!this.terminalOpen) return
-    if (this.questionPanel || this.commandPalette || this.modelPicker || this.variantPicker || this.providerPanel || this.presetPicker || this.settingsPicker || this.jobPanel || this.mcpPanel || this.skillsPanel) {
+    if (this.questionPanel || this.commandPalette || this.modelPicker || this.variantPicker || this.providerPanel || this.presetPicker || this.settingsPicker || this.jobPanel || this.mcpPanel || this.skillsPanel || this.messageQueuePanel) {
       return
     }
     if (event.deltaY < 0 && this.viewport.scrollTop <= 2) this.loadEarlierHistory()
@@ -7197,6 +7283,9 @@ export class TuiApp {
         return
       }
       if (chosenIndex === 1) {
+        const pending = this.pendingApproval
+        const preset = approvalSandboxMode(pending.request) ?? 'workspace-write'
+        const session = pending.request?.agent?.session ?? this.agent?.session
         if (!this.agent?.session || !this.ctx.permissionPresets || typeof this.ctx.permissionPresets.set !== 'function') {
           this.log('error', 'permission presets service unavailable', 'Shift+Tab')
           this.pendingApproval.settle('rejected')
@@ -7205,18 +7294,18 @@ export class TuiApp {
           return
         }
         try {
-          this.ctx.permissionPresets.set(this.agent.session, 'workspace-write')
+          this.ctx.permissionPresets.set(session, preset)
           const events = sessionEvents(this.agent.session)
           this.permissionName = permissionFromEvents(
             events,
-            currentPermissionPreset(this.ctx.permissionPresets, this.agent.session) ?? 'workspace-write'
+            currentPermissionPreset(this.ctx.permissionPresets, this.agent.session) ?? this.permissionName
           )
-          this.pendingApproval.settle('allowed-once')
+          pending.settle('allowed-once')
           this.approvalChoice = 0
-          this.log('ok', 'permission mode · workspace-write (session wide)', 'Shift+Tab')
+          this.log('ok', `permission mode · ${preset} (session wide)`, 'Shift+Tab')
         } catch (error) {
-          this.log('error', `failed to set workspace-write: ${error instanceof Error ? error.message : String(error)}`, 'Shift+Tab')
-          this.pendingApproval.settle('rejected')
+          this.log('error', `failed to set ${preset}: ${error instanceof Error ? error.message : String(error)}`, 'Shift+Tab')
+          pending.settle('rejected')
           this.approvalChoice = 0
         }
         this.scheduleRender()
@@ -7368,6 +7457,32 @@ export class TuiApp {
       const answer = value.trim().toLowerCase()
       if (answer === 'e' || answer === 'y' || answer === '1') { void this.applyExportConfirm(true); return }
       if (answer === 'c' || answer === 'n' || answer === '2') { void this.applyExportConfirm(false); return }
+      return
+    }
+
+    if (this.messageQueuePanel) {
+      const entries = this.queuedMessageEntries()
+      const index = entries.findIndex((entry) => entry.key === this.messageQueuePanel.selectedKey)
+      const entry = entries[index]
+      if (value === '\x1b' || value === '\x03' || value === 'w') {
+        this.messageQueuePanel = undefined
+      } else if (['\x1b[A', '\x1bOA', '\x1b[B', '\x1bOB', '\t'].includes(value)) {
+        const delta = value === '\x1b[A' || value === '\x1bOA' ? -1 : 1
+        this.messageQueuePanel.selectedKey = entries[Math.max(0, Math.min(entries.length - 1, index + delta))]?.key
+      } else if (value === '\r' || value === 'e' || value === 'x') {
+        if (!entry) {
+          this.message = 'message is no longer queued'
+          this.messageQueuePanel = undefined
+        } else if (value === '\r') {
+          if (this.steerQueuedMessage(entry)) this.messageQueuePanel = undefined
+        } else if (value === 'e' && entry.submission) {
+          if (this.withdrawQueuedSubmission(entry.submission)) this.messageQueuePanel = undefined
+        } else if (value === 'x') {
+          this.cancelQueuedMessage(entry)
+          this.messageQueuePanel.selectedKey = this.queuedMessageEntries()[Math.max(0, index - 1)]?.key
+        }
+      }
+      this.scheduleRender()
       return
     }
 
@@ -8416,7 +8531,7 @@ export class TuiApp {
 
     let cursorMove = ''
     const hasTypingOverlay = Boolean(this.commandPalette || this.filePicker)
-    const hasModalOverlay = (this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.exportConfirm || this.skillsPanel) && !hasTypingOverlay
+    const hasModalOverlay = (this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.exportConfirm || this.skillsPanel || this.messageQueuePanel) && !hasTypingOverlay
     const overlayCaret = this.overlayCaretRow !== undefined
     if (overlayCaret || (this.caretRow !== undefined && this.inputTopInFooter !== undefined && !hasModalOverlay)) {
       const rowInFooter = overlayCaret
@@ -8461,11 +8576,17 @@ export class TuiApp {
     const topRows = this.topPanelRows(columns, rows)
     const bottomRows = this.bottomPanelRows(columns, rows)
     const hasCompactProgress = Boolean(this.compactState)
-    const hasActiveProgress = this.active && !this.questionPanel && !this.pendingApproval && !this.streaming?.text
+    const hasActiveProgress = this.active && !this.questionPanel && !this.pendingApproval && !this.messageQueuePanel && !this.streaming?.text
     const progressRows = hasCompactProgress
       ? 2 + (this.compactState.phrase ? 1 : 0) + (this.compactState.tip ? 1 : 0)
       : hasActiveProgress ? 3 : 0
-    const statusBudget = Math.max(1, rows - 1 - 3 - progressRows)
+    const queueEntries = this.queuedMessageEntries()
+    const queueBudget = Math.max(1, rows - 1 - 3 - progressRows - 1)
+    const queueRows = bottomRows.length > 0 || queueEntries.length === 0 ? []
+      : queueBudget < 4
+        ? [truncateWidth(`  ${ANSI.muted}QUEUED · ${queueEntries.length} · /queue manage${ANSI.reset}`, columns)]
+        : renderMessageQueue(queueEntries, undefined, Math.min(rows >= 24 ? 2 : 1, queueBudget - 3), columns, ANSI)
+    const statusBudget = Math.max(1, rows - 1 - 3 - progressRows - queueRows.length)
     const preferredDensity = this.preferences?.statusline ?? 'detailed'
     const density = preferredDensity === 'detailed' && statusBudget < 4
       ? (statusBudget >= 2 ? 'compact' : 'minimal')
@@ -8495,7 +8616,7 @@ export class TuiApp {
       if (this.compactState.tip) {
         lines.push(`    ${ANSI.dim}└ ${this.compactState.tip}${ANSI.reset}`)
       }
-    } else if (this.active && !this.questionPanel && !this.pendingApproval && !this.streaming?.text) {
+    } else if (hasActiveProgress) {
       lines.push('')
       const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
       const frame = frames[Math.floor(Date.now() / 80) % frames.length]
@@ -8554,6 +8675,7 @@ export class TuiApp {
     }
 
     // 3. Input prompt
+    lines.push(...queueRows)
     lines.push(topRule)
     this.inputTopInFooter = lines.length
     const inputLines = this.inputFrame(columns)
@@ -8598,6 +8720,7 @@ export class TuiApp {
     if (this.exitConfirm) return renderExitConfirm(this.exitConfirm, columns, ANSI)
     if (this.exportConfirm) return renderExportConfirm(this.exportConfirm, columns, ANSI)
     if (this.skillsPanel) return renderSkillsPanel(this.skillsPanel, this.skills ?? [], capacity, columns, ANSI)
+    if (this.messageQueuePanel) return renderMessageQueue(this.queuedMessageEntries(), this.messageQueuePanel, capacity, columns, ANSI)
     if (this.presetPicker) return renderPresetPicker(this.presetPicker, this.presetName, capacity, columns, ANSI)
     if (this.jobPanel) {
       const jobsCapacity = Math.max(6, Math.min(16, rows - 7))
@@ -8670,7 +8793,7 @@ export class TuiApp {
     visibleRows = this.selectionController.applySelectionHighlight(visibleRows, this.viewport, ANSI)
 
     const hasTypingOverlay = Boolean(this.commandPalette || this.filePicker)
-    const hasModalOverlay = (this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.exportConfirm || this.skillsPanel) && !hasTypingOverlay
+    const hasModalOverlay = (this.pendingApproval || this.questionPanel || this.help || this.menu || this.effortPicker || this.picker || this.historySearch || this.modelPicker || this.variantPicker || this.providerPanel || this.presetPicker || this.jobPanel || this.settingsPicker || this.mcpPanel || this.presetConfirm || this.exitConfirm || this.exportConfirm || this.skillsPanel || this.messageQueuePanel) && !hasTypingOverlay
     const overlayCaret = this.overlayCaretRow !== undefined
     let cursorRow = 0
     let cursorCol = 0

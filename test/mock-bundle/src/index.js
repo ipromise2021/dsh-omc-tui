@@ -69,6 +69,19 @@ class MockAdapter {
   async *stream(options) {
     const { messages, signal } = options
     const wantsTools = (options.tools?.length ?? 0) > 0
+    const queuePrompt = messages.findLast((message) => message.role === 'user' && message.source?.kind === 'user')
+      ?.content.filter((block) => block.type === 'text').map((block) => block.text).join('\n') ?? ''
+    if (queuePrompt.startsWith('queue-test ')) {
+      const start = `Queue reply: ${queuePrompt}\n`
+      const done = `Queue done: ${queuePrompt}`
+      yield { type: 'text-delta', index: 0, text: start }
+      await pause(queuePrompt.includes('slow') ? 5000 : 80, signal)
+      yield { type: 'text-delta', index: 0, text: done }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: start + done } }
+      yield { type: 'usage', usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
     const imageBlocks = (messages.findLast((message) =>
       message.content?.some((block) => block.type === 'image')
     )?.content ?? []).filter((block) => block.type === 'image')

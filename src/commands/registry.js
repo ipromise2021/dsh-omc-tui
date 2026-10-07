@@ -29,6 +29,7 @@ export const LOCAL_COMMANDS = [
   { name: 'paste', description: 'paste image from system clipboard' },
   { name: 'export', description: 'export the transcript as markdown' },
   { name: 'steer', description: 'redirect the running turn without interrupting' },
+  { name: 'queue', description: 'manage queued messages: insert, edit draft or cancel' },
   { name: 'mcp', description: 'list MCP servers configured in this profile' },
   { name: 'hooks', description: 'list hook bridges configured in this profile' },
   { name: 'recap', description: 'show a local summary of this session' },
@@ -141,13 +142,9 @@ export function handleLocalCommand(app, commandName, line = '') {
       })()
       break
     case 'steer': {
-      let message = line.replace(/^\s*\/steer\s*/, '').trim()
-      if (!message && app.lastQueuedText) {
-        message = app.lastQueuedText
-        app.lastQueuedText = undefined
-      }
+      const message = line.replace(/^\s*\/steer\s*/, '').trim()
       if (!message) {
-        app.log('error', 'usage: /steer <message> (or /steer alone to promote queued message)', '/steer')
+        app.steerQueuedMessage()
         break
       }
       if (app.agent?.status !== 'running') {
@@ -158,6 +155,9 @@ export function handleLocalCommand(app, commandName, line = '') {
       app.log('ok', `steered with: "${shorten(message, 48)}"`, '/steer')
       break
     }
+    case 'queue':
+      app.openMessageQueue()
+      break
     case 'mcp':
       void app.showMcpServers()
       break

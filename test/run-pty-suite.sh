@@ -35,4 +35,5 @@ python3 test/pty-features.py
 python3 test/pty-file.py
 python3 test/pty-image.py
 python3 test/pty-interaction.py
+python3 test/pty-queue.py
 python3 test/pty-resume.py

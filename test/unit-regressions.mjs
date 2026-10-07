@@ -4130,7 +4130,6 @@ sessionIsolationApp.streamBuffer = 'half-baked buffer'
 sessionIsolationApp.currentTurnReasoning = { text: 'stale reasoning', time: 1000 }
 sessionIsolationApp.turnHeaderCommitted = true
 sessionIsolationApp.streamHeaderCommitted = true
-sessionIsolationApp.lastQueuedText = 'stale prompt'
 sessionIsolationApp.queuedSubmissions = [{ draft: 'stale queued text' }]
 sessionIsolationApp.pendingImages = [{ name: 'stale.png' }]
 sessionIsolationApp.focusedBlockKey = 'reason-1'
@@ -4168,7 +4167,6 @@ assert.equal(sessionIsolationApp.streamBuffer, '', 'streamBuffer must be empty a
 assert.equal(sessionIsolationApp.currentTurnReasoning, null, 'currentTurnReasoning must be null after session commit')
 assert.equal(sessionIsolationApp.turnHeaderCommitted, false, 'turnHeaderCommitted must be reset')
 assert.equal(sessionIsolationApp.streamHeaderCommitted, false, 'streamHeaderCommitted must be reset')
-assert.equal(sessionIsolationApp.lastQueuedText, undefined, 'lastQueuedText must be reset')
 assert.equal(sessionIsolationApp.queuedSubmissions.length, 0, 'queuedSubmissions must be empty')
 assert.equal(sessionIsolationApp.pendingImages.length, 0, 'pendingImages must be empty')
 assert.equal(sessionIsolationApp.focusedBlockKey, null, 'focusedBlockKey must be reset')

@@ -1,4 +1,5 @@
 export * from './help.js'
+export * from './message-queue.js'
 export * from './mcp-panel.js'
 export * from './question-panel.js'
 export * from './preset-picker.js'
