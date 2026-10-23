@@ -290,6 +290,8 @@ export function apply(ctx) {
       }
     }
   })
+  // PTY drivers wait for registration, independent of bundled/user skill counts.
+  process.stderr.write('dsh-tui-mock-ready\n')
   return () => {
     removeReadTool()
     removeTool()

@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "verify": "node -e \"Promise.all([import('./src/index.js'), import('./src/renderer/themes.js'), import('./src/commands/registry.js')]).then(() => console.log('✓ All modules verified OK!'))\"",
-    "test": "node test/transcript-projection.test.mjs && node test/screen-viewport.test.mjs && node test/input-router.test.mjs && node test/mouse-selection.test.mjs && node test/wheel-burst.test.mjs && node test/approval-permissions.test.mjs && node test/message-queue.test.mjs && node test/unit-regressions.mjs",
+    "test": "node test/transcript-projection.test.mjs && node test/screen-viewport.test.mjs && node test/input-router.test.mjs && node test/mouse-selection.test.mjs && node test/wheel-burst.test.mjs && node test/approval-permissions.test.mjs && node test/message-queue.test.mjs && node test/unit-regressions.mjs && node test/harness-compatibility.test.mjs",
     "test:pty": "sh test/run-pty-suite.sh",
     "benchmark:transcript": "node scripts/benchmark-transcript.mjs",
-    "render-assets": "node scripts/render-tui-scenes.mjs"
+    "render-assets": "node scripts/render-tui-scenes.mjs",
+    "test:harness": "node test/harness-runtime.test.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24.2.0"
@@ -67,29 +68,30 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "~3.18.4"
+    "@deepseek-ai/schemastery": "~3.18.5",
+    "chrome-devtools-mcp": "1.7.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh": "^0.2.0-rc.2",
-    "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-agent": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-agent-default-model": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-agent-loop": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-agent-preset": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-agent-preset-registry": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-attachment": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-jobs": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-mcp-client": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-commands": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-permission-presets": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-plan-mode": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-session": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-session-persistence-jsonl": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-session-query": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-skill": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-user-approval": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-user-questions": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-tool-subagent": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-tool-ask-user": "^0.2.0-rc.2"
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/dsh": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-agent": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-agent-default-model": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-agent-loop": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-agent-preset": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-agent-preset-registry": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-attachment": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-commands": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-jobs": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-mcp-client": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-permission-presets": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-plan-mode": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-session": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-session-query": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-skill": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-tool-ask-user": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-tool-subagent": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-user-approval": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-user-questions": "^0.2.1-rc.2"
   }
 }

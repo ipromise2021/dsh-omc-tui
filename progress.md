@@ -491,3 +491,28 @@
 - 先用 48 小时模拟状态复现残缺括号粘贴吞键，再修复空闲过期与总时长上限；用 6 分钟模拟持续活动验证鼠标点击可恢复。
 - 先复现未完成图片传输超时吞掉首键，再修复当前输入重新路由；raw mode 丢失时改用容错恢复入口。
 - 修复后 `npm test`、`npm run verify`、`git diff --check` 全部通过。PTY fixture 缺失，真实终端跨数小时睡眠/唤醒验证仍未完成；正式发布建议保持“暂缓”。
+
+## 会话：2026-10-17（Chrome DevTools MCP 启动超时记录）
+
+- 按用户截图登记 CR-107：终端反复出现 `chrome-devtools-mcp startup timed out after 10s`，浏览器 MCP 启动未在 10 秒内完成。
+- 根因与具体启动阶段尚未定位；保留为 open，待后续复现并收集启动日志后修复。本次仅更新问题记录，没有修改插件行为。
+
+## 会话：2026-10-23（DSH 最新版本适配）
+
+- **状态：** complete。已完成官方 `@deepseek-ai/dsh@0.2.1-rc.2` 的源码适配。
+- 保留 CR-107 文档修改与用户未跟踪文件；后续从官方发布源码核对接口，再通过临时隔离 Profile 验证。
+- 已对齐 20 个 DSH peer、Cordis 与 Schemastery；补齐 Minimal 图片/压缩与其他 Preset 的时间上下文，清除废弃配置。
+- 使用官方 current working-directory 服务同步文件、Shell/历史、技能、旁路 Agent 与目录显示；凭据状态改读官方服务，保存/删除不修改继承环境变量。旧目录的技能与历史异步查询均有过期保护。
+- 独立审查发现并修复无 Preset 的 sidecar 继承 `{{cwd}}` 造成提示词组装失败；真实官方 SystemPrompt 回归先失败后通过，二次审查无阻断项。
+- `npm run verify`、`npm test`、`DSH_RUNTIME_DIR=... npm run test:harness` 通过。七项 PTY 分项均已通过；增强的恢复用例另已逐一挂载四种 Preset，再恢复历史会话。
+- 最终 npm 包包含 70 文件，安装到另一隔离 Profile 后 `--dump-config` 无警告，对话/审批/中断/退出 PTY 通过。pnpm 单独提示 peer 缺失，但 CLI 从其官方安装提供核心依赖，实际配置与启动验证已通过。
+- 最终完整 `npm run test:pty` 七项全部成功，包含四种 Preset 挂载；`git diff --check` 通过。真实 Provider、Chrome MCP 联合场景及 Windows 未实测，CR-107 仍待后续修复。本轮未提交、推送或发布，源码包版本保持 `0.2.17`，README 已区分当前源码与已发布 npm 版本。
+
+## 会话：2026-10-23（浏览器 MCP 加载与输入区域干扰修复）
+
+- **状态：** complete，CR-107 已关闭；保留前一阶段全部未提交改动与用户未跟踪文件。
+- 复现确认：npx 即使已有缓存程序，仍解析 npm 镜像元数据并超过 10 秒期限；相同版本直接启动约 1.1 秒完成握手和 29 项工具发现。继承 stderr 绕过渲染器，且错误包含字面量反斜杠 n，导致每次重试继续污染输入区域。
+- 用户已确认项目级安装，将 `chrome-devtools-mcp@1.7.0` 固定为项目依赖并直接启动。保留 10 秒初始化上限与原有审批/浏览器生命周期；失败通过 JSON-RPC 和官方日志投影为一次 TUI 提示，恢复后允许报告下一次断连。
+- 独立审查发现输出管道提前断开会触发 EPIPE；补充回归先复现失败，再修复 stdout 错误处理与子进程清理。二次复核无新增阻断项。
+- `npm run verify`、完整 `npm test`、`DSH_RUNTIME_DIR=... npm run test:harness` 均通过。启用真实 MCP 的正常加载 PTY，以及故意超时并重试的 PTY，均保持中文草稿和最终提交完整；实际 npm tarball 安装到另一隔离 Profile 后，正常加载 PTY 同样通过。
+- 未覆盖真实 Provider 与浏览器工具联合调用、Windows 或长期断连。源码版本仍为 `0.2.17`，未提交、推送或发布，未修改日常 Profile。

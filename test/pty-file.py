@@ -96,9 +96,7 @@ try:
         f.write("// fixture for the @-reference PTY test\nconsole.log('fixture')\n")
 
     boot = wait_for("type a message", 40)
-    # The isolated mock fixture registers 12 skills after rc.1's first composer
-    # frame; don't submit until Agent-facing registrations have settled.
-    assert wait_for("12 skills", 20), "mock fixture skills did not finish loading"
+    assert wait_for("dsh-tui-mock-ready", 20), "mock fixture did not finish registering"
     log.append(f"\n===== BOOT (ready={boot}) =====\n{buf.decode('utf-8', 'replace')}")
 
     # 1. bare "@" opens the default listing of the cwd first level
@@ -111,7 +109,7 @@ try:
     drain(0.8)
     send("\r")
     assert wait_for("@test/", 10), "directory entry did not become the @ prefix"
-    assert wait_for("input-router.test.mjs", 10), "directory contents not listed after entering"
+    assert wait_for("mock-bundle/", 10), "directory contents not listed after entering"
     snapshot("inside-test-dir")
 
     # 3. Esc goes back up to the root, another Esc closes the picker

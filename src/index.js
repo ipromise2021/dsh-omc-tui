@@ -11,7 +11,7 @@ import { ImageParser, formatImageBytes, pngDimensions, jpegDimensions, imageDime
 import { registerVisionRouter } from './vision-router.js'
 import { registerBrowserLease } from './browser-lease.js'
 import { createDangerGuard } from './core/danger-guard.js'
-import { currentAgentPreset, currentPermissionPreset, sessionEvents, toolResultError, toolResultFailure } from './core/session-events.js'
+import { currentAgentPreset, currentPermissionPreset, currentWorkingDirectory, sessionEvents, toolResultError, toolResultFailure } from './core/session-events.js'
 import {
   THEMES,
   defaultTheme,
@@ -812,6 +812,7 @@ export class TuiApp {
   }
 
   startBackgroundInitialization() {
+    if (this.agent) this.installBrowserMcpDiagnostics?.()
     clearTimeout(this.backgroundInitTimer)
     this.backgroundInitTimer = setTimeout(() => {
       this.backgroundInitTimer = undefined
@@ -915,10 +916,14 @@ export class TuiApp {
       .catch(() => {})
   }
 
-  async loadShellHistory(cwd = process.cwd()) {
-    this.shellHistory = await loadShellHistoryFile(this.stateDir(), cwd, this.preferences.persistHistory, 200, {
+  async loadShellHistory(cwd = currentWorkingDirectory(this.agent)) {
+    const agent = this.agent
+    const history = await loadShellHistoryFile(this.stateDir(), cwd, this.preferences.persistHistory, 200, {
       importSystemHistory: this.preferences.importSystemShellHistory
     })
+    if (this.agent !== agent || currentWorkingDirectory(agent) !== cwd) return
+    this.shellHistory = history
+    this.scheduleRender?.()
   }
 
   appendHistory(entry) {
@@ -927,7 +932,7 @@ export class TuiApp {
 
   appendShellHistory(command) {
     this.shellHistory = [...(this.shellHistory ?? []), command].slice(-200)
-    appendShellHistoryFile(this.stateDir(), process.cwd(), command, this.preferences.persistHistory)
+    appendShellHistoryFile(this.stateDir(), currentWorkingDirectory(this.agent), command, this.preferences.persistHistory)
     this.clearShellCompletion()
   }
 
@@ -952,8 +957,8 @@ export class TuiApp {
     if (!next.persistHistory) {
       this.history = []
       this.shellHistory = []
-    } else if (reloadShellHistory && this.agent?.session?.header?.cwd) {
-      void this.loadShellHistory(this.agent.session.header.cwd)
+    } else if (reloadShellHistory && this.agent) {
+      void this.loadShellHistory()
     }
     if (next.promptSuggestions === false) this.clearPromptSuggestion()
     if (next.autoRecap === false) {
@@ -1492,7 +1497,7 @@ export class TuiApp {
     const combined = [...visibleEvents, ...logEvents].sort((a, b) => (a.time || 0) - (b.time || 0))
 
     const contentWidth = Math.max(20, columns - 2)
-    const cwd = this.agent?.session?.header?.cwd ?? process.cwd()
+    const cwd = currentWorkingDirectory(this.agent)
     const workspace = truncateWidth(safe(cwd), Math.max(24, contentWidth - 24))
     const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? { provider: 'deepseek-official', model: 'deepseek-flash' }
     const model = truncateWidth(`${selection.provider}/${selection.model}`, Math.max(20, contentWidth - 28))
@@ -1886,6 +1891,15 @@ export class TuiApp {
       case 'agent-preset/selected':
         this.presetName = event.data.agentPreset
         break
+      case 'working-directory/change':
+        this.filePicker = undefined
+        this.currentFileQuery = undefined
+        void this.refreshSkills?.()
+        void this.refreshGitStatus?.({ force: true })
+        this.shellHistory = []
+        this.clearShellCompletion?.()
+        void this.loadShellHistory?.()
+        break
       case 'compaction/start':
         this.beginHarnessCompaction(event)
         break
@@ -2062,7 +2076,7 @@ export class TuiApp {
     try {
       const created = await this.ctx.agents.create({
         sessionId,
-        meta: { cwd: process.cwd(), ephemeral: true, origin: 'subagent', parentSession: this.agent.session.id },
+        meta: { cwd: currentWorkingDirectory(this.agent), ephemeral: true, origin: 'subagent', parentSession: this.agent.session.id },
         agentOptions: { provider: selection.provider, model: selection.model },
         setup(agentCtx) {
           agentCtx.tools?.restrict?.({ allow: [] })
@@ -2233,7 +2247,7 @@ export class TuiApp {
   }
 
   async refreshFilePicker(baseDir, query) {
-    const cwd = this.agent?.session.header.cwd ?? process.cwd()
+    const cwd = currentWorkingDirectory(this.agent)
     const { dirs, files } = await listDir(cwd, baseDir)
     const prefix = baseDir ? `${baseDir}/` : ''
     const candidates = [
@@ -2241,7 +2255,7 @@ export class TuiApp {
       ...files.map((rel) => ({ rel, name: rel.slice(rel.lastIndexOf('/') + 1), isDir: false }))
     ]
     const entries = query ? candidates.filter((entry) => matchName(entry.name, query)) : candidates
-    if (this.currentFileQuery !== prefix + query) return
+    if (this.currentFileQuery !== prefix + query || currentWorkingDirectory(this.agent) !== cwd) return
     if (entries.length === 0) {
       this.filePicker = undefined
       this.scheduleRender()
@@ -2301,7 +2315,7 @@ export class TuiApp {
       refs.push({ path: match[1], start: match.index, end: match.index + match[0].length })
     }
     if (refs.length === 0) return { text, missing: [] }
-    const cwd = this.agent?.session.header.cwd ?? process.cwd()
+    const cwd = currentWorkingDirectory(this.agent)
     const workspaceRoot = await realpath(cwd).catch(() => resolve(cwd))
     const missing = []
     const parts = []
@@ -2546,6 +2560,31 @@ export class TuiApp {
     const entry = this.appendLocalLogEntry({ kind, level, text, command, ...options, seq: this.agent?.session?.seq ?? 0, time: Date.now() })
     const lines = this.formatLogEntry(entry)
     this.commitToScrollback(lines)
+  }
+
+  installBrowserMcpDiagnostics() {
+    const logger = this.ctx.logger
+    if (this.browserMcpDiagnosticsInstalled || typeof logger?.exporter !== 'function') return
+    this.browserMcpDiagnosticsInstalled = true
+    let unavailable = false
+    const exporter = {
+      levels: { default: 2 },
+      export: (record) => {
+        const text = (record.args ?? []).filter((arg) => typeof arg === 'string').join(' ')
+        if (!text.startsWith('mcp-client(chrome_devtools):')) return
+        if (record.type === 'info' && text.includes('reconnected and re-synced tools')) {
+          if (unavailable) this.log('ok', '浏览器 MCP 已重新连接', '/mcp')
+          unavailable = false
+        } else if ((record.type === 'warn' || record.type === 'error') && !unavailable) {
+          unavailable = true
+          const detail = text.slice('mcp-client(chrome_devtools):'.length).trim()
+          this.log('error', `浏览器 MCP 暂不可用：${truncateWidth(safe(detail), 240)}`, '/mcp')
+        }
+      }
+    }
+    const buffered = [...(logger.buffer ?? [])]
+    this.disposers.push(logger.exporter(exporter))
+    for (const record of buffered) exporter.export(record)
   }
 
   isExternalMcpOutput(text) {
@@ -3702,10 +3741,10 @@ export class TuiApp {
 
   async refreshGitStatus({ force = false } = {}) {
     try {
-      const cwd = this.agent?.session?.header?.cwd ?? process.cwd()
+      const cwd = currentWorkingDirectory(this.agent)
       if (force) invalidateGitCache(cwd)
       const next = await getGitStatus(cwd, { force })
-      const currentCwd = this.agent?.session?.header?.cwd ?? process.cwd()
+      const currentCwd = currentWorkingDirectory(this.agent)
       if (currentCwd !== cwd) return
       this.gitStatus = next
       this.scheduleRender()
@@ -3845,7 +3884,7 @@ export class TuiApp {
   }
 
   exportDirectory(destination = '') {
-    const workspace = this.agent?.session?.header?.cwd ?? process.cwd()
+    const workspace = currentWorkingDirectory(this.agent)
     if (destination) return resolve(workspace, destination)
     const projectName = basename(resolve(workspace)).replace(/[^a-zA-Z0-9._-]+/g, '-') || 'workspace'
     const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
@@ -3855,7 +3894,7 @@ export class TuiApp {
   resolveExportDirectoryInput(input) {
     const directory = String(input ?? '').trim()
     if (!directory) throw new Error('export directory is required')
-    const workspace = this.agent?.session?.header?.cwd ?? process.cwd()
+    const workspace = currentWorkingDirectory(this.agent)
     return resolve(workspace, directory)
   }
 
@@ -4291,6 +4330,10 @@ export class TuiApp {
       const llm = this.llmService
       const providersList = llm?.listProviders?.() ?? []
       const resultProviders = []
+      const credentials = this.ctx.get?.('credentials')
+      const hasCredential = async (ref) => credentials?.describe
+        ? (await credentials.describe(ref)).configured
+        : Boolean(process.env[ref])
 
       let customProvidersMap = {}
       try {
@@ -4312,7 +4355,7 @@ export class TuiApp {
         const customEntry = customProvidersMap[p.id]
         const hasKey = Boolean(
           customEntry?.apiKeyEnv
-            ? process.env[customEntry.apiKeyEnv] !== undefined
+            ? await hasCredential(customEntry.apiKeyEnv)
             : (p.configured !== false && (p.id.includes('deepseek') || !!p.hasKey))
         )
         resultProviders.push({
@@ -4338,7 +4381,7 @@ export class TuiApp {
             name: prof.displayName || routeId,
             custom: true,
             configured: true,
-            hasKey: Boolean(prof.apiKeyEnv),
+            hasKey: prof.apiKeyEnv ? await hasCredential(prof.apiKeyEnv) : false,
             apiKeyEnv: prof.apiKeyEnv,
             api: prof.api || 'openai',
             baseURL: prof.baseURL || '',
@@ -4545,7 +4588,6 @@ export class TuiApp {
         const credService = this.ctx.get('credentials')
         try {
           await credService.set(finalKeyRef, newKeyVal)
-          process.env[finalKeyRef] = newKeyVal
         } catch (credErr) {
           if (this.ctx.settings?.mutate) {
             const rollbackOp = previousProfile
@@ -4580,7 +4622,6 @@ export class TuiApp {
       if (this.ctx.get('credentials')?.unset) {
         await this.ctx.get('credentials').unset(keyRef)
       }
-      delete process.env[keyRef]
       this.log('ok', `provider "${id}" removed`, '/provider')
       await this.openProviderPanel()
     } catch (error) {
@@ -6094,7 +6135,7 @@ export class TuiApp {
       const records = await TuiApp.prototype.listSessionRecords.call(this)
       this.resumePhase?.('list-sessions', listAt)
       const filterAt = performance.now()
-      const cwd = this.agent?.session.header.cwd ?? process.cwd()
+      const cwd = this.agent?.session?.header?.cwd ?? process.cwd()
       const sessions = records
         .filter((record) => {
           if (!record.persisted || record.live || isSubagentSession(record)) return false
@@ -6360,13 +6401,14 @@ export class TuiApp {
   async refreshSkills() {
     const agent = this.agent
     if (!agent) return
+    const cwd = currentWorkingDirectory(agent)
     try {
       const skills = await (this.skillsService?.list?.({
-        cwd: agent.session.header.cwd ?? process.cwd(),
+        cwd,
         scope: agent
       }) ?? [])
-      // A switch during the await makes this result belong to a dead scope.
-      if (this.agent !== agent) return
+      // A session or directory switch makes this result belong to an old scope.
+      if (this.agent !== agent || currentWorkingDirectory(agent) !== cwd) return
       const disabled = new Set(this.preferences.disabledSkills ?? [])
       this.skills = skills
         .filter((skill) => skill.invocation?.userInvocable !== false || disabled.has(skill.name))
@@ -6377,9 +6419,9 @@ export class TuiApp {
           enabled: !disabled.has(skill.name)
         }))
     } catch {
-      if (this.agent === agent) this.skills = []
+      if (this.agent === agent && currentWorkingDirectory(agent) === cwd) this.skills = []
     }
-    if (this.agent !== agent) return
+    if (this.agent !== agent || currentWorkingDirectory(agent) !== cwd) return
     if (this.menu) this.updateMenu()
     this.scheduleRender()
   }
@@ -6905,7 +6947,7 @@ export class TuiApp {
   }
 
   runBash(command) {
-    const cwd = this.agent?.session.header.cwd ?? process.cwd()
+    const cwd = currentWorkingDirectory(this.agent)
     if (!command) {
       this.log('error', 'usage: ! <shell command>', '!')
       this.scheduleRender()
@@ -8234,7 +8276,7 @@ export class TuiApp {
     if (!this.agent) {
       const selection = this.ctx.agentDefaultModel?.currentSelection?.() ?? {}
       const liveModel = selection.model ?? 'deepseek-flash'
-      const cwdName = process.cwd().split('/').filter(Boolean).pop() || process.cwd()
+      const cwdName = basename(currentWorkingDirectory(this.agent)) || currentWorkingDirectory(this.agent)
       return [
         `  ${ANSI.blueSoft}BUILD${ANSI.reset} | ${ANSI.dim}[${liveModel}]${ANSI.reset} | ${ANSI.dim}${cwdName}${ANSI.reset} | ${ANSI.dim}initializing session…${ANSI.reset}`
       ]
@@ -8242,7 +8284,7 @@ export class TuiApp {
     const density = options.density ?? this.preferences?.statusline ?? 'detailed'
     const selection = this.agent?.options
     const liveModel = this.activeModel?.model ?? selection?.model ?? 'deepseek'
-    const cwdName = process.cwd().split('/').filter(Boolean).pop() || process.cwd()
+    const cwdName = basename(currentWorkingDirectory(this.agent)) || currentWorkingDirectory(this.agent)
     const planState = this.planModeService()?.get?.(this.agent) ?? { active: false, pending: undefined }
     const planActive = planState.pending ?? planState.active
     const planPending = planState.pending !== undefined

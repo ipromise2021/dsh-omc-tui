@@ -4,12 +4,12 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-ipromise2021%2Fdsh--omc--tui-181717?style=flat-square&logo=github)](https://github.com/ipromise2021/dsh-omc-tui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![DeepSeek Harness](https://img.shields.io/badge/Harness-0.2.0--rc.2-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/Harness-0.2.1--rc.2-00bcd4?style=flat-square)](https://github.com/deepseek-ai/deepseek-harness)
 [![Node.js](https://img.shields.io/badge/Node.js-22.19%2B%20%7C%2024.2%2B-green?style=flat-square)](package.json)
 
 **DeepSeek Harness 的终端原生 TUI**
 
-> **当前版本：`v0.2.17`，适配 DeepSeek Harness `v0.2.0-rc.2`。**
+> **当前源码适配 DeepSeek Harness `v0.2.1-rc.2`，尚未发布；npm `v0.2.17` 仍适配 `v0.2.0-rc.2`。**
 > **上一版本 `v0.2.16` 面向 DSH `v0.1.7-rc.2`，请勿混用。**
 
 独立视口差分渲染，提供图片输入、划选回看、任务与 Plan 面板、行内审批和 Danger Guard 看门狗。
@@ -26,7 +26,7 @@ Agent 运行时、模型选择、会话、权限、Jobs 服务与持久化由 Ha
 
 项目参考了 Claude Code 的交互习惯与终端美学，采用备用屏幕与视口差分渲染，支持滚轮回看、鼠标划选和复制。退出备用屏幕后，会把当前已载入的会话内容写回终端历史，方便继续查看。
 
-> 📌 **版本说明**：本版本面向 DSH `v0.2.0-rc.2`，请使用同一版本线的 DSH 启动。跨数小时待机后，已有一次实际使用验证未出现键盘或鼠标乱码；其他终端环境仍欢迎反馈。
+> 📌 **版本说明**：试用新版适配请按[本地开发安装](#本地开发安装)安装当前源码，并使用 DSH `v0.2.1-rc.2` 启动。下方 npm 安装命令保留已发布版本的配套组合。
 
 ## 快速开始
 
@@ -50,20 +50,23 @@ npx --yes @deepseek-ai/dsh@0.2.0-rc.2 --profile tui
 
 插件通过 Harness API 创建和恢复 Agent、提交业务操作；会话与权限不在插件内另建真相源。`!` Shell 进程属于当前 TUI，若 Jobs 服务无法注册，后台任务会暂存在当前进程内，退出后不能从该本地列表恢复。`standard`、`ptc`、`minimal`、`cordis` 四种 Agent preset 由 DSH preset registry 组合；`/preset` 可查看和切换，已有对话时会先确认新建会话。
 
-## 当前适配：DSH `v0.2.0-rc.2`
+## 当前适配：DSH `v0.2.1-rc.2`
 
-本次从 `v0.1.7-rc.2` 累计检查至 `v0.2.0-rc.2`：前者引入动态工具与审批接续等行为；`v0.2.0-rc.1` 改进图片重传和工具调度异常恢复；`v0.2.0-rc.2` 调整模型目录，并提供可选的限时提问。preset registry、PTC runtime 和 Session V4 事件契约仍可沿用。TUI 继续通过 `ctx.agents.create/resume`、`dispose()`、`snapshotEvents()` 与 `sessionQuery` 使用官方生命周期；限时提问当前未启用，仍使用默认的 legacy 模式。
+本次对照官方 `v0.2.0-rc.2` 与 `v0.2.1-rc.2` 发布源码，适配会话工作目录、托管子 Agent、Preset 与凭据服务变化。TUI 继续通过 `ctx.agents.create/resume`、`dispose()`、`snapshotEvents()` 与 `sessionQuery` 使用官方生命周期；限时提问当前未启用，仍使用默认的 legacy 模式。
 
 DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支持文本、图片以及会话内系统提示词更新。TUI 的初始化兜底模型和 `/vision` 常用模型候选均已纳入该模型。
 
-| 范围 | 结果 | 验收 |
-| :--- | :--- | :--- |
-| Session 与权限 | 工具失败读取兼容 V3/V4 event payload，权限继续走官方 Session API | 单元回归与真实 profile 启动通过 |
-| Profile 与 preset | 沿用 preset registry，支持 standard、ptc、minimal、cordis 四种 scoped preset | `0.2.0-rc.2 --dump-config`、四种 preset 注册与切换通过 |
-| 依赖 | DSH peer dependency 对齐 `^0.2.0-rc.2` | 隔离 Profile 安装与启动通过 |
-| 既有能力 | Agent、Jobs、附件、命令与模型能力调用签名保持兼容；`/model` 并行刷新 Provider 目录 | 隔离 mock 的完整 PTY 套件通过，包含模型变体选择；用户已实测真实 Provider 与 Chrome MCP 同时启用时，模型切换可以保存 |
+| 范围 | 适配 |
+| :--- | :--- |
+| 当前目录 | 文件引用、目录补全、本地 Shell、技能、旁路 Agent 与状态显示通过 `workingDirectory.get(session)` 读取当前目录；历史会话仍按原始项目归组 |
+| Profile 与 preset | 清除废弃 `backgroundMode` 和 `tool-ralph` patch；Standard/PTC/Cordis 使用官方时间上下文，Minimal 增加图片读取和自动压缩 |
+| 凭据 | `/provider` 通过官方凭据服务判断已配置状态；保存和删除 Key 仅调用官方服务，保留继承的环境变量作为回退 |
+| 依赖 | DSH peer dependency 对齐 `^0.2.1-rc.2`，Cordis 对齐 `^4.0.5`，Schemastery 对齐 `~3.18.5` |
+| 既有能力 | Agent、附件、命令、权限和问答调用签名保持兼容；Jobs 的 UUID ID 与新增生命周期事件由官方服务管理 |
 
 适配期间不会为了同步上游而复制其 UI 功能，也不会提前移除本地安全保护；只处理 Harness API 与 durable event 契约产生的实际兼容问题。
+
+本轮通过模块检查、单元回归、官方运行时提示词回归、隔离 mock Profile 的完整 7 项 PTY（含四种 Preset 挂载），以及实际 npm 包安装与启动验证。Chrome MCP 已改为固定项目依赖，启动不再经过 npx；已验证真实握手、工具发现，以及正常加载和失败重试期间输入框与中文草稿保持完整。连接失败由 TUI 显示一次提示。真实 Provider 联合场景和 Windows 未实测。
 
 ## 插件功能
 
@@ -115,7 +118,7 @@ DeepSeek-V41-Flash（模型 ID `deepseek-flash`）现为上游默认模型，支
 ## 环境要求
 
 - Node.js `22.19+`（22.x）或 `24.2+`
-- DeepSeek Harness：[`@deepseek-ai/dsh@0.2.0-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)（预发布版本，需显式指定）
+- 当前源码：[`@deepseek-ai/dsh@0.2.1-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)（预发布版本，需显式指定）；已发布 TUI `0.2.17` 使用 DSH `0.2.0-rc.2`
 - 支持 ANSI 256 色的终端
 - 图片显示建议使用 iTerm2 或支持 Kitty Graphics 的终端
 
@@ -162,8 +165,8 @@ omc
 
 ```sh
 export DSH_HOME=/private/tmp/dsh-tui-dev
-npx --yes @deepseek-ai/dsh@0.2.0-rc.2 plugin --profile tui add /absolute/path/to/dsh-omc-tui
-npx --yes @deepseek-ai/dsh@0.2.0-rc.2 --profile tui
+npx --yes @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile tui add /absolute/path/to/dsh-omc-tui
+npx --yes @deepseek-ai/dsh@0.2.1-rc.2 --profile tui
 ```
 
 ## 常用快捷键

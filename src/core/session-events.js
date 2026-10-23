@@ -17,6 +17,13 @@ export function currentAgentPreset(session, fallback) {
   return selected?.data?.agentPreset ?? session?.header?.agentPreset ?? fallback
 }
 
+/** Read the official effective directory; the session header is creation metadata. */
+export function currentWorkingDirectory(agent) {
+  const session = agent?.session
+  const service = agent?.ctx?.get?.('workingDirectory')
+  return (session && service?.get?.(session)) ?? session?.header?.cwd ?? process.cwd()
+}
+
 /**
  * Read the paired tool-call id from a tool/call or tool/result event across
  * Harness releases. DSH v0.1.5 moved the result correlation from the

@@ -8,7 +8,7 @@
 2. 业务写入走官方 API：不要由 TUI 直接篡改 session log、权限状态、模型状态或 Harness 配置文件。
 3. durable event 是可重放状态的依据：恢复会话时，应由事件重建 UI，而不是使用未持久化的内存缓存猜测状态。
 4. 可选服务须 capability-detect：服务未挂载时显示明确提示或关闭该入口，不能静默伪造结果。
-5. Harness 仍为 developer preview：当前源码的依赖基线为 [`@deepseek-ai/dsh@0.2.0-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)。Session V4 的迁移由 Harness 负责，TUI 只经 `snapshotEvents()` 和 `sessionQuery` 投影；工具失败兼容读取 `message.isError` 与 `error.reason`，持久化生命周期由 `ctx.agents.create/resume()` 返回的 handle 管理。每次升级后，仍须复核 patch、注入服务、命令签名、事件 payload，并运行真实 Profile 的图片与 PTY 回归。
+5. Harness 仍为 developer preview：当前源码的依赖基线为 [`@deepseek-ai/dsh@0.2.1-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)。Session V4 的迁移由 Harness 负责，TUI 只经 `snapshotEvents()` 和 `sessionQuery` 投影；工具失败兼容读取 `message.isError` 与 `error.reason`，持久化生命周期由 `ctx.agents.create/resume()` 返回的 handle 管理。每次升级后，仍须复核 patch、注入服务、命令签名、事件 payload，并运行真实 Profile 的图片与 PTY 回归。
 
 ## 已适配的 Harness 能力
 
@@ -27,6 +27,12 @@
 | 后台任务 | `ctx.jobs` | list/read/kill/onJobsChanged；归一化 bash、subagent、workflow 等任务快照，不自行制造百分比进度 |
 | 图片命令 | `ctx.commands` + `ctx.attachments` | 以新版 `execute(agent, line, images, signal)` 传递 `/goal`、官方 `/plan` 等命令图片附件；准入失败保留 composer draft |
 | TUI 设置 | `ctx.settings` / settings-file | `dsh-omc-tui` namespace，主题与输入历史偏好持久化到 `$DSH_HOME/settings.yaml` |
+| 会话当前目录 | `ctx.workingDirectory` | `get(session)` 读取，`working-directory/change` 驱动技能与 Git 刷新；文件、Shell 与显示使用当前目录，immutable header 仅表示原始项目 |
+| Provider 凭据 | `ctx.credentials` | `describe(ref)` 查询是否配置，`set(ref, value)` / `unset(ref)` 写入官方存储；不把托管密钥复制到进程环境，也不删除继承的环境变量 |
+
+`0.2.1-rc.2` 的 Standard/PTC/Cordis 使用官方时间上下文与托管子 Agent，不再声明 `backgroundMode`。Minimal 按官方定义挂载仅图片读取的 `tool-fs` 与独立压缩组。Web 的自动化工具依赖 Web Host，本 TUI 不挂载该工具；`tool-ralph` 已从 base 移除，TUI 不再 patch 该 entry。提示词不再引用 `{{cwd}}`，无 Preset 的旁路 Agent 也通过官方 working-directory context 接收当前目录。Shell 历史按实际执行目录存储，目录切换后重新加载，恢复列表的项目归组仍使用创建时的 header。
+
+官方新旧发布源码中，默认模型保存、附件、命令、权限和问答核心调用签名未变。Jobs 使用不透明 UUID ID，并增加 `job/registered` / `job/settled` durable 事件；TUI 继续经 `jobs` 服务管理活跃任务。新版凭据优先级为托管文件、继承环境变量、项目与用户 dotenv 回退，具体读取由官方服务处理。
 
 Reasoning effort 必须来自具体模型的 `reasoning.efforts` 元数据。官方适配器可直接提供能力；第三方中转或本地反向代理无法暴露该元数据时，由用户在 `models[].reasoningEfforts` 中声明选择 ID 到网关值的映射。元数据缺失时使用 Provider 默认行为，TUI 显示 `PROVIDER`，不生成或发送猜测档位；能力查询本身失败时则显示真实诊断。
 
@@ -67,11 +73,14 @@ Reasoning effort 必须来自具体模型的 `reasoning.efforts` 元数据。官
 - 插件市场/安装目前**未适配**：TUI 没有 `ctx.plugins` 或 catalog 服务，也不会直接修改 profile manifest。计划中的 `/plugins` 应只做市场发现与确认，并把安装/移除委托给官方 `dsh plugin --profile tui add/remove`；profile 重组后需重启 TUI。
 - `/fork`、`/rewind`、会话内全文检索等功能，只有在 Harness 提供稳定 session/checkpoint 合约后才能实现；不能通过截断 durable log 模拟。
 - Windows、真实 provider 下的技能发送与长任务生产者仍须做独立 E2E 验证。
-- TUI Profile 已关闭不需要的 HMR。生产 Chrome MCP 保持启用，启动包装器对首次 `tools/list` 的 JSON-RPC 回应设置 10 秒期限；超时后终止子进程，再由 Harness 的重连机制处理。隔离 mock Profile 的 `agentDefaultModel.saveSelection()` 和模型变体选择 PTY 回归通过；2026-10-05 用户确认，真实 Provider 与 Chrome MCP 同时启用时，模型切换可以保存。这项手动验收覆盖模型切换保存，不代表已覆盖所有 Provider、重启持久化或长期断连场景。
+- TUI Profile 已关闭不需要的 HMR。Chrome MCP `1.7.0` 作为项目依赖随插件安装，Profile 用包解析器定位程序并直接用当前 Node 启动，不再在交互期间调用 npm/npx。首次 `tools/list` 仍有 10 秒期限；失败通过 JSON-RPC error 回传，由官方 MCP supervisor 重连，子进程 stderr 不继承到终端。TUI 订阅官方日志，将同次断连的重复错误汇总为一条可见提示，重连成功后恢复。真实 MCP 握手与工具发现、正常/失败两种启用 MCP 的输入草稿 PTY 已通过。2026-10-05 用户曾确认真实 Provider 与 Chrome MCP 同时启用时模型选择可以保存；本轮未重新覆盖该联合场景、Windows 或长期断连。
 
 ## 发布前检查
 
+真实运行时提示词检查需提供安装了目标 DSH 的目录；`npm test` 不依赖外部 Harness 安装。
+
 ```sh
+DSH_RUNTIME_DIR=<runtime-with-node_modules> npm run test:harness
 dsh --profile tui --dump-config
 DSH_HOME=<isolated-home> python3 test/pty-e2e.py
 DSH_HOME=<isolated-home> python3 test/pty-interaction.py

@@ -91,9 +91,7 @@ def cleanup(exit_code):
 
 try:
     boot = wait_for("type a message", 40)
-    # The isolated mock fixture registers 12 skills after rc.1's first composer
-    # frame; don't submit until Agent-facing registrations have settled.
-    assert wait_for("12 skills", 20), "mock fixture skills did not finish loading"
+    assert wait_for("dsh-tui-mock-ready", 20), "mock fixture did not finish registering"
     log.append(f"\n===== BOOT (ready={boot}) =====\n{buf.decode('utf-8', 'replace')}")
 
     send("hello mock\r")

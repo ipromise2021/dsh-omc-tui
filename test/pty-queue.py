@@ -66,7 +66,8 @@ def scenario(kind):
     drain(0.3)
 
 try:
-    wait('12 skills', timeout=45)
+    wait('type a message', timeout=45)
+    wait('dsh-tui-mock-ready', timeout=20)
     for kind in ('wait', 'steer', 'cancel'):
         scenario(kind)
     send('/export\r')

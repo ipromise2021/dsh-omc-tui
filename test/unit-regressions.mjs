@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
@@ -114,15 +114,37 @@ const externalOutputApp = {
 assert.equal(TuiApp.prototype.routeExternalOutput.call(externalOutputApp, 'chrome-devtools-mcp exposes content'), true)
 assert.equal(routedExternalOutput.length, 1)
 assert.match(visibleOf(routedExternalOutput[0][0]), /^│ /)
+
+const browserDiagnostics = []
+let browserLogExporter
+const browserDiagnosticsApp = {
+  ctx: { logger: {
+    buffer: [{ type: 'warn', args: ['mcp-client(chrome_devtools): connection attempt failed: startup timed out'] }],
+    exporter(exporter) { browserLogExporter = exporter; return () => {} }
+  } },
+  disposers: [],
+  log(...args) { browserDiagnostics.push(args) }
+}
+TuiApp.prototype.installBrowserMcpDiagnostics.call(browserDiagnosticsApp)
+browserLogExporter.export({ type: 'warn', args: ['mcp-client(chrome_devtools): connection failed; retrying'] })
+browserLogExporter.export({ type: 'error', args: ['mcp-client(chrome_devtools): giving up after failed attempts'] })
+browserLogExporter.export({ type: 'warn', args: ['mcp-client(database): unrelated failure'] })
+assert.equal(browserDiagnostics.length, 1, 'connection retries must produce one rendered notice per outage')
+assert.match(browserDiagnostics[0][1], /startup timed out/)
+browserLogExporter.export({ type: 'info', args: ['mcp-client(chrome_devtools): reconnected and re-synced tools (attempt 1/10)'] })
+browserLogExporter.export({ type: 'warn', args: ['mcp-client(chrome_devtools): connection lost; reconnecting'] })
+assert.equal(browserDiagnostics.length, 3, 'recovery permits one notice for a subsequent outage')
+
 const cordisPatch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
-assert.match(cordisPatch, /chrome-devtools-mcp@1\.7\.0/)
+assert.equal(JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).dependencies['chrome-devtools-mcp'], '1.7.0')
+assert.ok(cordisPatch.includes("resolve('chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js')"))
 assert.match(cordisPatch, /const STARTUP_TIMEOUT_MS = 10_000/)
 assert.match(cordisPatch, /stdio: \['pipe', 'pipe', 'ignore'\]/)
 assert.match(cordisPatch, /chrome-devtools-mcp startup timed out after 10s/)
-assert.ok(cordisPatch.includes("message.method === 'tools/list'"))
+assert.ok(cordisPatch.includes("request?.method === 'tools/list'"))
 
 // The launcher is embedded in the profile patch. Run a shortened copy against
-// a non-responsive npx shim so future edits cannot remove its startup bound.
+// a non-responsive MCP process so future edits cannot remove its startup bound.
 if (process.platform !== 'win32') {
   const launcherSource = cordisPatch.match(/          - >-\n((?:            .*\n?)+)/)?.[1]
     ?.replace(/^            /gm, '')
@@ -130,22 +152,57 @@ if (process.platform !== 'win32') {
   assert.ok(launcherSource, 'Chrome MCP launcher must remain an inline Node program')
   const launcherDir = await mkdtemp(join(tmpdir(), 'dsh-chrome-mcp-launcher-'))
   try {
-    const fakeNpx = join(launcherDir, 'npx')
-    await writeFile(fakeNpx, '#!/usr/bin/env node\nsetInterval(() => {}, 1_000)\n')
-    await chmod(fakeNpx, 0o755)
-    const child = await import('node:child_process').then(({ spawn }) => spawn(process.execPath, ['-e', launcherSource.replace('const STARTUP_TIMEOUT_MS = 10_000', 'const STARTUP_TIMEOUT_MS = 25')], {
-      env: { ...process.env, PATH: `${launcherDir}:${process.env.PATH ?? ''}` },
-      stdio: ['ignore', 'ignore', 'pipe']
+    const fakeMcp = join(launcherDir, 'mock-mcp.mjs')
+    await writeFile(fakeMcp, 'setInterval(() => {}, 1_000)\n')
+    const child = await import('node:child_process').then(({ spawn }) => spawn(process.execPath, ['-e', launcherSource.replace('const STARTUP_TIMEOUT_MS = 10_000', 'const STARTUP_TIMEOUT_MS = 25'), fakeMcp], {
+      stdio: ['pipe', 'pipe', 'pipe']
     }))
     let stderr = ''
+    let stdout = ''
+    child.stdout.on('data', (chunk) => { stdout += String(chunk) })
     child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'initialize', params: {} })}\n`)
     const result = await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Chrome MCP launcher did not time out')), 1_000)
       child.once('error', (error) => { clearTimeout(timeout); reject(error) })
       child.once('exit', (code, signal) => { clearTimeout(timeout); resolve({ code, signal }) })
     })
     assert.deepEqual(result, { code: 1, signal: null })
-    assert.match(stderr, /chrome-devtools-mcp startup timed out after 10s/)
+    assert.equal(stderr, '', 'MCP startup failures must not write to the inherited terminal descriptor')
+    const failure = JSON.parse(stdout.trim())
+    assert.equal(failure.id, 7)
+    assert.match(failure.error.message, /startup timed out/)
+
+    // A client may exit before the watchdog replies. That must not emit an
+    // unhandled EPIPE stack to the terminal or leave the MCP process running.
+    await writeFile(fakeMcp, "console.log(JSON.stringify({ pid: process.pid })); setInterval(() => {}, 1_000)\n")
+    const disconnected = await import('node:child_process').then(({ spawn }) => spawn(process.execPath, ['-e', launcherSource.replace('const STARTUP_TIMEOUT_MS = 10_000', 'const STARTUP_TIMEOUT_MS = 250'), fakeMcp], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    }))
+    let disconnectedStderr = ''
+    let fakePid
+    disconnected.stderr.on('data', (chunk) => { disconnectedStderr += String(chunk) })
+    disconnected.stdout.once('data', (chunk) => {
+      fakePid = JSON.parse(String(chunk)).pid
+      disconnected.stdout.destroy()
+    })
+    disconnected.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'initialize', params: {} })}\n`)
+    try {
+      const disconnectedCode = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Disconnected Chrome MCP launcher did not stop')), 2_000)
+        disconnected.once('error', (error) => { clearTimeout(timeout); reject(error) })
+        disconnected.once('close', (code) => { clearTimeout(timeout); resolve(code) })
+      })
+      assert.equal(disconnectedCode, 1)
+      assert.equal(disconnectedStderr, '', 'a closed MCP output pipe must not print an exception stack')
+      assert.ok(fakePid, 'the MCP process must start before the output pipe closes')
+      assert.throws(() => process.kill(fakePid, 0), { code: 'ESRCH' }, 'the disconnected MCP process must be terminated')
+    } finally {
+      disconnected.kill('SIGKILL')
+      if (fakePid) {
+        try { process.kill(fakePid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
+      }
+    }
   } finally {
     await rm(launcherDir, { recursive: true, force: true })
   }
@@ -5934,6 +5991,7 @@ inertDispose()
 // ── CR-086: credential writes use the positional set/unset contract ───────
 {
   const calls = []
+  const inheritedKey = process.env.POSITIONAL_PROVIDER_API_KEY
   const credentials = {
     set: async (ref, value) => { calls.push(['set', ref, value]) },
     unset: async (ref) => { calls.push(['unset', ref]) }
@@ -5959,6 +6017,7 @@ inertDispose()
   await TuiApp.prototype.saveProviderForm.call(credApp)
   assert.deepEqual(calls, [['set', 'POSITIONAL_PROVIDER_API_KEY', 'secret_value']], 'credentials.set receives (ref, value) positionally')
   assert.equal(credApp.providerPanel.formError, '', 'saving with a key reports no error')
+  assert.equal(process.env.POSITIONAL_PROVIDER_API_KEY, inheritedKey, 'managed credential writes must not change inherited environment')
 
   calls.length = 0
   const deleteApp = {
@@ -5971,6 +6030,7 @@ inertDispose()
   }
   await TuiApp.prototype.confirmDeleteProvider.call(deleteApp)
   assert.deepEqual(calls, [['unset', 'POSITIONAL_PROVIDER_API_KEY']], 'credentials.unset receives the ref positionally')
+  assert.equal(process.env.POSITIONAL_PROVIDER_API_KEY, inheritedKey, 'removing managed credentials must preserve environment fallback')
 }
 
 // ── CR-087: model discovery uses the positional contract and keeps the probe ─

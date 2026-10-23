@@ -63,7 +63,7 @@ def snapshot(label, wait=0.4):
 
 log = []
 boot_ok = wait_for("type a message", 30)
-assert wait_for("12 skills", 20), "mock fixture skills did not finish loading"
+assert wait_for("dsh-tui-mock-ready", 20), "mock fixture did not finish registering"
 log.append(f"\n===== BOOT (ready={boot_ok}) =====\n{buf.decode('utf-8', 'replace')}")
 
 # resize to narrow 80x24
@@ -78,15 +78,18 @@ assert wait_for("4 available", 4), "preset picker does not show all four DSH pre
 for preset in ("standard", "ptc", "minimal", "cordis"):
     assert wait_for(preset, 4), f"{preset} preset missing"
 snapshot("preset-picker")
-send("\x1b[B")
-drain(0.4)
-send("\r")
-preset_switched = wait_for("agent preset · ptc", 12)
-if not preset_switched:
-    snapshot("preset-switch-timeout")
-    with open(OUT, "w") as f:
-        f.write("".join(log))
-    raise AssertionError("blank-session preset switch did not complete")
+for number, preset in ((3, "minimal"), (4, "cordis"), (1, "standard"), (2, "ptc")):
+    send(str(number))
+    drain(0.3)
+    send("\r")
+    if not wait_for(f"agent preset · {preset}", 12):
+        snapshot("preset-switch-timeout")
+        with open(OUT, "w") as f:
+            f.write("".join(log))
+        raise AssertionError(f"blank-session preset {preset} did not mount")
+    if preset != "ptc":
+        send("/preset\r")
+        drain(0.4)
 snapshot("after-preset")
 
 # /compact (real harness command, agent idle)

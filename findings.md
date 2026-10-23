@@ -1,5 +1,33 @@
 # 代码审查发现与跟踪
 
+## CR-107 浏览器 MCP 加载与输入区域干扰（2026-10-23）
+
+- 启动包装器在 `tools/list` 回应前设置 10 秒期限；超时向 stderr 写入的字符串包含字面量 `\\n`。官方 MCP stdio transport 默认继承宿主 stderr，因此子进程写入绕过 `TuiApp` 对 `process.stderr.write` 的截获，直接污染物理终端。
+- Harness 默认在失败后重连最多 10 次，每次包装器都重复输出。现有 `isExternalMcpOutput()` 也仅匹配声明提示，未涵盖无前缀的 timeout 文字；仅扩大匹配规则无法拦截继承的文件描述符写入。
+- 已确认 Chrome MCP `1.7.0` 在工具调用阶段才连接 Chrome，工具发现不要求浏览器已经打开；已对比现有 npx 包装器与本机已缓存的相同版本启动耗时。
+- 同版本对比：直接运行缓存程序，约 1.1 秒完成握手并发现 29 项工具；现有 npx 包装器约 10.2 秒后被自身期限终止。`--prefer-offline` 仍失败，离线解析报告配置的 npm 镜像缺少包元数据，证明已有 npx 安装目录并不能免除运行时包解析。
+- 用户已确认项目级安装；`chrome-devtools-mcp@1.7.0` 固定为依赖，由 Profile 用包解析器定位可执行文件，启动不再经过 npm/npx。超时保持有界，失败通过对应请求 ID 的 JSON-RPC error 回传，stderr 不写终端；运行时审批与专用浏览器的按需启动路径保持不变。
+- TUI 订阅 Cordis 官方日志 exporter，将浏览器连接失败投影为一次本地提示，同一次断连的重试不刷屏；官方重连成功日志恢复提示状态。单元回归已覆盖启动超时的 stderr 隔离与错误 ID、重试去重和恢复后新断连。
+- 首次错误注入 PTY 夹具仅覆盖 config.args，误将整个条目的其他配置替换，造成验证配置失败；现已补齐 transport/serverName/command，并增加 fixture 激活断言。此失败不归因于产品实现。
+- 独立复核发现客户端提前关闭输出管道时，错误回复可能触发未处理 EPIPE 并将异常栈写入继承 stderr。先增加断开管道回归确认失败，再处理 stdout error 并统一终止子进程；回归确认 stderr 为空、失败退出码为 1、模拟 MCP 子进程已终止。二次复核无新增阻断项。
+- 最终 `npm run verify`、完整 `npm test`、官方 MCP 客户端真实握手/工具发现、源码 Profile 超时重试 PTY 均通过；实际 tarball 安装到另一隔离 Profile 后，正常加载 PTY 保持中文草稿和提交内容完整。未覆盖真实 Provider 与浏览器工具联合调用、Windows 或长期断连。
+
+## DSH 最新版本兼容适配（2026-10-23）
+
+- npm 官方 registry 的 `latest` 与 `next` 均为 `0.2.1-rc.2`，发布于 2026-10-17；官方 tag 为 `dsh-v0.2.1-rc.2`。开始时 TUI `0.2.17` 的 DSH peer 基线为 `^0.2.0-rc.2`，现已对齐 `^0.2.1-rc.2`。
+- 适配需核查 `0.2.0-rc.2` 到 `0.2.1-rc.2` 的累计变化，重点为会话工作目录、Preset/Minimal、动态模型能力、凭据读取优先级与插件生命周期；不按 Web/Desktop 页面逐项扩展 TUI。
+- 开始时工作区已有 `findings.md`、`progress.md` 修改（CR-107）及未跟踪 `dsh-web-recipient-guide.md`，本轮保留。
+- 普通沙箱请求 npm registry 时 DNS 解析失败；授权网络读取后成功取得官方元数据。
+- 官方新旧 tag 源码对比确认：`agentDefaultModel`、attachments、commands、权限与问答核心接口不变；Jobs 新增 durable 生命周期事件和 UUID ID，子 Agent 改为托管激活并立即返回 child ID。
+- 新 `workingDirectory.get(session)` 读取会话当前目录，`working-directory/change` 持久化变化；`SessionHeader.cwd` 保留原始项目目录。TUI 的文件引用、Shell、技能与状态显示不能继续把 header 当作当前目录。
+- 官方 Minimal 新增仅图片读取和独立压缩组；Standard/PTC/Cordis 移除 `backgroundMode`、去掉 persona 中静态目录并加入 time-context。TUI 不挂载 Web 自动化服务，因此不复制依赖该服务的 `tool-schedule`。
+- 旧 base 已移除 `tool-ralph` entry；本插件的禁用 patch 应一并移除。Chrome MCP client 源码在两版之间未变，CR-107 保持独立待修复项。
+- 回归先失败后修复：目录切换后文件引用仍读原项目；旧目录技能查询覆盖新结果；托管 Key 在 Provider 面板显示未配置；保存 Key 复制到进程环境。实现后相应回归通过。
+- 隔离新版运行时安装成功；CLI 自动将 mock bundle 排在 TUI 前面，导致禁用 Chrome MCP 的测试 patch 无法命中。已在临时 Profile 中把 mock 放到 TUI 后面，配置展开无警告；未修改日常 Profile。
+- PTY 原就绪条件硬编码 `12 skills`，当前实际为 13，改等 test-only mock 注册完成标记。文件选择测试还假定特定文件出现在仅展示四项的首屏，改验稳定的子目录，避免随测试文件数量变化而失败。
+- 独立审查确认全局 `personaPrefix` 仍引用新版已移除的 `{{cwd}}`，无 preset persona 的 `/btw`、vision、提示建议 sidecar 会在官方提示词组装时失败。新增真实官方 SystemPrompt 回归先复现 `unknown prompt variable`，移除静态目录插值后通过；当前目录由官方 working-directory context 注入。
+- 独立审查指出 Shell 历史仍按启动目录存储；现随目录事件重新载入、按执行目录存储，旧目录异步结果不覆盖当前历史。目录、凭据和 sidecar 提示词回归均已通过。
+
 ## 恢复会话标题、长历史与滚轮输入（2026-10-05）
 
 - `-c` 的 `findResumeRecord()` 曾按 MRU 顺序逐个调用 `sessionQuery.readSession()`，但新版 `readSession()` 返回 `{ session, events }` 而非 `header`，该循环无法命中，最终仍调用 `listSessions()`；长日志会被白读多次。现只调用一次官方 `listSessions()`，并以 header 和 MRU 排序选择。
@@ -1301,6 +1329,15 @@
 - **影响：** activity 展开区、local/log、`!` 用户块内跨行拖选复制时，多个逻辑行被空格拼成一行。
 - **建议：** 由投影层显式标记软换行（span 连续性/softWrap 字段），不要靠 row 尾字符推断。
 - **关闭验证：** 单块与多块两条路径都改为宽度启发式（仅当前一行填满块内最大宽度且 ≥20 列时视为续行）；回归断言两条短逻辑行之间保留 `\n`、真正被 wrap 的续行仍以空格连接。既有 resize 用例的合成 fixture 已同步为"填满宽度"的真实形状。彻底的方案仍是投影层显式标记，已在本条保留为后续改进项。
+
+#### CR-107：Chrome DevTools MCP 启动超时
+- **优先级：** P2　**状态：** resolved（2026-10-23）
+- **位置：** `cordis.patch.yml` 的浏览器 MCP 启动包装器；`src/index.js` 的 MCP 日志投影
+- **现象：** 用户截图中的 TUI 终端反复显示 `chrome-devtools-mcp startup timed out after 10s`。
+- **影响：** 浏览器 MCP 无法及时加载，反复输出的超时文字还会覆盖输入区域，干扰草稿编辑。
+- **根因与修复：** npx 在启动期间解析 npm 镜像元数据，被 10 秒期限反复终止；超时诊断经继承 stderr 绕过渲染器，并输出字面量反斜杠 n。改为用户已确认的固定项目依赖，直接启动；失败回传 JSON-RPC error，由官方日志投影为一次提示。
+- **关闭验证：** 单元先失败后通过，确认 stderr 为空、错误对应请求 ID，客户端提前关闭输出管道也会清理子进程且不输出异常栈；真实 MCP 在不打开浏览器的情况下发现 29 项工具；启用 MCP 的正常加载和多次失败重试 PTY 均保持中文草稿及最终提交完整，实际打包安装验证通过。
+- **记录来源：** 用户于 2026-10-17 提供终端截图；2026-10-23 授权修复并确认项目级安装。
 
 ### 本轮验证记录
 

@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
 import { formatTokens } from '../renderer/ansi.js'
-import { currentPermissionPreset, sessionEvents } from '../core/session-events.js'
+import { currentPermissionPreset, currentWorkingDirectory, sessionEvents } from '../core/session-events.js'
 
 const require = createRequire(import.meta.url)
 const { name: packageName, version: packageVersion } = require('../../package.json')
@@ -13,7 +13,7 @@ export function handleStatus(app) {
   const planActive = planState.pending ?? planState.active
   const modeStr = planActive ? 'PLAN' : 'BUILD'
   const presetStr = app.presetName ?? 'default'
-  const cwd = app.agent?.session?.header?.cwd ?? process.cwd()
+  const cwd = currentWorkingDirectory(app.agent)
   const sessionId = app.agent?.session?.id?.slice?.(-8) ?? 'new'
   const sessionTitle = app.agent?.session?.title?.title || 'new session'
   const events = sessionEvents(app.agent?.session)

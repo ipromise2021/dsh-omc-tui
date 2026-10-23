@@ -71,7 +71,7 @@ code = "timeout"
 
 try:
     boot_ok = wait_for("type a message", 30)
-    assert wait_for("12 skills", 20), "mock fixture skills did not finish loading"
+    assert wait_for("dsh-tui-mock-ready", 20), "mock fixture did not finish registering"
     log.append(f"\n===== BOOT (ready={boot_ok}) =====\n{buf.decode('utf-8', 'replace')}")
 
     # 1. /jobs inspect panel

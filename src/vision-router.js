@@ -1,3 +1,4 @@
+import { currentWorkingDirectory } from './core/session-events.js'
 import { randomUUID } from 'node:crypto'
 import { userMessage } from './core/events.js'
 import { textOf } from './renderer/ansi.js'
@@ -68,7 +69,7 @@ export async function runVisionRoute(app, args, exec = {}) {
     const created = await app.ctx.agents.create({
       sessionId,
       meta: {
-        cwd: process.cwd(),
+        cwd: currentWorkingDirectory(app.agent),
         parentSession: app.agent?.session?.header?.id,
         origin: 'subagent',
         delegationDepth: (app.agent?.session?.header?.delegationDepth ?? 0) + 1

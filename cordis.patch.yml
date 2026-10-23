@@ -9,7 +9,7 @@
 - id: system-prompt
   config:
     personaPrefix: >-
-      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+      You are a coding agent powered by the {{model}} model.
 
 - id: tools
   config:
@@ -57,8 +57,6 @@
   disabled: true
 - id: tool-workflow
   disabled: true
-- id: tool-ralph
-  disabled: true
 - id: agent-instructions
   disabled: true
 - id: tool-todo
@@ -89,33 +87,36 @@
       config:
         serverName: chrome_devtools
         transport: stdio
-        # chrome-devtools-mcp writes its legal and roots notices directly to
-        # stderr. The Harness MCP client waits for the initial handshake before
-        # its plugin fiber settles; cap that wait so a missing Chrome endpoint
-        # cannot indefinitely block ConfigEditor writes such as /model.
+        # Resolve the pinned project dependency at profile composition time.
+        # Startup performs no npm lookup. Keep notices off the inherited terminal
+        # descriptor; failures go through MCP and the Harness logger.
         command: node
         args:
           - -e
           - >-
             const { spawn } = require('node:child_process');
-            const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
             const STARTUP_TIMEOUT_MS = 10_000;
-            const child = spawn(npx, ['-y', 'chrome-devtools-mcp@1.7.0', '--browser-url=http://127.0.0.1:9222', '--no-performance-crux', '--no-usage-statistics'], { stdio: ['pipe', 'pipe', 'ignore'] });
+            const child = spawn(process.execPath, [process.argv[1], '--browser-url=http://127.0.0.1:9222', '--no-performance-crux', '--no-usage-statistics'], { stdio: ['pipe', 'pipe', 'ignore'] });
             let startupComplete = false;
-            let timedOut = false;
+            let failed = false;
             let forceKill;
             let startupTimer;
             let startupInput = '';
             let startupOutput = '';
-            const startupRequestIds = new Set();
-            const finish = (code) => { clearTimeout(startupTimer); clearTimeout(forceKill); process.stdin.unpipe(child.stdin); process.exit(timedOut ? 1 : (code ?? 1)); };
-            startupTimer = setTimeout(() => { timedOut = true; process.stderr.write('chrome-devtools-mcp startup timed out after 10s\\n'); child.kill('SIGTERM'); forceKill = setTimeout(() => { child.kill('SIGKILL'); finish(1); }, 1_000); }, STARTUP_TIMEOUT_MS);
-            process.stdin.on('data', (chunk) => { startupInput += String(chunk); let newline; while ((newline = startupInput.indexOf("\n")) >= 0) { const line = startupInput.slice(0, newline); startupInput = startupInput.slice(newline + 1); try { const message = JSON.parse(line); if (message.method === 'tools/list' && message.id !== undefined) startupRequestIds.add(String(message.id)); } catch {} } });
-            child.stdout.on('data', (chunk) => { startupOutput += String(chunk); let newline; while ((newline = startupOutput.indexOf("\n")) >= 0) { const line = startupOutput.slice(0, newline); startupOutput = startupOutput.slice(newline + 1); try { const message = JSON.parse(line); if (message.id !== undefined && startupRequestIds.delete(String(message.id)) && !startupComplete) { startupComplete = true; clearTimeout(startupTimer); } } catch {} } });
+            const startupRequests = new Map();
+            const finish = (code) => { clearTimeout(startupTimer); clearTimeout(forceKill); process.stdin.unpipe(child.stdin); process.stdin.destroy(); child.stdin.destroy(); process.exitCode = failed ? 1 : (code ?? 1); };
+            const stopChild = () => { failed = true; clearTimeout(startupTimer); child.stdout.unpipe(process.stdout); process.stdin.unpipe(child.stdin); process.stdin.destroy(); child.stdin.destroy(); if (forceKill) return; child.kill('SIGTERM'); forceKill = setTimeout(() => { child.kill('SIGKILL'); finish(1); }, 1_000); };
+            const reportFailure = (message) => { child.stdout.unpipe(process.stdout); if (!process.stdout.destroyed) for (const request of startupRequests.values()) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message } }) + '\n'); startupRequests.clear(); };
+            process.stdout.on('error', stopChild);
+            startupTimer = setTimeout(() => { reportFailure('chrome-devtools-mcp startup timed out after 10s'); stopChild(); }, STARTUP_TIMEOUT_MS);
+            process.stdin.on('data', (chunk) => { if (startupComplete) return; startupInput += String(chunk); let newline; while ((newline = startupInput.indexOf("\n")) >= 0) { const line = startupInput.slice(0, newline); startupInput = startupInput.slice(newline + 1); try { const message = JSON.parse(line); if (message.id !== undefined && message.method) startupRequests.set(String(message.id), { id: message.id, method: message.method }); } catch {} } });
+            child.stdout.on('data', (chunk) => { if (startupComplete) return; startupOutput += String(chunk); let newline; while ((newline = startupOutput.indexOf("\n")) >= 0) { const line = startupOutput.slice(0, newline); startupOutput = startupOutput.slice(newline + 1); try { const message = JSON.parse(line); const request = startupRequests.get(String(message.id)); startupRequests.delete(String(message.id)); if (request?.method === 'tools/list' && !startupComplete) { startupComplete = true; clearTimeout(startupTimer); } } catch {} } });
             process.stdin.pipe(child.stdin);
             child.stdout.pipe(process.stdout);
-            child.once('error', (error) => { process.stderr.write(String(error)); finish(1); });
-            child.once('exit', finish);
+            child.stdin.on('error', () => {});
+            child.once('error', (error) => { failed = true; reportFailure('chrome-devtools-mcp could not start: ' + error.message); finish(1); });
+            child.once('exit', (code) => { if (!startupComplete && !failed) { failed = true; reportFailure('chrome-devtools-mcp exited during startup (code ' + code + ')'); } finish(code); });
+          - !!js process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js')
 
     - id: tui-runner
       name: 'dsh-omc-tui'

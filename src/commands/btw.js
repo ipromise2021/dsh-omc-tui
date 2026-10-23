@@ -1,3 +1,4 @@
+import { currentWorkingDirectory } from '../core/session-events.js'
 import { randomUUID } from 'node:crypto'
 import { safe, textOf, truncateWidth, visibleOf, widthOf } from '../renderer/ansi.js'
 import { userMessage } from '../core/events.js'
@@ -41,7 +42,7 @@ export async function handleBtw(app, line) {
     const { agent: tempAgent, dispose } = await app.ctx.agents.create({
       sessionId: tempSessionId,
       meta: {
-        cwd: process.cwd(),
+        cwd: currentWorkingDirectory(app.agent),
         ephemeral: true,
         parentSession: app.agent?.session?.header?.id,
         origin: 'subagent',
